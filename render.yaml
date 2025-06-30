@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: tuje-analyze-api
+    runtime: python
+    buildCommand: ""
+    startCommand: uvicorn main:app --host 0.0.0.0 --port 10000
+    envVars:
+      - key: API_KEY
+        value: tuje-secure-key
