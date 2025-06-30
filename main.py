@@ -4,6 +4,32 @@ from typing import List, Optional, Dict
 from rapidfuzz import fuzz
 import uvicorn
 import re
+from typing import List, Dict
+
+def find_vocab_in_order(transcription: str, vocabulary_list: List[Dict]) -> List[str]:
+    transcription_lower = transcription.lower()
+    vocab_phrases = [v["phrase"].lower() for v in vocabulary_list]
+
+    # Sort longer phrases first so "un chat orange" comes before "chat"
+    vocab_phrases.sort(key=lambda x: -len(x))
+
+    matches = []
+    matched_spans = []
+
+    for phrase in vocab_phrases:
+        for match in re.finditer(r'\b' + re.escape(phrase) + r'\b', transcription_lower):
+            start, end = match.start(), match.end()
+
+            # Avoid overlapping matches (e.g., don't match both "chat" and "un chat orange")
+            if all(end <= s or start >= e for s, e in matched_spans):
+                matches.append((start, phrase))
+                matched_spans.append((start, end))
+                break  # Only take first occurrence per phrase
+
+    # Sort matches by appearance order in transcription
+    matches.sort(key=lambda m: m[0])
+
+    return [phrase for _, phrase in matches]
 
 app = FastAPI()
 
@@ -32,24 +58,32 @@ class MatchResponse(BaseModel):
 
 # Helper function to extract vocabulary
 def find_vocabulary(transcription, vocab_list):
-    found = []
+    transcription_lower = transcription.lower()
+    phrases = [(v.phrase.lower(), v.phrase) for v in vocab_list]  # (lowered, original)
+
+    # Sort by longer phrases first
+    phrases.sort(key=lambda x: -len(x[0]))
+
+    matches = []
+    matched_spans = []
     entities = {}
-    already_matched = []
 
-    # Sort vocab by length to match longest phrases first
-    for vocab in sorted(vocab_list, key=lambda v: len(v.phrase), reverse=True):
-        pattern = r'\b{}\b'.format(re.escape(vocab.phrase.lower()))
-        match = re.search(pattern, transcription.lower())
-        if match:
-            span = match.span()
-            if any(start < span[1] and end > span[0] for start, end in already_matched):
-                continue
-            found.append(vocab.phrase)
-            already_matched.append(span)
+    for lowered, original in phrases:
+        for match in re.finditer(r'\b' + re.escape(lowered) + r'\b', transcription_lower):
+            start, end = match.start(), match.end()
 
-            # Entity extraction pattern (optional enhancement)
-            if vocab.phrase.startswith("entity"):
-                entities[vocab.phrase] = match.group()
+            # Avoid overlap
+            if all(end <= s or start >= e for s, e in matched_spans):
+                matches.append((start, original))
+                matched_spans.append((start, end))
+
+                if original.startswith("entity"):
+                    entities[original] = match.group()
+                break  # Only keep first occurrence of each phrase
+
+    # Sort matches by appearance order
+    matches.sort(key=lambda x: x[0])
+    found = [phrase for _, phrase in matches]
 
     return found, entities
 
