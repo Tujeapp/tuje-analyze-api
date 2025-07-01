@@ -4,7 +4,6 @@ from typing import List, Optional, Dict
 from rapidfuzz import fuzz
 import uvicorn
 import re
-from typing import List, Dict
 
 def find_vocab_in_order(transcription: str, vocabulary_list: List[Dict]) -> List[str]:
     transcription_lower = transcription.lower()
