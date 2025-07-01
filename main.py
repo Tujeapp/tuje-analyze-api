@@ -62,13 +62,17 @@ class GPTFallbackRequest(BaseModel):
 
 @app.post("/gpt-fallback")
 async def gpt_fallback(request: GPTFallbackRequest):
+    import os
     import openai
-    openai.api_key = "YOUR-OPENAI-API-KEY"  # Use Render ENV later
+    import json
 
-    # Format candidate answers
-    candidates_text = "\n".join([f"- {a.text}" for a in request.candidate_answers]) if request.candidate_answers else "Aucun exemple"
+    openai.api_key = os.getenv("OPENAI_API_KEY")
 
-    prompt = f"""
+    try:
+        # Format candidate answers
+        candidates_text = "\n".join([f"- {a.text}" for a in request.candidate_answers]) if request.candidate_answers else "Aucun exemple"
+
+        prompt = f"""
 Tu es un assistant pour les apprenants de français. Voici une transcription vocale imparfaite :  
 "{request.transcription}"
 
@@ -87,14 +91,32 @@ Analyse la réponse. Réponds uniquement en JSON avec les champs suivants :
 Réponds uniquement en JSON.
 """
 
-    completion = openai.ChatCompletion.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": "Tu es un assistant qui analyse les réponses d'apprenants de français."},
-            {"role": "user", "content": prompt}
-        ],
-        temperature=0.3
-    )
+        response = openai.ChatCompletion.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "Tu es un assistant qui analyse les réponses d'apprenants de français."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.3
+        )
+
+        content = response.choices[0].message["content"]
+
+        # Try parsing JSON directly
+        try:
+            return json.loads(content)
+        except Exception as e:
+            return {
+                "error": "Failed to parse GPT response as JSON",
+                "raw_response": content,
+                "exception": str(e)
+            }
+
+    except Exception as e:
+        return {
+            "error": "OpenAI request failed",
+            "exception": str(e)
+        }
 
     # Extract JSON from response
     content = completion.choices[0].message["content"]
