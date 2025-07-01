@@ -100,11 +100,14 @@ Réponds uniquement en JSON.
             temperature=0.3
         )
 
-        content = response.choices[0].message["content"]
+content = response.choices[0].message["content"]
 
-        # Try parsing JSON directly
-        try:
-            return json.loads(content)
+# Clean formatting if wrapped in markdown code block
+if content.strip().startswith("```"):
+    content = content.strip().strip("`").strip("json").strip()
+
+try:
+    return json.loads(content)
         except Exception as e:
             return {
                 "error": "Failed to parse GPT response as JSON",
