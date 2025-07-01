@@ -4,38 +4,17 @@ from typing import List, Optional, Dict
 from rapidfuzz import fuzz
 import uvicorn
 import re
-
-def find_vocab_in_order(transcription: str, vocabulary_list: List[Dict]) -> List[str]:
-    transcription_lower = transcription.lower()
-    vocab_phrases = [v["phrase"].lower() for v in vocabulary_list]
-
-    # Sort longer phrases first so "un chat orange" comes before "chat"
-    vocab_phrases.sort(key=lambda x: -len(x))
-
-    matches = []
-    matched_spans = []
-
-    for phrase in vocab_phrases:
-        for match in re.finditer(r'\b' + re.escape(phrase) + r'\b', transcription_lower):
-            start, end = match.start(), match.end()
-
-            # Avoid overlapping matches (e.g., don't match both "chat" and "un chat orange")
-            if all(end <= s or start >= e for s, e in matched_spans):
-                matches.append((start, phrase))
-                matched_spans.append((start, end))
-                break  # Only take first occurrence per phrase
-
-    # Sort matches by appearance order in transcription
-    matches.sort(key=lambda m: m[0])
-
-    return [phrase for _, phrase in matches]
+import os
+import json
+import openai
 
 app = FastAPI()
 
-# Optional API key for secure access
 API_KEY = "tuje-secure-key"
 
+# ----------------------
 # Data models
+# ----------------------
 class VocabularyEntry(BaseModel):
     phrase: str
 
@@ -60,16 +39,14 @@ class GPTFallbackRequest(BaseModel):
     matched_vocab: List[str]
     candidate_answers: Optional[List[SavedAnswer]] = []
 
+# ----------------------
+# GPT Fallback endpoint
+# ----------------------
 @app.post("/gpt-fallback")
 async def gpt_fallback(request: GPTFallbackRequest):
-    import os
-    import openai
-    import json
-
     openai.api_key = os.getenv("OPENAI_API_KEY")
 
     try:
-        # Format candidate answers
         candidates_text = "\n".join([f"- {a.text}" for a in request.candidate_answers]) if request.candidate_answers else "Aucun exemple"
 
         prompt = f"""
@@ -97,47 +74,33 @@ Réponds uniquement en JSON.
                 {"role": "system", "content": "Tu es un assistant qui analyse les réponses d'apprenants de français."},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.3
+            temperature=0.3,
+            max_tokens=200
         )
 
-content = response.choices[0].message["content"]
+        content = response.choices[0].message["content"]
 
-# Clean formatting if wrapped in markdown code block
-if content.strip().startswith("```"):
-    content = content.strip().strip("`").strip("json").strip()
+        # Clean content if wrapped in ```json``` block
+        if content.strip().startswith("```"):
+            content = content.strip("` \n").replace("json", "").strip()
 
-try:
-    return json.loads(content)
-        except Exception as e:
-            return {
-                "error": "Failed to parse GPT response as JSON",
-                "raw_response": content,
-                "exception": str(e)
-            }
+        return json.loads(content)
 
     except Exception as e:
         return {
-            "error": "OpenAI request failed",
+            "error": "Failed to parse GPT response",
+            "raw_response": content if 'content' in locals() else "",
             "exception": str(e)
         }
 
-    # Extract JSON from response
-    content = completion.choices[0].message["content"]
-
-    try:
-        import json
-        return json.loads(content)
-    except:
-        return {"error": "Invalid GPT response", "raw": content}
-
-# Helper function to extract vocabulary
+# ----------------------
+# Helper functions
+# ----------------------
 def find_vocabulary(transcription, vocab_list):
     transcription_lower = transcription.lower()
-    phrases = [(v.phrase.lower(), v.phrase) for v in vocab_list]  # (lowered, original)
+    phrases = [(v.phrase.lower(), v.phrase) for v in vocab_list]
 
-    # Sort by longer phrases first
     phrases.sort(key=lambda x: -len(x[0]))
-
     matches = []
     matched_spans = []
     entities = {}
@@ -145,26 +108,19 @@ def find_vocabulary(transcription, vocab_list):
     for lowered, original in phrases:
         for match in re.finditer(r'\b' + re.escape(lowered) + r'\b', transcription_lower):
             start, end = match.start(), match.end()
-
-            # Avoid overlap
             if all(end <= s or start >= e for s, e in matched_spans):
                 matches.append((start, original))
                 matched_spans.append((start, end))
-
                 if original.startswith("entity"):
                     entities[original] = match.group()
-                break  # Only keep first occurrence of each phrase
+                break
 
-    # Sort matches by appearance order
     matches.sort(key=lambda x: x[0])
     found = [phrase for _, phrase in matches]
-
     return found, entities
 
-# Helper function to find best matching saved answers
 def match_saved_answers(transcription, saved_answers, threshold):
     results = []
-
     for answer in saved_answers:
         score = fuzz.ratio(transcription.lower(), answer.text.lower())
         if score >= threshold:
@@ -173,10 +129,12 @@ def match_saved_answers(transcription, saved_answers, threshold):
                 "is_correct": answer.is_correct,
                 "score": score
             })
-
     results.sort(key=lambda r: r["score"], reverse=True)
     return results
 
+# ----------------------
+# Main /analyze endpoint
+# ----------------------
 @app.post("/analyze", response_model=MatchResponse)
 async def analyze(request: MatchRequest, authorization: Optional[str] = Header(None)):
     if API_KEY and authorization != f"Bearer {API_KEY}":
@@ -192,6 +150,5 @@ async def analyze(request: MatchRequest, authorization: Optional[str] = Header(N
         "call_gpt": len(saved_matches) == 0
     }
 
-# For local testing
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
