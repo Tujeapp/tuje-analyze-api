@@ -56,6 +56,56 @@ class MatchResponse(BaseModel):
     matches: List[Dict]
     call_gpt: bool
 
+class GPTFallbackRequest(BaseModel):
+    transcription: str
+    matched_vocab: List[str]
+    candidate_answers: Optional[List[SavedAnswer]] = []
+
+@app.post("/gpt-fallback")
+async def gpt_fallback(request: GPTFallbackRequest):
+    import openai
+    openai.api_key = "YOUR-OPENAI-API-KEY"  # Use Render ENV later
+
+    # Format candidate answers
+    candidates_text = "\n".join([f"- {a.text}" for a in request.candidate_answers]) if request.candidate_answers else "Aucun exemple"
+
+    prompt = f"""
+Tu es un assistant pour les apprenants de français. Voici une transcription vocale imparfaite :  
+"{request.transcription}"
+
+Voici le vocabulaire reconnu : {', '.join(request.matched_vocab)}
+
+Voici quelques réponses attendues ou acceptables :
+{candidates_text}
+
+Analyse la réponse. Réponds uniquement en JSON avec les champs suivants :
+- intent_match (yes/no)
+- intent_topic (résumé du sens de la phrase)
+- correct_french (la phrase corrigée)
+- correction_type (e.g., vocabulaire, grammaire, ordre des mots)
+- user_level_guess (A1/A2/B1...)
+- feedback_message (message d'encouragement en français)
+Réponds uniquement en JSON.
+"""
+
+    completion = openai.ChatCompletion.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": "Tu es un assistant qui analyse les réponses d'apprenants de français."},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0.3
+    )
+
+    # Extract JSON from response
+    content = completion.choices[0].message["content"]
+
+    try:
+        import json
+        return json.loads(content)
+    except:
+        return {"error": "Invalid GPT response", "raw": content}
+
 # Helper function to extract vocabulary
 def find_vocabulary(transcription, vocab_list):
     transcription_lower = transcription.lower()
