@@ -68,13 +68,13 @@ def extract_vocab_sequence(transcription: str, vocab_phrases: List[str]) -> List
     for start, end, phrase in matches:
         gap_text = transcription[last_end:start]
         if gap_text.strip():  # If there's a non-space gap
-            result.append("vocabNotFound")
+            result.append("vocabnotfound")
         result.append(phrase)
         last_end = end
 
     trailing_text = transcription[last_end:]
     if trailing_text.strip():
-        result.append("vocabNotFound")
+        result.append("vocabnotfound")
 
     return result
 
