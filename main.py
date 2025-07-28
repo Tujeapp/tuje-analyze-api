@@ -2,6 +2,7 @@ from fastapi import FastAPI, Request, Header, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional, Dict
 from rapidfuzz import fuzz
+from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import re
 import os
@@ -10,6 +11,15 @@ import openai
 
 app = FastAPI()
 API_KEY = "tuje-secure-key"
+
+# ✅ Place CORS middleware setup right after app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # You can restrict this later
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ----------------------
 # Data models
@@ -195,6 +205,7 @@ async def scan_vocab(request: ScanVocabRequest):
         return {"ordered_vocab": ordered_vocab}
     except Exception as e:
         return {"error": str(e)}
+
 
 # ----------------------
 # Local testing
