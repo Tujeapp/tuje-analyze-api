@@ -198,11 +198,24 @@ Réponds uniquement en JSON.
 # ----------------------
 # Scan vocabulary endpoint
 # ----------------------
+from pydantic import BaseModel
+
+# Define the data model for vocab entry
+class VocabEntry(BaseModel):
+    id: str
+    transcriptionFr: str
+    transcriptionEn: str
+    transcriptionAdjusted: str
+
+# Webhook endpoint to receive vocab entry
 @app.post("/webhook-sync-vocab")
-async def scan_vocab(request: ScanVocabRequest):
+async def webhook_sync_vocab(entry: VocabEntry):
     try:
-        ordered_vocab = extract_vocab_sequence(request.transcription, request.vocabulary_phrases)
-        return {"ordered_vocab": ordered_vocab}
+        # Log or process the vocab entry here — for now just print to confirm
+        print("✅ Received vocab:", entry)
+
+        # Later: insert into database here if needed
+        return {"message": "Vocab synced", "entry_id": entry.id}
     except Exception as e:
         return {"error": str(e)}
 
