@@ -198,7 +198,7 @@ Réponds uniquement en JSON.
 # ----------------------
 # Scan vocabulary endpoint
 # ----------------------
-@app.post("/scan-vocab")
+@app.post("/webhook-sync-vocab")
 async def scan_vocab(request: ScanVocabRequest):
     try:
         ordered_vocab = extract_vocab_sequence(request.transcription, request.vocabulary_phrases)
