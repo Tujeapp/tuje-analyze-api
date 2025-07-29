@@ -249,7 +249,7 @@ async def webhook_sync_vocab(entry: VocabEntry):
         await update_airtable_status(
     record_id=entry.airtableRecordId,
     fields={
-        "Last modified time (ref)": entry.lastModifiedTimeRef
+        "Last modified time (saved)": entry.lastModifiedTimeRef
     }
 )
 
