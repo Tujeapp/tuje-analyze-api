@@ -8,6 +8,7 @@ import re
 import os
 import json
 import openai
+import asyncpg
 
 app = FastAPI()
 API_KEY = "tuje-secure-key"
@@ -208,16 +209,22 @@ class VocabEntry(BaseModel):
     transcriptionAdjusted: str
 
 # Webhook endpoint to receive vocab entry
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://youruser:yourpass@yourhost:5432/yourdb")
+
 @app.post("/webhook-sync-vocab")
 async def webhook_sync_vocab(entry: VocabEntry):
     try:
-        # Log or process the vocab entry here — for now just print to confirm
-        print("✅ Received vocab:", entry)
+        conn = await asyncpg.connect(DATABASE_URL)
+        await conn.execute("""
+            INSERT INTO vocab (id, transcription_fr, transcription_en, transcription_adjusted)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (id) DO NOTHING;
+        """, entry.id, entry.transcriptionFr, entry.transcriptionEn, entry.transcriptionAdjusted)
+        await conn.close()
 
-        # Later: insert into database here if needed
-        return {"message": "Vocab synced", "entry_id": entry.id}
+        return {"message": "Vocab synced and inserted", "entry_id": entry.id}
     except Exception as e:
-        return {"error": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ----------------------
