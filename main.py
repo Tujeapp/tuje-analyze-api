@@ -209,7 +209,7 @@ class VocabEntry(BaseModel):
     transcriptionAdjusted: str
 
 # Webhook endpoint to receive vocab entry
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://youruser:yourpass@yourhost:5432/yourdb")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://tuje_db_user:qPqnpKbhhQDczdSF5IAybe1r1fRPHYL6@dpg-d22a0ve3jp1c738lpth0-a/tuje_db")
 
 @app.post("/webhook-sync-vocab")
 async def webhook_sync_vocab(entry: VocabEntry):
