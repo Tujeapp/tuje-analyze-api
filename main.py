@@ -218,7 +218,10 @@ async def webhook_sync_vocab(entry: VocabEntry):
         await conn.execute("""
             INSERT INTO brain_vocab (id, transcription_fr, transcription_en, transcription_adjusted)
             VALUES ($1, $2, $3, $4)
-            ON CONFLICT (id) DO NOTHING;
+    ON CONFLICT (id) DO UPDATE SET
+        transcription_fr = EXCLUDED.transcription_fr,
+        transcription_en = EXCLUDED.transcription_en,
+        transcription_adjusted = EXCLUDED.transcription_adjusted;
         """, entry.id, entry.transcriptionFr, entry.transcriptionEn, entry.transcriptionAdjusted)
         await conn.close()
 
