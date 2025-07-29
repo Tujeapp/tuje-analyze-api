@@ -9,6 +9,25 @@ import os
 import json
 import openai
 import asyncpg
+import aiohttp
+
+AIRTABLE_TOKEN = os.getenv("AIRTABLE_TOKEN")
+AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
+AIRTABLE_TABLE_NAME = os.getenv("AIRTABLE_TABLE_NAME")
+
+async def update_airtable_status(record_id: str, fields: dict):
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_NAME}/{record_id}"
+    headers = {
+        "Authorization": f"Bearer {AIRTABLE_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    async with aiohttp.ClientSession() as session:
+        async with session.patch(url, headers=headers, json={"fields": fields}) as resp:
+            if resp.status != 200:
+                text = await resp.text()
+                print(f"⚠️ Airtable update failed: {resp.status} {text}")
+            else:
+                print("✅ Airtable updated successfully.")
 
 app = FastAPI()
 API_KEY = "tuje-secure-key"
@@ -207,6 +226,8 @@ class VocabEntry(BaseModel):
     transcriptionFr: str
     transcriptionEn: str
     transcriptionAdjusted: str
+    airtableRecordId: str
+    lastModifiedTimeRef: int
 
 # Webhook endpoint to receive vocab entry
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://tuje_db_user:qPqnpKbhhQDczdSF5IAybe1r1fRPHYL6@dpg-d22a0ve3jp1c738lpth0-a/tuje_db")
@@ -224,6 +245,13 @@ async def webhook_sync_vocab(entry: VocabEntry):
         transcription_adjusted = EXCLUDED.transcription_adjusted;
         """, entry.id, entry.transcriptionFr, entry.transcriptionEn, entry.transcriptionAdjusted)
         await conn.close()
+
+        await update_airtable_status(
+    record_id=entry.airtableRecordId,
+    fields={
+        "Last modified time (ref)": entry.lastModifiedTimeRef
+    }
+)
 
         return {"message": "Vocab synced and inserted", "entry_id": entry.id}
     except Exception as e:
