@@ -216,7 +216,7 @@ async def webhook_sync_vocab(entry: VocabEntry):
     try:
         conn = await asyncpg.connect(DATABASE_URL)
         await conn.execute("""
-            INSERT INTO vocab (id, transcription_fr, transcription_en, transcription_adjusted)
+            INSERT INTO Brain_Vocab (id, transcription_fr, transcription_en, transcription_adjusted)
             VALUES ($1, $2, $3, $4)
             ON CONFLICT (id) DO NOTHING;
         """, entry.id, entry.transcriptionFr, entry.transcriptionEn, entry.transcriptionAdjusted)
