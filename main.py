@@ -16,7 +16,7 @@ API_KEY = "tuje-secure-key"
 # ✅ Place CORS middleware setup right after app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://airtable.com", "https://*.airtable.com"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
