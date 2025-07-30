@@ -57,7 +57,6 @@ class SavedAnswer(BaseModel):
 
 class MatchRequest(BaseModel):
     transcription: str
-    saved_answers: List[SavedAnswer]
     vocabulary_list: List[VocabularyEntry]
     threshold: Optional[int] = 85
 
@@ -234,15 +233,30 @@ async def analyze(request: MatchRequest, authorization: Optional[str] = Header(N
     if API_KEY and authorization != f"Bearer {API_KEY}":
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    vocab_found, entities_found = find_vocabulary(request.transcription, request.vocabulary_list)
-    saved_matches = match_saved_answers(request.transcription, request.saved_answers, request.threshold)
+    try:
+        # 1. Connect to DB and fetch answers
+        conn = await asyncpg.connect(DATABASE_URL)
+        answer_rows = await conn.fetch("SELECT answer_text, is_correct FROM brain_answer")
+        await conn.close()
 
-    return {
-        "matched_vocab": vocab_found,
-        "matched_entities": entities_found,
-        "matches": saved_matches,
-        "call_gpt": len(saved_matches) == 0
-    }
+        saved_answers = [
+            SavedAnswer(text=row["answer_text"], is_correct=row["is_correct"])
+            for row in answer_rows
+        ]
+
+        # 2. Continue with current logic
+        vocab_found, entities_found = find_vocabulary(request.transcription, request.vocabulary_list)
+        saved_matches = match_saved_answers(request.transcription, saved_answers, request.threshold)
+
+        return {
+            "matched_vocab": vocab_found,
+            "matched_entities": entities_found,
+            "matches": saved_matches,
+            "call_gpt": len(saved_matches) == 0
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ----------------------
 # GPT fallback endpoint
@@ -296,6 +310,39 @@ Réponds uniquement en JSON.
             "raw_response": content if 'content' in locals() else "",
             "exception": str(e)
         }
+
+
+# ----------------------
+# Sync Answer
+# ----------------------
+class AnswerEntry(BaseModel):
+    id: str
+    transcriptionFr: str
+    transcriptionEn: str
+    transcriptionAdjusted: str
+    airtableRecordId: str
+    lastModifiedTimeRef: int
+
+@app.post("/webhook-sync-answer")
+async def webhook_sync_answer(entry: AnswerEntry):
+    try:
+        conn = await asyncpg.connect(DATABASE_URL)
+        await conn.execute("""
+            INSERT INTO brain_answer (id, transcription_fr, transcription_en, transcription_adjusted, airtable_record_id, last_modified_time_ref)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (id) DO UPDATE SET
+        transcription_fr = EXCLUDED.transcription_fr,
+        transcription_en = EXCLUDED.transcription_en,
+        transcription_adjusted = EXCLUDED.transcription_adjusted,
+        airtable_record_id = EXCLUDED.airtable_record_id,
+        last_modified_time_ref = EXCLUDED.last_modified_time_ref;
+        """, entry.id, entry.transcriptionFr, entry.transcriptionEn, entry.transcriptionAdjusted, entry.airtableRecordId, entry.lastModifiedTimeRef)
+        await conn.close()
+        return {"message": "Answer synced successfully", "id": entry.id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 
 # ----------------------
 # Scan vocabulary endpoint
