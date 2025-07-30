@@ -79,6 +79,14 @@ class ScanVocabRequest(BaseModel):
 class ExtractOrderedRequest(BaseModel):
     transcription: str
 
+class VocabEntry(BaseModel):
+    id: str
+    transcriptionFr: str
+    transcriptionEn: str
+    transcriptionAdjusted: str
+    airtableRecordId: Optional[str] = None
+    lastModifiedTimeRef: Optional[int] = None
+
 
 # ----------------------
 # Extract Ordered Vocab
@@ -95,9 +103,7 @@ async def extract_ordered_vocab(request: ExtractOrderedRequest):
                 id=row["id"],
                 transcriptionFr=row["transcription_fr"],
                 transcriptionEn=row["transcription_en"],
-                transcriptionAdjusted=row["transcription_adjusted"],
-                airtableRecordId: Optional[str] = None
-                lastModifiedTimeRef: Optional[int] = None
+                transcriptionAdjusted=row["transcription_adjusted"]
             )
             for row in rows
         ]
