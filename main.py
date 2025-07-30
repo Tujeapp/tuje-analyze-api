@@ -297,8 +297,8 @@ async def webhook_sync_vocab(entry: VocabEntry):
     try:
         conn = await asyncpg.connect(DATABASE_URL)
         await conn.execute("""
-            INSERT INTO brain_vocab (id, transcription_fr, transcription_en, transcription_adjusted)
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO brain_vocab (id, transcription_fr, transcription_en, transcription_adjusted, airtable_record_id, last_modified_time_ref)
+            VALUES ($1, $2, $3, $4, $5, $6)
     ON CONFLICT (id) DO UPDATE SET
         transcription_fr = EXCLUDED.transcription_fr,
         transcription_en = EXCLUDED.transcription_en,
