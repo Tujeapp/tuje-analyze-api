@@ -84,8 +84,8 @@ class VocabEntry(BaseModel):
     transcriptionFr: str
     transcriptionEn: str
     transcriptionAdjusted: str
-    airtableRecordId: Optional[str] = None
-    lastModifiedTimeRef: Optional[int] = None
+    airtableRecordId: str
+    lastModifiedTimeRef: int
 
 
 # ----------------------
@@ -103,7 +103,9 @@ async def extract_ordered_vocab(request: ExtractOrderedRequest):
                 id=row["id"],
                 transcriptionFr=row["transcription_fr"],
                 transcriptionEn=row["transcription_en"],
-                transcriptionAdjusted=row["transcription_adjusted"]
+                transcriptionAdjusted=row["transcription_adjusted"],
+                airtableRecordId=row["airtable_record_id"],
+                lastModifiedTimeRef=row["last_modified_time_ref"]
             )
             for row in rows
         ]
@@ -300,8 +302,10 @@ async def webhook_sync_vocab(entry: VocabEntry):
     ON CONFLICT (id) DO UPDATE SET
         transcription_fr = EXCLUDED.transcription_fr,
         transcription_en = EXCLUDED.transcription_en,
-        transcription_adjusted = EXCLUDED.transcription_adjusted;
-        """, entry.id, entry.transcriptionFr, entry.transcriptionEn, entry.transcriptionAdjusted)
+        transcription_adjusted = EXCLUDED.transcription_adjusted,
+        airtable_record_id = EXCLUDED.airtable_record_id,
+        last_modified_time_ref = EXCLUDED.last_modified_time_ref;
+        """, entry.id, entry.transcriptionFr, entry.transcriptionEn, entry.transcriptionAdjusted, entry.airtableRecordId, entry.lastModifiedTimeRef)
         await conn.close()
 
         await update_airtable_status(
