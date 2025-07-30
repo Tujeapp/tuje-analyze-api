@@ -95,7 +95,9 @@ async def extract_ordered_vocab(request: ExtractOrderedRequest):
                 id=row["id"],
                 transcriptionFr=row["transcription_fr"],
                 transcriptionEn=row["transcription_en"],
-                transcriptionAdjusted=row["transcription_adjusted"]
+                transcriptionAdjusted=row["transcription_adjusted"],
+                airtableRecordId: Optional[str] = None
+                lastModifiedTimeRef: Optional[int] = None
             )
             for row in rows
         ]
