@@ -253,7 +253,12 @@ async def webhook_sync_vocab(entry: VocabEntry):
     }
 )
 
-        return {"message": "Vocab synced and inserted", "entry_id": entry.id}
+        return {
+    "message": "Vocab synced and inserted",
+    "entry_id": entry.id,
+    "airtable_record_id": entry.airtableRecordId,
+    "last_modified_time_ref": entry.lastModifiedTimeRef
+}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
