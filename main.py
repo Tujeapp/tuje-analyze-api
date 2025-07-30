@@ -11,6 +11,10 @@ import openai
 import asyncpg
 import aiohttp
 
+
+# ----------------------
+# Update Airtable
+# ----------------------
 AIRTABLE_TOKEN = os.getenv("AIRTABLE_TOKEN")
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
 AIRTABLE_TABLE_NAME = os.getenv("AIRTABLE_TABLE_NAME")
@@ -71,6 +75,52 @@ class GPTFallbackRequest(BaseModel):
 class ScanVocabRequest(BaseModel):
     transcription: str
     vocabulary_phrases: List[str]
+
+class ExtractOrderedRequest(BaseModel):
+    transcription: str
+
+
+# ----------------------
+# Extract Ordered Vocab
+# ----------------------
+@app.post("/extract-ordered-vocab")
+async def extract_ordered_vocab(request: ExtractOrderedRequest):
+    try:
+        conn = await asyncpg.connect(DATABASE_URL)
+        rows = await conn.fetch("SELECT id, transcription_fr, transcription_en, transcription_adjusted FROM brain_vocab")
+        await conn.close()
+
+        vocab_entries = [
+            VocabEntry(
+                id=row["id"],
+                transcriptionFr=row["transcription_fr"],
+                transcriptionEn=row["transcription_en"],
+                transcriptionAdjusted=row["transcription_adjusted"]
+            )
+            for row in rows
+        ]
+
+        transcription = request.transcription.lower()
+        matches = []
+        used_spans = []
+
+        # Match based on transcriptionAdjusted
+        for entry in sorted(vocab_entries, key=lambda e: -len(e.transcriptionAdjusted)):
+            pattern = r'\b' + re.escape(entry.transcriptionAdjusted.lower()) + r'\b'
+            for match in re.finditer(pattern, transcription):
+                start, end = match.span()
+                if all(end <= s or start >= e for s, e in used_spans):
+                    used_spans.append((start, end))
+                    matches.append((start, entry))
+                    break
+
+        matches.sort(key=lambda x: x[0])  # Sort by appearance order
+
+        return [entry.dict() for _, entry in matches]
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # ----------------------
 # Helper functions
