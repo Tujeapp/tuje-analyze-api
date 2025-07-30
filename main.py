@@ -338,7 +338,20 @@ async def webhook_sync_answer(entry: AnswerEntry):
         last_modified_time_ref = EXCLUDED.last_modified_time_ref;
         """, entry.id, entry.transcriptionFr, entry.transcriptionEn, entry.transcriptionAdjusted, entry.airtableRecordId, entry.lastModifiedTimeRef)
         await conn.close()
-        return {"message": "Answer synced successfully", "id": entry.id}
+
+        await update_airtable_status(
+    record_id=entry.airtableRecordId,
+    fields={
+        "LastModifiedSaved": entry.lastModifiedTimeRef
+    }
+)
+
+        return {
+    "message": "Answer synced and inserted",
+    "entry_id": entry.id,
+    "airtable_record_id": entry.airtableRecordId,
+    "last_modified_time_ref": entry.lastModifiedTimeRef
+}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
