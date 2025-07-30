@@ -124,9 +124,32 @@ async def extract_ordered_vocab(request: ExtractOrderedRequest):
                     matches.append((start, entry))
                     break
 
-        matches.sort(key=lambda x: x[0])  # Sort by appearance order
+matches.sort(key=lambda x: x[0])  # Sort by order of appearance
 
-        return [entry.dict() for _, entry in matches]
+results = []
+last_end = 0
+for start, entry in matches:
+    gap_text = transcription[last_end:start]
+    if gap_text.strip():  # If there's a non-space gap between last match and this one
+        results.append({
+            "id": "vocabnotfound",
+            "transcriptionFr": "vocabnotfound",
+            "transcriptionEn": "not found",
+            "transcriptionAdjusted": "vocabnotfound"
+        })
+    results.append(entry.dict())
+    last_end = start + len(entry.transcriptionAdjusted)
+
+# Check if there's leftover unmatched text at the end
+if transcription[last_end:].strip():
+    results.append({
+        "id": "vocabnotfound",
+        "transcriptionFr": "vocabnotfound",
+        "transcriptionEn": "not found",
+        "transcriptionAdjusted": "vocabnotfound"
+    })
+
+return results
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
