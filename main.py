@@ -95,7 +95,7 @@ class VocabEntry(BaseModel):
 async def extract_ordered_vocab(request: ExtractOrderedRequest):
     try:
         conn = await asyncpg.connect(DATABASE_URL)
-        rows = await conn.fetch("SELECT id, transcription_fr, transcription_en, transcription_adjusted FROM brain_vocab")
+        rows = await conn.fetch("SELECT id, transcription_fr, transcription_en, transcription_adjusted, airtable_record_id, last_modified_time_ref FROM brain_vocab")
         await conn.close()
 
         vocab_entries = [
