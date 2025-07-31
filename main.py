@@ -4,13 +4,14 @@ from typing import List, Optional, Dict
 from rapidfuzz import fuzz
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
+import difflib
 import re
 import os
 import json
 import openai
 import asyncpg
 import aiohttp
-import difflib
+
 
 
 # ----------------------
