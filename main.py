@@ -10,6 +10,7 @@ import json
 import openai
 import asyncpg
 import aiohttp
+import difflib
 
 
 # ----------------------
@@ -54,11 +55,6 @@ class VocabularyEntry(BaseModel):
 class SavedAnswer(BaseModel):
     text: str
     is_correct: bool
-
-class MatchRequest(BaseModel):
-    transcription: str
-    vocabulary_list: List[VocabularyEntry]
-    threshold: Optional[int] = 85
 
 class MatchResponse(BaseModel):
     matched_vocab: List[str]
@@ -153,6 +149,8 @@ async def extract_ordered_vocab(request: ExtractOrderedRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+
 # ----------------------
 # Helper functions
 # ----------------------
@@ -225,38 +223,69 @@ def match_saved_answers(transcription, saved_answers, threshold):
     results.sort(key=lambda r: r["score"], reverse=True)
     return results
 
-# ----------------------
-# Main /analyze endpoint
-# ----------------------
-@app.post("/analyze", response_model=MatchResponse)
-async def analyze(request: MatchRequest, authorization: Optional[str] = Header(None)):
-    if API_KEY and authorization != f"Bearer {API_KEY}":
-        raise HTTPException(status_code=401, detail="Unauthorized")
 
+
+# ----------------------
+# Match potential Answers
+# ----------------------
+class MatchAnswerRequest(BaseModel):
+    interaction_id: str
+    user_transcription: str
+    threshold: int = 85
+
+@app.post("/match-answer")
+async def match_answer(req: MatchAnswerRequest):
     try:
-        # 1. Connect to DB and fetch answers
-        conn = await asyncpg.connect(DATABASE_URL)
-        answer_rows = await conn.fetch("SELECT answer_text, is_correct FROM brain_answer")
+        conn = await asyncpg.connect(os.getenv("DATABASE_URL"))
+
+        rows = await conn.fetch("""
+            SELECT a.id, a.transcription_fr, a.transcription_en, a.transcription_adjusted
+            FROM brain_interaction_answer ia
+            JOIN brain_answer a ON ia.answer_id = a.id
+            WHERE ia.interaction_id = $1
+        """, req.interaction_id)
+
         await conn.close()
 
-        saved_answers = [
-            SavedAnswer(text=row["answer_text"], is_correct=row["is_correct"])
-            for row in answer_rows
-        ]
+        if not rows:
+            raise HTTPException(status_code=404, detail="No answers linked to this interaction.")
 
-        # 2. Continue with current logic
-        vocab_found, entities_found = find_vocabulary(request.transcription, request.vocabulary_list)
-        saved_matches = match_saved_answers(request.transcription, saved_answers, request.threshold)
+        user_input = req.user_transcription.strip().lower()
+        best_score = 0
+        best_match = None
+
+        for row in rows:
+            expected = row["transcription_adjusted"].strip().lower()
+            score = difflib.SequenceMatcher(None, user_input, expected).ratio() * 100
+
+            if score > best_score:
+                best_score = score
+                best_match = {
+                    "id": row["id"],
+                    "transcriptionFr": row["transcription_fr"],
+                    "transcriptionEn": row["transcription_en"],
+                    "transcriptionAdjusted": row["transcription_adjusted"],
+                    "score": round(score, 1)
+                }
+
+        if best_match and best_score >= req.threshold:
+            return {
+                "match_found": True,
+                "call_gpt": False,
+                "best_answer": best_match
+            }
 
         return {
-            "matched_vocab": vocab_found,
-            "matched_entities": entities_found,
-            "matches": saved_matches,
-            "call_gpt": len(saved_matches) == 0
+            "match_found": False,
+            "call_gpt": True,
+            "reason": f"No match passed threshold {req.threshold}",
+            "best_attempt": best_match
         }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
 
 # ----------------------
 # GPT fallback endpoint
