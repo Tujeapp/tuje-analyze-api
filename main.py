@@ -371,29 +371,33 @@ async def webhook_sync_interaction(entry: InteractionEntry):
     try:
         conn = await asyncpg.connect(DATABASE_URL)
         await conn.execute("""
-            INSERT INTO brain_interaction (id, transcription_fr, transcription_en, airtable_record_id, last_modified_time_ref)
+            INSERT INTO brain_interaction (
+                id, transcription_fr, transcription_en, airtable_record_id, last_modified_time_ref
+            )
             VALUES ($1, $2, $3, $4, $5)
             ON CONFLICT (id) DO UPDATE SET
-        transcription_fr = EXCLUDED.transcription_fr,
-        transcription_en = EXCLUDED.transcription_en,
-        airtable_record_id = EXCLUDED.airtable_record_id,
-        last_modified_time_ref = EXCLUDED.last_modified_time_ref;
+                transcription_fr = EXCLUDED.transcription_fr,
+                transcription_en = EXCLUDED.transcription_en,
+                airtable_record_id = EXCLUDED.airtable_record_id,
+                last_modified_time_ref = EXCLUDED.last_modified_time_ref;
         """, entry.id, entry.transcriptionFr, entry.transcriptionEn, entry.airtableRecordId, entry.lastModifiedTimeRef)
         await conn.close()
 
+        # Update status in Airtable
         await update_airtable_status(
-    record_id=entry.airtableRecordId,
-    fields={
-        "LastModifiedSaved": entry.lastModifiedTimeRef
-    }
-)
+            record_id=entry.airtableRecordId,
+            fields={
+                "LastModifiedSaved": entry.lastModifiedTimeRef
+            }
+        )
 
         return {
-    "message": "Interaction synced and inserted",
-    "entry_id": entry.id,
-    "airtable_record_id": entry.airtableRecordId,
-    "last_modified_time_ref": entry.lastModifiedTimeRef
-}
+            "message": "Interaction synced and inserted",
+            "entry_id": entry.id,
+            "airtable_record_id": entry.airtableRecordId,
+            "last_modified_time_ref": entry.lastModifiedTimeRef
+        }
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
