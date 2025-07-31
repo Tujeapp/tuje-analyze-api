@@ -404,6 +404,49 @@ async def webhook_sync_interaction(entry: InteractionEntry):
 
 
 # ----------------------
+# Sync Interaction-Answer
+# ----------------------
+class InteractionAnswerEntry(BaseModel):
+    id: str
+    interactionId: str
+    answerId: str
+    airtableRecordId: str
+    lastModifiedTimeRef: int
+
+@app.post("/webhook-sync-interaction-answer")
+async def webhook_sync_interaction_answer(entry: InteractionAnswerEntry):
+    try:
+        conn = await asyncpg.connect(DATABASE_URL)
+        await conn.execute("""
+            INSERT INTO brain_interaction_answer (
+                id, interaction_id, answer_id, airtable_record_id, last_modified_time_ref
+            )
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (id) DO UPDATE SET
+                interaction_id = EXCLUDED.interaction_id,
+                answer_id = EXCLUDED.answer_id,
+                airtable_record_id = EXCLUDED.airtable_record_id,
+                last_modified_time_ref = EXCLUDED.last_modified_time_ref;
+        """, entry.id, entry.interactionId, entry.answerId, entry.airtableRecordId, entry.lastModifiedTimeRef)
+        await conn.close()
+
+        await update_airtable_status(
+            record_id=entry.airtableRecordId,
+            fields={"LastModifiedSaved": entry.lastModifiedTimeRef}
+        )
+
+        return {
+            "message": "Interaction-Answer link synced",
+            "entry_id": entry.id,
+            "airtable_record_id": entry.airtableRecordId,
+            "last_modified_time_ref": entry.lastModifiedTimeRef
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+# ----------------------
 # Scan vocabulary endpoint
 # ----------------------
 from pydantic import BaseModel
