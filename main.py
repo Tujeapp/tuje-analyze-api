@@ -237,7 +237,7 @@ class MatchAnswerRequest(BaseModel):
 @app.post("/match-answer")
 async def match_answer(req: MatchAnswerRequest):
     try:
-        conn = await asyncpg.connect(os.getenv("DATABASE_URL"))
+        conn = await asyncpg.connect(DATABASE_URL)
 
         rows = await conn.fetch("""
             SELECT a.id, a.transcription_fr, a.transcription_en, a.transcription_adjusted
