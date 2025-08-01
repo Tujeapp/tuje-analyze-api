@@ -11,3 +11,138 @@ HEADERS = {
     "Authorization": f"Bearer {AIRTABLE_API_KEY}",
     "Content-Type": "application/json"
 }
+
+
+
+# ----------------------
+# Sync Answer
+# ----------------------
+class AnswerEntry(BaseModel):
+    id: str
+    transcriptionFr: str
+    transcriptionEn: str
+    transcriptionAdjusted: str
+    airtableRecordId: str
+    lastModifiedTimeRef: int
+
+@app.post("/webhook-sync-answer")
+async def webhook_sync_answer(entry: AnswerEntry):
+    try:
+        conn = await asyncpg.connect(DATABASE_URL)
+        await conn.execute("""
+            INSERT INTO brain_answer (id, transcription_fr, transcription_en, transcription_adjusted, airtable_record_id, last_modified_time_ref)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (id) DO UPDATE SET
+        transcription_fr = EXCLUDED.transcription_fr,
+        transcription_en = EXCLUDED.transcription_en,
+        transcription_adjusted = EXCLUDED.transcription_adjusted,
+        airtable_record_id = EXCLUDED.airtable_record_id,
+        last_modified_time_ref = EXCLUDED.last_modified_time_ref;
+        """, entry.id, entry.transcriptionFr, entry.transcriptionEn, entry.transcriptionAdjusted, entry.airtableRecordId, entry.lastModifiedTimeRef)
+        await conn.close()
+
+        await update_airtable_status(
+    record_id=entry.airtableRecordId,
+    fields={
+        "LastModifiedSaved": entry.lastModifiedTimeRef
+    }
+)
+
+        return {
+    "message": "Answer synced and inserted",
+    "entry_id": entry.id,
+    "airtable_record_id": entry.airtableRecordId,
+    "last_modified_time_ref": entry.lastModifiedTimeRef
+}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ----------------------
+# Sync Interaction
+# ----------------------
+class InteractionEntry(BaseModel):
+    id: str
+    transcriptionFr: str
+    transcriptionEn: str
+    airtableRecordId: str
+    lastModifiedTimeRef: int
+
+@app.post("/webhook-sync-interaction")
+async def webhook_sync_interaction(entry: InteractionEntry):
+    try:
+        conn = await asyncpg.connect(DATABASE_URL)
+        await conn.execute("""
+            INSERT INTO brain_interaction (
+                id, transcription_fr, transcription_en, airtable_record_id, last_modified_time_ref
+            )
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (id) DO UPDATE SET
+                transcription_fr = EXCLUDED.transcription_fr,
+                transcription_en = EXCLUDED.transcription_en,
+                airtable_record_id = EXCLUDED.airtable_record_id,
+                last_modified_time_ref = EXCLUDED.last_modified_time_ref;
+        """, entry.id, entry.transcriptionFr, entry.transcriptionEn, entry.airtableRecordId, entry.lastModifiedTimeRef)
+        await conn.close()
+
+        # Update status in Airtable
+        await update_airtable_status(
+            record_id=entry.airtableRecordId,
+            fields={
+                "LastModifiedSaved": entry.lastModifiedTimeRef
+            }
+        )
+
+        return {
+            "message": "Interaction synced and inserted",
+            "entry_id": entry.id,
+            "airtable_record_id": entry.airtableRecordId,
+            "last_modified_time_ref": entry.lastModifiedTimeRef
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+# ----------------------
+# Sync Interaction-Answer
+# ----------------------
+class InteractionAnswerEntry(BaseModel):
+    id: str
+    interactionId: str
+    answerId: str
+    airtableRecordId: str
+    lastModifiedTimeRef: int
+
+@app.post("/webhook-sync-interaction-answer")
+async def webhook_sync_interaction_answer(entry: InteractionAnswerEntry):
+    try:
+        conn = await asyncpg.connect(DATABASE_URL)
+        await conn.execute("""
+            INSERT INTO brain_interaction_answer (
+                id, interaction_id, answer_id, airtable_record_id, last_modified_time_ref
+            )
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (id) DO UPDATE SET
+                interaction_id = EXCLUDED.interaction_id,
+                answer_id = EXCLUDED.answer_id,
+                airtable_record_id = EXCLUDED.airtable_record_id,
+                last_modified_time_ref = EXCLUDED.last_modified_time_ref;
+        """, entry.id, entry.interactionId, entry.answerId, entry.airtableRecordId, entry.lastModifiedTimeRef)
+        await conn.close()
+
+        await update_airtable_status(
+            record_id=entry.airtableRecordId,
+            fields={"LastModifiedSaved": entry.lastModifiedTimeRef}
+        )
+
+        return {
+            "message": "Interaction-Answer link synced",
+            "entry_id": entry.id,
+            "airtable_record_id": entry.airtableRecordId,
+            "last_modified_time_ref": entry.lastModifiedTimeRef
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
