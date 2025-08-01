@@ -14,7 +14,7 @@ router = APIRouter()
 # Airtable config
 AIRTABLE_BASE_URL = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}"
 HEADERS = {
-    "Authorization": f"Bearer {AIRTABLE_API_KEY}",
+    "Authorization": f"Bearer {AIRTABLE_TOKEN}",
     "Content-Type": "application/json"
 }
 
