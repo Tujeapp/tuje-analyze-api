@@ -1,14 +1,23 @@
 import os
 import httpx
 from fastapi import APIRouter, HTTPException
-from config import AIRTABLE_API_KEY, AIRTABLE_BASE_ID
 import asyncpg
 from pydantic import BaseModel
 
+# Load env vars
 DATABASE_URL = os.getenv("DATABASE_URL")
+AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
+AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
+
+# Safety checks
 if not DATABASE_URL:
     raise RuntimeError("Missing required environment variable: DATABASE_URL")
+if not AIRTABLE_API_KEY:
+    raise RuntimeError("Missing required environment variable: AIRTABLE_API_KEY")
+if not AIRTABLE_BASE_ID:
+    raise RuntimeError("Missing required environment variable: AIRTABLE_BASE_ID")
 
+# Setup router
 router = APIRouter()
 
 # Airtable config
@@ -18,13 +27,17 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
+# Function to update Airtable
 async def update_airtable_status(record_id: str, fields: dict, table_name: str):
     url = f"{AIRTABLE_BASE_URL}/{table_name}/{record_id}"
     payload = { "fields": fields }
 
     async with httpx.AsyncClient() as client:
         response = await client.patch(url, json=payload, headers=HEADERS)
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(status_code=response.status_code, detail=response.text)
 
 
 # ----------------------
