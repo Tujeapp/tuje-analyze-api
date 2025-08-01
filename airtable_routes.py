@@ -1,7 +1,7 @@
 import os
 import httpx
 from fastapi import APIRouter, HTTPException
-from config import AIRTABLE_TOKEN, AIRTABLE_BASE_ID, AIRTABLE_TABLE_NAME
+from config import AIRTABLE_API_KEY, AIRTABLE_BASE_ID, AIRTABLE_TABLE_NAME
 import asyncpg
 from pydantic import BaseModel
 
@@ -14,7 +14,7 @@ router = APIRouter()
 # Airtable config
 AIRTABLE_BASE_URL = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}"
 HEADERS = {
-    "Authorization": f"Bearer {AIRTABLE_TOKEN}",
+    "Authorization": f"Bearer {AIRTABLE_API_KEY}",
     "Content-Type": "application/json"
 }
 
