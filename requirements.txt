@@ -3,3 +3,7 @@ uvicorn==0.29.0
 rapidfuzz==3.6.1
 openai==0.28
 asyncpg
+aiohttp
+httpx
+python-dotenv
+pydantic
