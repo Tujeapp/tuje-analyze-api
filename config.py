@@ -15,5 +15,5 @@ if not OPENAI_API_KEY:
     raise RuntimeError("Missing environment variable: OPENAI_API_KEY")
 
 # Airtable
-AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
 AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
+AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
