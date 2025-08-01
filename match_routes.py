@@ -22,7 +22,7 @@ class VocabEntry(BaseModel):
     transcriptionEn: str
     transcriptionAdjusted: str
     airtableRecordId: Optional[str]
-    lastModifiedTimeRef: Optional[str]
+    lastModifiedTimeRef: Optional[int]
 
 class ExtractOrderedRequest(BaseModel):
     transcription: str
