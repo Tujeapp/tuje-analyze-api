@@ -4,6 +4,16 @@ services:
     runtime: python
     buildCommand: ""
     startCommand: uvicorn main:app --host 0.0.0.0 --port 10000
-    envVars:
-      - key: API_KEY
-        value: tuje-secure-key
+envVars:
+  - key: API_KEY
+    value: tuje-secure-key
+  - key: DATABASE_URL
+    sync: false
+  - key: OPENAI_API_KEY
+    sync: false
+  - key: AIRTABLE_BASE_ID
+    sync: false
+  - key: AIRTABLE_TOKEN
+    sync: false
+  - key: AIRTABLE_TABLE_NAME
+    sync: false
