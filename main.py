@@ -6,12 +6,38 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import difflib
 import re
-import os
 import json
 import openai
 import asyncpg
 import aiohttp
+import os
 
+# --------------------------------------
+# Centralized environment configuration
+# --------------------------------------
+DATABASE_URL = os.getenv("DATABASE_URL")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+if not DATABASE_URL:
+    raise RuntimeError("Missing required environment variable: DATABASE_URL")
+if not OPENAI_API_KEY:
+    raise RuntimeError("Missing required environment variable: OPENAI_API_KEY")
+
+openai.api_key = OPENAI_API_KEY
+
+# ---------------
+# FastAPI app
+# ---------------
+app = FastAPI()
+API_KEY = "tuje-secure-key"
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # ----------------------
@@ -35,17 +61,7 @@ async def update_airtable_status(record_id: str, fields: dict):
             else:
                 print("✅ Airtable updated successfully.")
 
-app = FastAPI()
-API_KEY = "tuje-secure-key"
 
-# ✅ Place CORS middleware setup right after app = FastAPI()
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # ----------------------
 # Data models
@@ -294,7 +310,7 @@ async def match_answer(req: MatchAnswerRequest):
 # ----------------------
 @app.post("/gpt-fallback")
 async def gpt_fallback(request: GPTFallbackRequest):
-    openai.api_key = os.getenv("OPENAI_API_KEY")
+    openai.api_key = OPENAI_API_KEY
 
     try:
         # Build the list of intent options
@@ -493,7 +509,10 @@ class VocabEntry(BaseModel):
     lastModifiedTimeRef: int
 
 # Webhook endpoint to receive vocab entry
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://tuje_db_user:qPqnpKbhhQDczdSF5IAybe1r1fRPHYL6@dpg-d22a0ve3jp1c738lpth0-a/tuje_db")
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+if not DATABASE_URL:
+    raise RuntimeError("Missing required environment variable: DATABASE_URL")
 
 @app.post("/webhook-sync-vocab")
 async def webhook_sync_vocab(entry: VocabEntry):
