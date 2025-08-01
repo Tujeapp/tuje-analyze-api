@@ -65,7 +65,8 @@ class MatchResponse(BaseModel):
 
 class GPTFallbackRequest(BaseModel):
     transcription: str
-    matched_vocab: List[str]
+    intent_options: List[str]
+    matched_vocab: Optional[List[str]] = []
     candidate_answers: Optional[List[SavedAnswer]] = []
 
 class ScanVocabRequest(BaseModel):
@@ -289,45 +290,34 @@ async def match_answer(req: MatchAnswerRequest):
 
 
 # ----------------------
-# GPT fallback endpoint (intent only)
+# GPT fallback (intent only)
 # ----------------------
 @app.post("/gpt-fallback")
 async def gpt_fallback(request: GPTFallbackRequest):
     openai.api_key = os.getenv("OPENAI_API_KEY")
 
     try:
-        # Construire le texte des réponses candidates
-        candidates_text = "\n".join(
-            [f"- {a.text}" for a in request.candidate_answers]
-        ) if request.candidate_answers else "Aucun exemple"
+        # Build the list of intent options
+        intent_list = "\n".join([f"- {opt}" for opt in request.intent_options])
 
-        # Construire la liste des intentions
-        intent_list_text = "\n".join([f"- {intent}" for intent in request.intent_list])
-
-        # Prompt pour GPT
+        # Prompt to GPT
         prompt = f"""
-Tu es un assistant pour une application d’apprentissage du français. Voici une transcription vocale imparfaite de l’utilisateur :  
-"{request.transcription}"
-
-Voici le vocabulaire reconnu : {', '.join(request.matched_vocab)}
-
-Voici quelques réponses attendues ou acceptables :
-{candidates_text}
-
-Voici la liste des intentions possibles :
-{intent_list_text}
-
 Détermine l’intention de l’utilisateur.
 
-Réponds uniquement en JSON avec les champs suivants :
+Transcription : "{request.transcription}"
+
+Liste des intentions possibles :
+{intent_list}
+
+Règles :
 - intent_topic : choisis UNE et UNE SEULE intention depuis la liste fournie. Si aucune ne convient, écris "autre".
-- intent_confidence_score : donne un score de confiance (entre 0 et 100) basé sur la qualité de la correspondance.
-- intent_GPT : si intent_topic est "autre", donne ici l’intention que tu aurais proposée librement.
+- intent_confidence_score : donne un score de confiance (0 à 100).
+- intent_GPT : si intent_topic est "autre", donne l’intention libre proposée par GPT.
 
 Réponds uniquement en JSON.
 """
 
-        # Appel à OpenAI
+        # GPT API call
         response = openai.ChatCompletion.create(
             model="gpt-4o",
             messages=[
@@ -340,7 +330,7 @@ Réponds uniquement en JSON.
 
         content = response.choices[0].message["content"]
 
-        # Nettoyer les réponses formatées avec ```
+        # Clean output if wrapped in code block
         if content.strip().startswith("```"):
             content = content.strip("` \n").replace("json", "").strip()
 
