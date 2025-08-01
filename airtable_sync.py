@@ -2,6 +2,12 @@ import os
 import httpx
 from fastapi import APIRouter, HTTPException
 from config import AIRTABLE_BASE_ID, AIRTABLE_API_KEY
+import asyncpg
+from pydantic import BaseModel
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("Missing required environment variable: DATABASE_URL")
 
 router = APIRouter()
 
@@ -12,6 +18,13 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
+async def update_airtable_status(record_id: str, fields: dict, table_name: str):
+    url = f"{AIRTABLE_BASE_URL}/{table_name}/{record_id}"
+    payload = { "fields": fields }
+
+    async with httpx.AsyncClient() as client:
+        response = await client.patch(url, json=payload, headers=HEADERS)
+        response.raise_for_status()
 
 
 # ----------------------
@@ -25,7 +38,7 @@ class AnswerEntry(BaseModel):
     airtableRecordId: str
     lastModifiedTimeRef: int
 
-@app.post("/webhook-sync-answer")
+@router.post("/webhook-sync-answer")
 async def webhook_sync_answer(entry: AnswerEntry):
     try:
         conn = await asyncpg.connect(DATABASE_URL)
@@ -42,11 +55,10 @@ async def webhook_sync_answer(entry: AnswerEntry):
         await conn.close()
 
         await update_airtable_status(
-    record_id=entry.airtableRecordId,
-    fields={
-        "LastModifiedSaved": entry.lastModifiedTimeRef
-    }
-)
+            record_id=entry.airtableRecordId,
+            fields={"LastModifiedSaved": entry.lastModifiedTimeRef},
+            table_name="Answers"
+        )
 
         return {
     "message": "Answer synced and inserted",
@@ -56,6 +68,7 @@ async def webhook_sync_answer(entry: AnswerEntry):
 }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 # ----------------------
@@ -68,7 +81,7 @@ class InteractionEntry(BaseModel):
     airtableRecordId: str
     lastModifiedTimeRef: int
 
-@app.post("/webhook-sync-interaction")
+@router.post("/webhook-sync-interaction")
 async def webhook_sync_interaction(entry: InteractionEntry):
     try:
         conn = await asyncpg.connect(DATABASE_URL)
@@ -85,12 +98,10 @@ async def webhook_sync_interaction(entry: InteractionEntry):
         """, entry.id, entry.transcriptionFr, entry.transcriptionEn, entry.airtableRecordId, entry.lastModifiedTimeRef)
         await conn.close()
 
-        # Update status in Airtable
         await update_airtable_status(
             record_id=entry.airtableRecordId,
-            fields={
-                "LastModifiedSaved": entry.lastModifiedTimeRef
-            }
+            fields={"LastModifiedSaved": entry.lastModifiedTimeRef},
+            table_name="Interaction"
         )
 
         return {
@@ -115,7 +126,7 @@ class InteractionAnswerEntry(BaseModel):
     airtableRecordId: str
     lastModifiedTimeRef: int
 
-@app.post("/webhook-sync-interaction-answer")
+@router.post("/webhook-sync-interaction-answer")
 async def webhook_sync_interaction_answer(entry: InteractionAnswerEntry):
     try:
         conn = await asyncpg.connect(DATABASE_URL)
@@ -134,7 +145,8 @@ async def webhook_sync_interaction_answer(entry: InteractionAnswerEntry):
 
         await update_airtable_status(
             record_id=entry.airtableRecordId,
-            fields={"LastModifiedSaved": entry.lastModifiedTimeRef}
+            fields={"LastModifiedSaved": entry.lastModifiedTimeRef},
+            table_name="Interaction-Answer"
         )
 
         return {
@@ -146,3 +158,49 @@ async def webhook_sync_interaction_answer(entry: InteractionAnswerEntry):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+
+# ----------------------
+# Sync Vocab 
+# ----------------------
+# Define the data model for vocab entry
+class VocabEntry(BaseModel):
+    id: str
+    transcriptionFr: str
+    transcriptionEn: str
+    transcriptionAdjusted: str
+    airtableRecordId: str
+    lastModifiedTimeRef: int
+
+
+@router.post("/webhook-sync-vocab")
+async def webhook_sync_vocab(entry: VocabEntry):
+    try:
+        conn = await asyncpg.connect(DATABASE_URL)
+        await conn.execute("""
+            INSERT INTO brain_vocab (id, transcription_fr, transcription_en, transcription_adjusted, airtable_record_id, last_modified_time_ref)
+            VALUES ($1, $2, $3, $4, $5, $6)
+    ON CONFLICT (id) DO UPDATE SET
+        transcription_fr = EXCLUDED.transcription_fr,
+        transcription_en = EXCLUDED.transcription_en,
+        transcription_adjusted = EXCLUDED.transcription_adjusted,
+        airtable_record_id = EXCLUDED.airtable_record_id,
+        last_modified_time_ref = EXCLUDED.last_modified_time_ref;
+        """, entry.id, entry.transcriptionFr, entry.transcriptionEn, entry.transcriptionAdjusted, entry.airtableRecordId, entry.lastModifiedTimeRef)
+        await conn.close()
+
+        await update_airtable_status(
+            record_id=entry.airtableRecordId,
+            fields={"LastModifiedSaved": entry.lastModifiedTimeRef},
+            table_name="Vocab"
+        )
+
+        return {
+    "message": "Vocab synced and inserted",
+    "entry_id": entry.id,
+    "airtable_record_id": entry.airtableRecordId,
+    "last_modified_time_ref": entry.lastModifiedTimeRef
+}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+        
