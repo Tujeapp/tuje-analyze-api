@@ -70,7 +70,7 @@ async def webhook_sync_answer(entry: AnswerEntry):
         await update_airtable_status(
             record_id=entry.airtableRecordId,
             fields={"LastModifiedSaved": entry.lastModifiedTimeRef},
-            table_name="Answers"
+            table_name="Answer"
         )
 
         return {
