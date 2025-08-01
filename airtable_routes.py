@@ -1,7 +1,7 @@
 import os
 import httpx
 from fastapi import APIRouter, HTTPException
-from config import AIRTABLE_API_KEY, AIRTABLE_BASE_ID, AIRTABLE_TABLE_NAME
+from config import AIRTABLE_API_KEY, AIRTABLE_BASE_ID
 import asyncpg
 from pydantic import BaseModel
 
