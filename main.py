@@ -360,57 +360,6 @@ Réponds uniquement en JSON.
         }
 
 
-# ----------------------
-# Scan vocabulary endpoint
-# ----------------------
-from pydantic import BaseModel
-
-# Define the data model for vocab entry
-class VocabEntry(BaseModel):
-    id: str
-    transcriptionFr: str
-    transcriptionEn: str
-    transcriptionAdjusted: str
-    airtableRecordId: str
-    lastModifiedTimeRef: int
-
-# Webhook endpoint to receive vocab entry
-DATABASE_URL = os.getenv("DATABASE_URL")
-
-if not DATABASE_URL:
-    raise RuntimeError("Missing required environment variable: DATABASE_URL")
-
-@app.post("/webhook-sync-vocab")
-async def webhook_sync_vocab(entry: VocabEntry):
-    try:
-        conn = await asyncpg.connect(DATABASE_URL)
-        await conn.execute("""
-            INSERT INTO brain_vocab (id, transcription_fr, transcription_en, transcription_adjusted, airtable_record_id, last_modified_time_ref)
-            VALUES ($1, $2, $3, $4, $5, $6)
-    ON CONFLICT (id) DO UPDATE SET
-        transcription_fr = EXCLUDED.transcription_fr,
-        transcription_en = EXCLUDED.transcription_en,
-        transcription_adjusted = EXCLUDED.transcription_adjusted,
-        airtable_record_id = EXCLUDED.airtable_record_id,
-        last_modified_time_ref = EXCLUDED.last_modified_time_ref;
-        """, entry.id, entry.transcriptionFr, entry.transcriptionEn, entry.transcriptionAdjusted, entry.airtableRecordId, entry.lastModifiedTimeRef)
-        await conn.close()
-
-        await update_airtable_status(
-    record_id=entry.airtableRecordId,
-    fields={
-        "LastModifiedSaved": entry.lastModifiedTimeRef
-    }
-)
-
-        return {
-    "message": "Vocab synced and inserted",
-    "entry_id": entry.id,
-    "airtable_record_id": entry.airtableRecordId,
-    "last_modified_time_ref": entry.lastModifiedTimeRef
-}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ----------------------
