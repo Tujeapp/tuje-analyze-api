@@ -289,17 +289,24 @@ async def match_answer(req: MatchAnswerRequest):
 
 
 # ----------------------
-# GPT fallback endpoint
+# GPT fallback endpoint (intent only)
 # ----------------------
 @app.post("/gpt-fallback")
 async def gpt_fallback(request: GPTFallbackRequest):
     openai.api_key = os.getenv("OPENAI_API_KEY")
 
     try:
-        candidates_text = "\n".join([f"- {a.text}" for a in request.candidate_answers]) if request.candidate_answers else "Aucun exemple"
+        # Construire le texte des réponses candidates
+        candidates_text = "\n".join(
+            [f"- {a.text}" for a in request.candidate_answers]
+        ) if request.candidate_answers else "Aucun exemple"
 
+        # Construire la liste des intentions
+        intent_list_text = "\n".join([f"- {intent}" for intent in request.intent_list])
+
+        # Prompt pour GPT
         prompt = f"""
-Tu es un assistant pour les apprenants de français. Voici une transcription vocale imparfaite :  
+Tu es un assistant pour une application d’apprentissage du français. Voici une transcription vocale imparfaite de l’utilisateur :  
 "{request.transcription}"
 
 Voici le vocabulaire reconnu : {', '.join(request.matched_vocab)}
@@ -307,20 +314,24 @@ Voici le vocabulaire reconnu : {', '.join(request.matched_vocab)}
 Voici quelques réponses attendues ou acceptables :
 {candidates_text}
 
-Analyse la réponse. Réponds uniquement en JSON avec les champs suivants :
-- intent_match (yes/no)
-- intent_topic (résumé du sens de la phrase)
-- correct_french (la phrase corrigée)
-- correction_type (e.g., vocabulaire, grammaire, ordre des mots)
-- user_level_guess (A1/A2/B1...)
-- feedback_message (message d'encouragement en français)
+Voici la liste des intentions possibles :
+{intent_list_text}
+
+Détermine l’intention de l’utilisateur.
+
+Réponds uniquement en JSON avec les champs suivants :
+- intent_topic : choisis UNE et UNE SEULE intention depuis la liste fournie. Si aucune ne convient, écris "autre".
+- intent_confidence_score : donne un score de confiance (entre 0 et 100) basé sur la qualité de la correspondance.
+- intent_GPT : si intent_topic est "autre", donne ici l’intention que tu aurais proposée librement.
+
 Réponds uniquement en JSON.
 """
 
+        # Appel à OpenAI
         response = openai.ChatCompletion.create(
             model="gpt-4o",
             messages=[
-                {"role": "system", "content": "Tu es un assistant qui analyse les réponses d'apprenants de français."},
+                {"role": "system", "content": "Tu es un assistant qui analyse les intentions des apprenants de français."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.3,
@@ -329,6 +340,7 @@ Réponds uniquement en JSON.
 
         content = response.choices[0].message["content"]
 
+        # Nettoyer les réponses formatées avec ```
         if content.strip().startswith("```"):
             content = content.strip("` \n").replace("json", "").strip()
 
