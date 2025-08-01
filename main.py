@@ -2,6 +2,15 @@ from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Dict
+from models import (
+    VocabularyEntry,
+    SavedAnswer,
+    VocabEntry,
+    ScanVocabRequest,
+    ExtractOrderedRequest,
+    GPTFallbackRequest,
+    MatchResponse
+)
 
 import aiohttp
 import asyncpg
@@ -61,43 +70,6 @@ async def update_airtable_status(record_id: str, fields: dict):
             else:
                 print("✅ Airtable updated successfully.")
 
-# -------------------------------
-# Pydantic Models
-# (consider moving later to `models.py`)
-# -------------------------------
-class VocabularyEntry(BaseModel):
-    phrase: str
-
-class SavedAnswer(BaseModel):
-    text: str
-    is_correct: bool
-
-class MatchResponse(BaseModel):
-    matched_vocab: List[str]
-    matched_entities: Dict[str, str]
-    matches: List[Dict]
-    call_gpt: bool
-
-class GPTFallbackRequest(BaseModel):
-    transcription: str
-    intent_options: List[str]
-    matched_vocab: Optional[List[str]] = []
-    candidate_answers: Optional[List[SavedAnswer]] = []
-
-class ScanVocabRequest(BaseModel):
-    transcription: str
-    vocabulary_phrases: List[str]
-
-class ExtractOrderedRequest(BaseModel):
-    transcription: str
-
-class VocabEntry(BaseModel):
-    id: str
-    transcriptionFr: str
-    transcriptionEn: str
-    transcriptionAdjusted: str
-    airtableRecordId: str
-    lastModifiedTimeRef: int
 
 # -------------------------------
 # Route Inclusion
