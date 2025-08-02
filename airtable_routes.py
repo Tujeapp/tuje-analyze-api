@@ -232,21 +232,27 @@ class IntentEntry(BaseModel):
     createdAt: int
 
 
+from datetime import datetime
+
 @router.post("/webhook-sync-intent")
 async def webhook_sync_intent(entry: IntentEntry):
     try:
+        # Convert milliseconds to datetime
+        created_at_dt = datetime.utcfromtimestamp(entry.createdAt / 1000)
+        updated_at_dt = datetime.utcfromtimestamp(entry.lastModifiedTimeRef / 1000)
+
         conn = await asyncpg.connect(DATABASE_URL)
         await conn.execute("""
             INSERT INTO brain_intent (id, name, description, airtable_record_id, last_modified_time_ref, created_at, update_at)
-            VALUES ($1, $2, $3, $4, $5, to_timestamp($6 / 1000.0), to_timestamp($7 / 1000.0))
-    ON CONFLICT (id) DO UPDATE SET
-        name = EXCLUDED.name,
-        description = EXCLUDED.description,
-        airtable_record_id = EXCLUDED.airtable_record_id,
-        last_modified_time_ref = EXCLUDED.last_modified_time_ref,
-        created_at = EXCLUDED.created_at,
-        update_at = EXCLUDED.last_modified_time_ref;
-        """, entry.id, entry.name, entry.description, entry.airtableRecordId, entry.lastModifiedTimeRef, entry.createdAt, entry.lastModifiedTimeRef)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (id) DO UPDATE SET
+                name = EXCLUDED.name,
+                description = EXCLUDED.description,
+                airtable_record_id = EXCLUDED.airtable_record_id,
+                last_modified_time_ref = EXCLUDED.last_modified_time_ref,
+                created_at = EXCLUDED.created_at,
+                update_at = EXCLUDED.update_at;
+        """, entry.id, entry.name, entry.description, entry.airtableRecordId, entry.lastModifiedTimeRef, created_at_dt, updated_at_dt)
         await conn.close()
 
         await update_airtable_status(
@@ -256,11 +262,11 @@ async def webhook_sync_intent(entry: IntentEntry):
         )
 
         return {
-    "message": "Intent synced and inserted",
-    "entry_id": entry.id,
-    "airtable_record_id": entry.airtableRecordId,
-    "last_modified_time_ref": entry.lastModifiedTimeRef
-}
+            "message": "Intent synced and inserted",
+            "entry_id": entry.id,
+            "airtable_record_id": entry.airtableRecordId,
+            "last_modified_time_ref": entry.lastModifiedTimeRef
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
         
