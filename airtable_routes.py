@@ -230,6 +230,7 @@ class IntentEntry(BaseModel):
     airtableRecordId: str
     lastModifiedTimeRef: int
     createdAt: int
+    live: bool = True
 
 
 from datetime import datetime
@@ -243,16 +244,17 @@ async def webhook_sync_intent(entry: IntentEntry):
 
         conn = await asyncpg.connect(DATABASE_URL)
         await conn.execute("""
-            INSERT INTO brain_intent (id, name, description, airtable_record_id, last_modified_time_ref, created_at, update_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO brain_intent (id, name, description, airtable_record_id, last_modified_time_ref, created_at, update_at, live)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             ON CONFLICT (id) DO UPDATE SET
                 name = EXCLUDED.name,
                 description = EXCLUDED.description,
                 airtable_record_id = EXCLUDED.airtable_record_id,
                 last_modified_time_ref = EXCLUDED.last_modified_time_ref,
                 created_at = EXCLUDED.created_at,
-                update_at = EXCLUDED.update_at;
-        """, entry.id, entry.name, entry.description, entry.airtableRecordId, entry.lastModifiedTimeRef, created_at_dt, updated_at_dt)
+                update_at = EXCLUDED.update_at,
+                live = EXCLUDED.live;
+        """, entry.id, entry.name, entry.description, entry.airtableRecordId, entry.lastModifiedTimeRef, created_at_dt, updated_at_dt, entry.live)
         await conn.close()
 
         await update_airtable_status(
