@@ -1,39 +1,40 @@
-from fastapi import APIRouter, HTTPException
 import asyncpg
-from typing import List
-from models import IntentEntry, VocabEntry  # adjust to match your structure
-from config import DATABASE_URL
+from fastapi import APIRouter, HTTPException
+import os
 
 router = APIRouter()
 
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("Missing required environment variable: DATABASE_URL")
 
-# ----------------------
-# Get Intent data 
-# ----------------------
-@router.get("/intents", response_model=List[IntentEntry])
-async def get_all_intents():
+
+# -----------------
+# Get Intent data
+# -----------------
+@router.get("/intents")
+async def get_live_intents():
     try:
         conn = await asyncpg.connect(DATABASE_URL)
-        rows = await conn.fetch("SELECT * FROM brain_intent WHERE live = TRUE ORDER BY name")
+        rows = await conn.fetch("""
+            SELECT id, name, description
+            FROM brain_intent
+            WHERE live = TRUE
+            ORDER BY name ASC
+        """)
         await conn.close()
-        return [
-            IntentEntry(**dict(row)) for row in rows
+
+        # Convert rows to list of dictionaries
+        intents = [
+            {
+                "id": row["id"],
+                "name": row["name"],
+                "description": row["description"]
+            }
+            for row in rows
         ]
+        return {"intents": intents}
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
-# ----------------------
-# Get Vocab data 
-# ----------------------
-@router.get("/vocab", response_model=List[VocabEntry])
-async def get_all_vocab():
-    try:
-        conn = await asyncpg.connect(DATABASE_URL)
-        rows = await conn.fetch("SELECT * FROM brain_vocab WHERE live = TRUE ORDER BY transcription_fr")
-        await conn.close()
-        return [
-            VocabEntry(**dict(row)) for row in rows
-        ]
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        
