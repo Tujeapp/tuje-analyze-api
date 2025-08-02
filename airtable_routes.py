@@ -50,21 +50,32 @@ class AnswerEntry(BaseModel):
     transcriptionAdjusted: str
     airtableRecordId: str
     lastModifiedTimeRef: int
+    createdAt: int
+    live: bool = True
+
+from datetime import datetime
 
 @router.post("/webhook-sync-answer")
 async def webhook_sync_answer(entry: AnswerEntry):
     try:
+        # Convert milliseconds to datetime
+        created_at_dt = datetime.utcfromtimestamp(entry.createdAt / 1000)
+        updated_at_dt = datetime.utcfromtimestamp(entry.lastModifiedTimeRef / 1000)
+        
         conn = await asyncpg.connect(DATABASE_URL)
         await conn.execute("""
-            INSERT INTO brain_answer (id, transcription_fr, transcription_en, transcription_adjusted, airtable_record_id, last_modified_time_ref)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            INSERT INTO brain_answer (id, transcription_fr, transcription_en, transcription_adjusted, airtable_record_id, last_modified_time_ref, created_at, update_at, live)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             ON CONFLICT (id) DO UPDATE SET
         transcription_fr = EXCLUDED.transcription_fr,
         transcription_en = EXCLUDED.transcription_en,
         transcription_adjusted = EXCLUDED.transcription_adjusted,
         airtable_record_id = EXCLUDED.airtable_record_id,
-        last_modified_time_ref = EXCLUDED.last_modified_time_ref;
-        """, entry.id, entry.transcriptionFr, entry.transcriptionEn, entry.transcriptionAdjusted, entry.airtableRecordId, entry.lastModifiedTimeRef)
+        last_modified_time_ref = EXCLUDED.last_modified_time_ref,
+        created_at = EXCLUDED.created_at,
+        update_at = EXCLUDED.update_at,
+        live = EXCLUDED.live;
+        """, entry.id, entry.transcriptionFr, entry.transcriptionEn, entry.transcriptionAdjusted, entry.airtableRecordId, entry.lastModifiedTimeRef, created_at_dt, updated_at_dt, entry.live)
         await conn.close()
 
         await update_airtable_status(
