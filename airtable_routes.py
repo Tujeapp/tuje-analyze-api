@@ -104,22 +104,31 @@ class InteractionEntry(BaseModel):
     transcriptionEn: str
     airtableRecordId: str
     lastModifiedTimeRef: int
+    createdAt: int
+    live: bool = True
+
+from datetime import datetime
 
 @router.post("/webhook-sync-interaction")
 async def webhook_sync_interaction(entry: InteractionEntry):
     try:
+        # Convert milliseconds to datetime
+        created_at_dt = datetime.utcfromtimestamp(entry.createdAt / 1000)
+        updated_at_dt = datetime.utcfromtimestamp(entry.lastModifiedTimeRef / 1000)
+        
         conn = await asyncpg.connect(DATABASE_URL)
         await conn.execute("""
-            INSERT INTO brain_interaction (
-                id, transcription_fr, transcription_en, airtable_record_id, last_modified_time_ref
-            )
-            VALUES ($1, $2, $3, $4, $5)
+            INSERT INTO brain_interaction (id, transcription_fr, transcription_en, airtable_record_id, last_modified_time_ref, created_at, update_at, live)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             ON CONFLICT (id) DO UPDATE SET
                 transcription_fr = EXCLUDED.transcription_fr,
                 transcription_en = EXCLUDED.transcription_en,
                 airtable_record_id = EXCLUDED.airtable_record_id,
-                last_modified_time_ref = EXCLUDED.last_modified_time_ref;
-        """, entry.id, entry.transcriptionFr, entry.transcriptionEn, entry.airtableRecordId, entry.lastModifiedTimeRef)
+                last_modified_time_ref = EXCLUDED.last_modified_time_ref,
+                created_at = EXCLUDED.created_at,
+                update_at = EXCLUDED.update_at,
+                live = EXCLUDED.live;
+        """, entry.id, entry.transcriptionFr, entry.transcriptionEn, entry.airtableRecordId, entry.lastModifiedTimeRef, created_at_dt, updated_at_dt, entry.live)
         await conn.close()
 
         await update_airtable_status(
@@ -149,22 +158,31 @@ class InteractionAnswerEntry(BaseModel):
     answerId: str
     airtableRecordId: str
     lastModifiedTimeRef: int
+    createdAt: int
+    live: bool = True
+
+from datetime import datetime
 
 @router.post("/webhook-sync-interaction-answer")
 async def webhook_sync_interaction_answer(entry: InteractionAnswerEntry):
     try:
+        # Convert milliseconds to datetime
+        created_at_dt = datetime.utcfromtimestamp(entry.createdAt / 1000)
+        updated_at_dt = datetime.utcfromtimestamp(entry.lastModifiedTimeRef / 1000)
+        
         conn = await asyncpg.connect(DATABASE_URL)
         await conn.execute("""
-            INSERT INTO brain_interaction_answer (
-                id, interaction_id, answer_id, airtable_record_id, last_modified_time_ref
-            )
+            INSERT INTO brain_interaction_answer (id, interaction_id, answer_id, airtable_record_id, last_modified_time_ref, created_at, update_at, live)
             VALUES ($1, $2, $3, $4, $5)
             ON CONFLICT (id) DO UPDATE SET
                 interaction_id = EXCLUDED.interaction_id,
                 answer_id = EXCLUDED.answer_id,
                 airtable_record_id = EXCLUDED.airtable_record_id,
-                last_modified_time_ref = EXCLUDED.last_modified_time_ref;
-        """, entry.id, entry.interactionId, entry.answerId, entry.airtableRecordId, entry.lastModifiedTimeRef)
+                last_modified_time_ref = EXCLUDED.last_modified_time_ref,
+                created_at = EXCLUDED.created_at,
+                update_at = EXCLUDED.update_at,
+                live = EXCLUDED.live;
+        """, entry.id, entry.interactionId, entry.answerId, entry.airtableRecordId, entry.lastModifiedTimeRef, created_at_dt, updated_at_dt, entry.live)
         await conn.close()
 
         await update_airtable_status(
