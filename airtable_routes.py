@@ -173,7 +173,7 @@ async def webhook_sync_interaction_answer(entry: InteractionAnswerEntry):
         conn = await asyncpg.connect(DATABASE_URL)
         await conn.execute("""
             INSERT INTO brain_interaction_answer (id, interaction_id, answer_id, airtable_record_id, last_modified_time_ref, created_at, update_at, live)
-            VALUES ($1, $2, $3, $4, $5)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             ON CONFLICT (id) DO UPDATE SET
                 interaction_id = EXCLUDED.interaction_id,
                 answer_id = EXCLUDED.answer_id,
