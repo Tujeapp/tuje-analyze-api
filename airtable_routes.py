@@ -244,7 +244,7 @@ async def webhook_sync_intent(entry: IntentEntry):
         description = EXCLUDED.description,
         airtable_record_id = EXCLUDED.airtable_record_id,
         last_modified_time_ref = EXCLUDED.last_modified_time_ref,
-        created_at = EXCLUDED.createdAt,
+        created_at = EXCLUDED.created_at,
         update_at = EXCLUDED.last_modified_time_ref;
         """, entry.id, entry.name, entry.description, entry.airtableRecordId, entry.lastModifiedTimeRef, entry.createdAt, entry.lastModifiedTimeRef)
         await conn.close()
