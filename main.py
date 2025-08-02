@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, Header
 from match_routes import router as match_router
 from airtable_routes import router as airtable_router
+from data_access_routes import router as data_access_router
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Dict
@@ -55,6 +56,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # -------------------------------
 # Airtable Update Helper
 # -------------------------------
@@ -81,6 +83,7 @@ from match_routes import router as match_router
 
 app.include_router(match_router)
 app.include_router(airtable_router)
+app.include_router(data_access_router)
 
 # -------------------------------
 # Run locally
