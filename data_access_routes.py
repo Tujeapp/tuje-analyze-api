@@ -10,7 +10,7 @@ if not DATABASE_URL:
 
 
 # -----------------
-# Get Intent data
+# Get All list of Intents data
 # -----------------
 @router.get("/intents")
 async def get_live_intents():
@@ -37,4 +37,45 @@ async def get_live_intents():
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+
+# -----------------
+# Get the Interaction's list of Intents
+# -----------------
+@router.get("/interactions/{interaction_id}/intents")
+async def get_interaction_intents(interaction_id: str):
+    try:
+        conn = await asyncpg.connect(DATABASE_URL)
         
+        # First, get the list of intent IDs from brain_interaction
+        result = await conn.fetchrow("""
+            SELECT intents FROM brain_interaction WHERE id = $1
+        """, interaction_id)
+        
+        if not result:
+            await conn.close()
+            raise HTTPException(status_code=404, detail="Interaction not found")
+
+        intent_ids = result["intents"]
+
+        # Now fetch matching intents
+        intents = await conn.fetch("""
+            SELECT id, name, description FROM brain_intent
+            WHERE id = ANY($1)
+        """, intent_ids)
+
+        await conn.close()
+
+        return [
+            {
+                "id": i["id"],
+                "name": i["name"],
+                "description": i["description"]
+            }
+            for i in intents
+        ]
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
