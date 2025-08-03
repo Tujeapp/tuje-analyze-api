@@ -106,8 +106,10 @@ class InteractionEntry(BaseModel):
     lastModifiedTimeRef: int
     createdAt: int
     live: bool = True
+    intents: List[str] = []
 
 from datetime import datetime
+from typing import List
 
 @router.post("/webhook-sync-interaction")
 async def webhook_sync_interaction(entry: InteractionEntry):
@@ -118,8 +120,8 @@ async def webhook_sync_interaction(entry: InteractionEntry):
         
         conn = await asyncpg.connect(DATABASE_URL)
         await conn.execute("""
-            INSERT INTO brain_interaction (id, transcription_fr, transcription_en, airtable_record_id, last_modified_time_ref, created_at, update_at, live)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            INSERT INTO brain_interaction (id, transcription_fr, transcription_en, airtable_record_id, last_modified_time_ref, created_at, update_at, live, intents)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::uuid[])
             ON CONFLICT (id) DO UPDATE SET
                 transcription_fr = EXCLUDED.transcription_fr,
                 transcription_en = EXCLUDED.transcription_en,
@@ -127,8 +129,9 @@ async def webhook_sync_interaction(entry: InteractionEntry):
                 last_modified_time_ref = EXCLUDED.last_modified_time_ref,
                 created_at = EXCLUDED.created_at,
                 update_at = EXCLUDED.update_at,
-                live = EXCLUDED.live;
-        """, entry.id, entry.transcriptionFr, entry.transcriptionEn, entry.airtableRecordId, entry.lastModifiedTimeRef, created_at_dt, updated_at_dt, entry.live)
+                live = EXCLUDED.live,
+                intents = EXCLUDED.intents;
+        """, entry.id, entry.transcriptionFr, entry.transcriptionEn, entry.airtableRecordId, entry.lastModifiedTimeRef, created_at_dt, updated_at_dt, entry.live, entry.intents)
         await conn.close()
 
         await update_airtable_status(
