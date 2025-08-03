@@ -125,7 +125,7 @@ async def webhook_sync_interaction(entry: InteractionEntry):
                 id, transcription_fr, transcription_en, airtable_record_id,
                 last_modified_time_ref, created_at, update_at, live, intents
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::uuid[])
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::text[])
             ON CONFLICT (id) DO UPDATE SET
                 transcription_fr = EXCLUDED.transcription_fr,
                 transcription_en = EXCLUDED.transcription_en,
