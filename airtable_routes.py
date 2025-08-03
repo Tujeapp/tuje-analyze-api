@@ -98,6 +98,10 @@ async def webhook_sync_answer(entry: AnswerEntry):
 # ----------------------
 # Sync Interaction
 # ----------------------
+from typing import List
+from datetime import datetime
+from pydantic import BaseModel
+
 class InteractionEntry(BaseModel):
     id: str
     transcriptionFr: str
@@ -108,9 +112,6 @@ class InteractionEntry(BaseModel):
     live: bool = True
     intents: List[str] = []
 
-from datetime import datetime
-from typing import List
-
 @router.post("/webhook-sync-interaction")
 async def webhook_sync_interaction(entry: InteractionEntry):
     try:
@@ -120,7 +121,10 @@ async def webhook_sync_interaction(entry: InteractionEntry):
         
         conn = await asyncpg.connect(DATABASE_URL)
         await conn.execute("""
-            INSERT INTO brain_interaction (id, transcription_fr, transcription_en, airtable_record_id, last_modified_time_ref, created_at, update_at, live, intents)
+            INSERT INTO brain_interaction (
+                id, transcription_fr, transcription_en, airtable_record_id,
+                last_modified_time_ref, created_at, update_at, live, intents
+            )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::uuid[])
             ON CONFLICT (id) DO UPDATE SET
                 transcription_fr = EXCLUDED.transcription_fr,
@@ -131,7 +135,9 @@ async def webhook_sync_interaction(entry: InteractionEntry):
                 update_at = EXCLUDED.update_at,
                 live = EXCLUDED.live,
                 intents = EXCLUDED.intents;
-        """, entry.id, entry.transcriptionFr, entry.transcriptionEn, entry.airtableRecordId, entry.lastModifiedTimeRef, created_at_dt, updated_at_dt, entry.live, entry.intents)
+        """, entry.id, entry.transcriptionFr, entry.transcriptionEn, entry.airtableRecordId,
+             entry.lastModifiedTimeRef, created_at_dt, updated_at_dt, entry.live, entry.intents)
+        
         await conn.close()
 
         await update_airtable_status(
@@ -147,59 +153,6 @@ async def webhook_sync_interaction(entry: InteractionEntry):
             "last_modified_time_ref": entry.lastModifiedTimeRef
         }
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-
-# ----------------------
-# Sync Interaction-Answer
-# ----------------------
-class InteractionAnswerEntry(BaseModel):
-    id: str
-    interactionId: str
-    answerId: str
-    airtableRecordId: str
-    lastModifiedTimeRef: int
-    createdAt: int
-    live: bool = True
-
-from datetime import datetime
-
-@router.post("/webhook-sync-interaction-answer")
-async def webhook_sync_interaction_answer(entry: InteractionAnswerEntry):
-    try:
-        # Convert milliseconds to datetime
-        created_at_dt = datetime.utcfromtimestamp(entry.createdAt / 1000)
-        updated_at_dt = datetime.utcfromtimestamp(entry.lastModifiedTimeRef / 1000)
-        
-        conn = await asyncpg.connect(DATABASE_URL)
-        await conn.execute("""
-            INSERT INTO brain_interaction_answer (id, interaction_id, answer_id, airtable_record_id, last_modified_time_ref, created_at, update_at, live)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            ON CONFLICT (id) DO UPDATE SET
-                interaction_id = EXCLUDED.interaction_id,
-                answer_id = EXCLUDED.answer_id,
-                airtable_record_id = EXCLUDED.airtable_record_id,
-                last_modified_time_ref = EXCLUDED.last_modified_time_ref,
-                created_at = EXCLUDED.created_at,
-                update_at = EXCLUDED.update_at,
-                live = EXCLUDED.live;
-        """, entry.id, entry.interactionId, entry.answerId, entry.airtableRecordId, entry.lastModifiedTimeRef, created_at_dt, updated_at_dt, entry.live)
-        await conn.close()
-
-        await update_airtable_status(
-            record_id=entry.airtableRecordId,
-            fields={"LastModifiedSaved": entry.lastModifiedTimeRef},
-            table_name="Interaction-Answer"
-        )
-
-        return {
-            "message": "Interaction-Answer link synced",
-            "entry_id": entry.id,
-            "airtable_record_id": entry.airtableRecordId,
-            "last_modified_time_ref": entry.lastModifiedTimeRef
-        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
