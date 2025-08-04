@@ -192,11 +192,11 @@ Règles :
 - intent_GPT : si intent_topic est "else", donne l’intention libre proposée par GPT.
 
 Réponds uniquement en JSON:
-{{
+{
   "intent_topic": "...",
   "confidence_score": ...,
   "intent_GPT": "..."
-}}
+}
 """
 
         response = openai.ChatCompletion.create(
