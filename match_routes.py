@@ -187,16 +187,18 @@ Liste des intentions possibles :
 {chr(10).join(f"- {opt}" for opt in request.intent_options)}
 
 Règles :
-- intent_topic : choisis UNE et UNE SEULE intention depuis la liste fournie. Si aucune ne convient, écris "else".
-- confidence_score : donne un score de confiance (0 à 100).
-- intent_GPT : si intent_topic est "else", donne l’intention libre proposée par GPT.
+- intent_topic : choisis UNE et UNE SEULE intention depuis la liste.
+- confidence_score : donne un score de confiance (entre 0 et 100).
+- intent_GPT : si intent_topic est "autre", propose une intention personnalisée.
 
-Réponds uniquement en JSON:
-{
-  "intent_topic": "...",
-  "confidence_score": ...,
-  "intent_GPT": "..."
-}
+Réponds uniquement avec un objet JSON. Aucune explication, aucun commentaire.
+
+Voici un exemple de format attendu :
+{{
+  "intent_topic": "introduce_self",
+  "confidence_score": 92,
+  "intent_GPT": ""
+}}
 """
 
         response = openai.ChatCompletion.create(
