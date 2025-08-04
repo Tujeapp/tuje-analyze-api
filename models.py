@@ -38,6 +38,10 @@ class GPTFallbackRequest(BaseModel):
     matched_vocab: Optional[List[str]] = []
     candidate_answers: Optional[List[SavedAnswer]] = []
 
+class IntentResponse(BaseModel):
+    intent_topic: str
+    confidence_score: Optional[int] = None
+    intent_GPT: Optional[str] = None
 
 # -------------------------------
 # Response Models
