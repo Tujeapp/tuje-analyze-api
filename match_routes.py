@@ -187,13 +187,13 @@ Liste des intentions possibles :
 {chr(10).join(f"- {opt}" for opt in request.intent_options)}
 
 Règles :
-- intent_name : choisis UNE et UNE SEULE intention depuis la liste fournie. Si aucune ne convient, écris "else".
+- intent_topic : choisis UNE et UNE SEULE intention depuis la liste fournie. Si aucune ne convient, écris "else".
 - confidence_score : donne un score de confiance (0 à 100).
-- intent_GPT : si intent_name est "else", donne l’intention libre proposée par GPT.
+- intent_GPT : si intent_topic est "else", donne l’intention libre proposée par GPT.
 
 Réponds uniquement en JSON:
 {{
-  "intent_name": "...",
+  "intent_topic": "...",
   "confidence_score": ...,
   "intent_GPT": "..."
 }}
