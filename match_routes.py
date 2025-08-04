@@ -173,6 +173,8 @@ async def match_answer(req: MatchAnswerRequest):
 # -------------------------
 # GPT Fallback Intent Matching
 # -------------------------
+from models import IntentResponse
+
 @router.post("/gpt-fallback", response_model=IntentResponse)
 async def gpt_fallback(request: GPTFallbackRequest):
     openai.api_key = OPENAI_API_KEY
@@ -188,6 +190,7 @@ Here are the possible intent options:
 
 Rules:
 - Choose ONE and ONLY ONE intent from the list above and assign it to "intent_topic". If none match, return "other".
+- Give a "confidence_score" between 0 and 100.
 - If "intent_topic" is "other", suggest a new intent in the "intent_GPT" field.
 
 Respond ONLY with a JSON object. No explanation or extra text.
@@ -195,6 +198,7 @@ Respond ONLY with a JSON object. No explanation or extra text.
 Example response:
 {{
   "intent_topic": "introduce_self",
+  "confidence_score": 92,
   "intent_GPT": ""
 }}
 """
