@@ -192,17 +192,24 @@ Règles :
 - intent_GPT : si intent_name est "else", donne l’intention libre proposée par GPT.
 
 Réponds uniquement en JSON:
-{
+{{
   "intent_name": "...",
   "confidence_score": ...,
   "intent_GPT": "..."
-}
+}}
+"""
 
         response = openai.ChatCompletion.create(
             model="gpt-4o",
             messages=[
-                {"role": "system", "content": "Tu es un assistant qui analyse les intentions des apprenants de français."},
-                {"role": "user", "content": prompt}
+                {
+                    "role": "system",
+                    "content": "Tu es un assistant qui analyse les intentions des apprenants de français."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
             ],
             temperature=0.3,
             max_tokens=200
