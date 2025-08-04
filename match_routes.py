@@ -179,21 +179,21 @@ async def gpt_fallback(request: GPTFallbackRequest):
 
     try:
         prompt = f"""
-Détermine l’intention de l’utilisateur.
+Determine the user's intent from the given transcription.
 
-Transcription : "{request.transcription}"
+Transcription: "{request.transcription}"
 
-Liste des intentions possibles :
+Here are the possible intent options:
 {chr(10).join(f"- {opt}" for opt in request.intent_options)}
 
-Règles :
-- intent_topic : choisis UNE et UNE SEULE intention depuis la liste, si tu ne trouves pas retourne "else".
-- confidence_score : donne un score de confiance (entre 0 et 100).
-- intent_GPT : si intent_topic est "else", propose une intention personnalisée.
+Rules:
+- Choose ONE and ONLY ONE intent from the list above and assign it to "intent_topic". If none match, return "other".
+- Give a "confidence_score" between 0 and 100.
+- If "intent_topic" is "other", suggest a new intent in the "intent_GPT" field.
 
-Réponds uniquement avec un objet JSON. Aucune explication, aucun commentaire.
+Respond ONLY with a JSON object. No explanation or extra text.
 
-Voici un exemple de format attendu :
+Example response:
 {{
   "intent_topic": "introduce_self",
   "confidence_score": 92,
