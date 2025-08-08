@@ -50,7 +50,7 @@ API_KEY = "tuje-secure-key"
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Adjust if needed for production
+    allow_origins=["https://monsieursimonet.bubbleapps.io"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
