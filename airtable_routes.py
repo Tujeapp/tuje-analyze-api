@@ -266,4 +266,58 @@ async def webhook_sync_intent(entry: IntentEntry):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-        
+
+
+
+# ----------------------
+# Sync Subtopic 
+# ----------------------
+# Define the data model for subtopic entry
+class SubtopicEntry(BaseModel):
+    id: str
+    nameFr: str
+    nameEn: str
+    airtableRecordId: str
+    lastModifiedTimeRef: int
+    createdAt: int
+    live: bool = True
+
+
+from datetime import datetime
+
+@router.post("/webhook-sync-subtopic")
+async def webhook_sync_subtopic(entry: SubtopicEntry):
+    try:
+        # Convert milliseconds to datetime
+        created_at_dt = datetime.utcfromtimestamp(entry.createdAt / 1000)
+        updated_at_dt = datetime.utcfromtimestamp(entry.lastModifiedTimeRef / 1000)
+
+        conn = await asyncpg.connect(DATABASE_URL)
+        await conn.execute("""
+            INSERT INTO brain_subtopic (id, name_fr, name_en, airtable_record_id, last_modified_time_ref, created_at, update_at, live)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            ON CONFLICT (id) DO UPDATE SET
+                name_fr = EXCLUDED.name_fr,
+                name_en = EXCLUDED.name_en,
+                airtable_record_id = EXCLUDED.airtable_record_id,
+                last_modified_time_ref = EXCLUDED.last_modified_time_ref,
+                created_at = EXCLUDED.created_at,
+                update_at = EXCLUDED.update_at,
+                live = EXCLUDED.live;
+        """, entry.id, entry.nameFr, entry.nameEn, entry.airtableRecordId, entry.lastModifiedTimeRef, created_at_dt, updated_at_dt, entry.live)
+        await conn.close()
+
+        await update_airtable_status(
+            record_id=entry.airtableRecordId,
+            fields={"LastModifiedSaved": entry.lastModifiedTimeRef},
+            table_name="Subtopic"
+        )
+
+        return {
+            "message": "Intent synced and inserted",
+            "entry_id": entry.id,
+            "airtable_record_id": entry.airtableRecordId,
+            "last_modified_time_ref": entry.lastModifiedTimeRef
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
