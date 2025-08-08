@@ -107,12 +107,12 @@ async def get_interactions_by_subtopic():
                 bi.transcription_fr,
                 bi.transcription_en,
                 bi.subtopic_id,
-                bs.name AS subtopic_name
+                bs.nameFr AS subtopic_name_fr
             FROM brain_interaction bi
             LEFT JOIN brain_subtopic bs ON bi.subtopic_id = bs.id
             WHERE bi.live = TRUE
-            ORDER BY bs.name NULLS LAST, bi.created_at
-        """)
+            ORDER BY bs.nameFr NULLS LAST, bi.created_at
+                """)
         
         await conn.close()
 
@@ -120,17 +120,18 @@ async def get_interactions_by_subtopic():
         grouped = {}
         for row in rows:
             key = row["subtopic_id"] or "no_subtopic"
-            if key not in grouped:
-                grouped[key] = {
-                    "subtopic_id": row["subtopic_id"],
-                    "subtopic_name": row["subtopic_name"],
-                    "interactions": []
-                }
-            grouped[key]["interactions"].append({
-                "id": row["id"],
-                "transcriptionFr": row["transcription_fr"],
-                "transcriptionEn": row["transcription_en"]
-            })
+if key not in grouped:
+    grouped[key] = {
+        "subtopic_id": row["subtopic_id"],
+        "subtopic_name_fr": row["subtopic_name_fr"],
+        "interactions": []
+    }
+
+grouped[key]["interactions"].append({
+    "id": row["id"],
+    "transcriptionFr": row["transcription_fr"],
+    "transcriptionEn": row["transcription_en"]
+})
 
         return list(grouped.values())
 
