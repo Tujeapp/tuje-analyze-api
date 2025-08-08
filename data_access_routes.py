@@ -79,3 +79,61 @@ async def get_interaction_intents(interaction_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+# -----------------
+# Get Interactions Live and grouped by Subtopics
+# -----------------
+from pydantic import BaseModel
+from typing import List, Optional
+
+class InteractionOut(BaseModel):
+    id: str
+    transcriptionFr: str
+    transcriptionEn: str
+
+class SubtopicGroup(BaseModel):
+    subtopic_id: str
+    subtopic_name: Optional[str]
+    interactions: List[InteractionOut]
+
+@router.get("/interactions-by-subtopic", response_model=List[SubtopicGroup])
+async def get_interactions_by_subtopic():
+    try:
+        conn = await asyncpg.connect(DATABASE_URL)
+        
+        rows = await conn.fetch("""
+            SELECT
+                bi.id,
+                bi.transcription_fr,
+                bi.transcription_en,
+                bi.subtopic_id,
+                bs.name AS subtopic_name
+            FROM brain_interaction bi
+            LEFT JOIN brain_subtopic bs ON bi.subtopic_id = bs.id
+            WHERE bi.live = TRUE
+            ORDER BY bs.name NULLS LAST, bi.created_at
+        """)
+        
+        await conn.close()
+
+        # Group by subtopic_id
+        grouped = {}
+        for row in rows:
+            key = row["subtopic_id"] or "no_subtopic"
+            if key not in grouped:
+                grouped[key] = {
+                    "subtopic_id": row["subtopic_id"],
+                    "subtopic_name": row["subtopic_name"],
+                    "interactions": []
+                }
+            grouped[key]["interactions"].append({
+                "id": row["id"],
+                "transcriptionFr": row["transcription_fr"],
+                "transcriptionEn": row["transcription_en"]
+            })
+
+        return list(grouped.values())
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
