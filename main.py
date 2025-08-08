@@ -50,10 +50,14 @@ API_KEY = "tuje-secure-key"
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://monsieursimonet.bubbleapps.io"],
+    allow_origins=[
+        "https://airtable.com",
+        "https://airtableusercontent.com"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
 )
 
 
