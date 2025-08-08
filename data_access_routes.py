@@ -92,7 +92,7 @@ class InteractionOut(BaseModel):
     transcriptionEn: str
 
 class SubtopicGroup(BaseModel):
-    subtopic_id: str
+    subtopic_id: Optional[str]
     subtopic_name: Optional[str]
     interactions: List[InteractionOut]
 
@@ -107,12 +107,12 @@ async def get_interactions_by_subtopic():
                 bi.transcription_fr,
                 bi.transcription_en,
                 bi.subtopic_id,
-                bs.nameFr AS subtopic_name_fr
+                bs.nameFr AS subtopic_name
             FROM brain_interaction bi
             LEFT JOIN brain_subtopic bs ON bi.subtopic_id = bs.id
             WHERE bi.live = TRUE
             ORDER BY bs.nameFr NULLS LAST, bi.created_at
-                """)
+        """)
         
         await conn.close()
 
@@ -120,18 +120,18 @@ async def get_interactions_by_subtopic():
         grouped = {}
         for row in rows:
             key = row["subtopic_id"] or "no_subtopic"
-if key not in grouped:
-    grouped[key] = {
-        "subtopic_id": row["subtopic_id"],
-        "subtopic_name_fr": row["subtopic_name_fr"],
-        "interactions": []
-    }
+            if key not in grouped:
+                grouped[key] = {
+                    "subtopic_id": row["subtopic_id"],
+                    "subtopic_name": row["subtopic_name"],
+                    "interactions": []
+                }
 
-grouped[key]["interactions"].append({
-    "id": row["id"],
-    "transcriptionFr": row["transcription_fr"],
-    "transcriptionEn": row["transcription_en"]
-})
+            grouped[key]["interactions"].append({
+                "id": row["id"],
+                "transcriptionFr": row["transcription_fr"],
+                "transcriptionEn": row["transcription_en"]
+            })
 
         return list(grouped.values())
 
