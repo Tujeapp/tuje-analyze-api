@@ -274,29 +274,41 @@ async def webhook_sync_intent(entry: IntentEntry):
 # ----------------------
 # Sync Subtopic 
 # ----------------------
-# Define the data model for subtopic entry
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+from datetime import datetime
+import asyncpg
+
+router = APIRouter()
+
+# Pydantic model
 class SubtopicEntry(BaseModel):
     id: str
     nameFr: str
     nameEn: str
     airtableRecordId: str
-    lastModifiedTimeRef: int
-    createdAt: int
+    lastModifiedTimeRef: int  # in ms
+    createdAt: int            # in ms
     live: bool = True
 
-
-from datetime import datetime
 
 @router.post("/webhook-sync-subtopic")
 async def webhook_sync_subtopic(entry: SubtopicEntry):
     try:
-        # Convert milliseconds to datetime
+        # Convert from milliseconds to UTC datetime
         created_at_dt = datetime.utcfromtimestamp(entry.createdAt / 1000)
         updated_at_dt = datetime.utcfromtimestamp(entry.lastModifiedTimeRef / 1000)
 
+        # Connect to DB
         conn = await asyncpg.connect(DATABASE_URL)
+
+        # Insert or update
         await conn.execute("""
-            INSERT INTO brain_subtopic (id, name_fr, name_en, airtable_record_id, last_modified_time_ref, created_at, update_at, live)
+            INSERT INTO brain_subtopic (
+                id, name_fr, name_en, airtable_record_id, 
+                last_modified_time_ref, created_at, update_at, live
+            )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             ON CONFLICT (id) DO UPDATE SET
                 name_fr = EXCLUDED.name_fr,
@@ -306,9 +318,12 @@ async def webhook_sync_subtopic(entry: SubtopicEntry):
                 created_at = EXCLUDED.created_at,
                 update_at = EXCLUDED.update_at,
                 live = EXCLUDED.live;
-        """, entry.id, entry.nameFr, entry.nameEn, entry.airtableRecordId, entry.lastModifiedTimeRef, created_at_dt, updated_at_dt, entry.live)
+        """, entry.id, entry.nameFr, entry.nameEn, entry.airtableRecordId,
+             entry.lastModifiedTimeRef, created_at_dt, updated_at_dt, entry.live)
+
         await conn.close()
 
+        # Update Airtable to mark as saved
         await update_airtable_status(
             record_id=entry.airtableRecordId,
             fields={"LastModifiedSaved": entry.lastModifiedTimeRef},
@@ -316,10 +331,11 @@ async def webhook_sync_subtopic(entry: SubtopicEntry):
         )
 
         return {
-            "message": "Intent synced and inserted",
+            "message": "Subtopic synced successfully",
             "entry_id": entry.id,
             "airtable_record_id": entry.airtableRecordId,
             "last_modified_time_ref": entry.lastModifiedTimeRef
         }
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Error syncing subtopic: {e}")
