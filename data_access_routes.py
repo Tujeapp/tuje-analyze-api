@@ -107,11 +107,11 @@ async def get_interactions_by_subtopic():
                 bi.transcription_fr,
                 bi.transcription_en,
                 bi.subtopic_id,
-                bs.nameFr AS subtopic_name
+                bs.name_fr AS subtopic_name
             FROM brain_interaction bi
             LEFT JOIN brain_subtopic bs ON bi.subtopic_id = bs.id
             WHERE bi.live = TRUE
-            ORDER BY bs.nameFr NULLS LAST, bi.created_at
+            ORDER BY bs.name_fr NULLS LAST, bi.created_at
         """)
         
         await conn.close()
