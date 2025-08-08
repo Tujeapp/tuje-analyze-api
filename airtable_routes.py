@@ -111,7 +111,7 @@ class InteractionEntry(BaseModel):
     createdAt: int
     live: bool = True
     intents: List[str] = []
-    subtopic: Optional[str] = None
+    subtopic_id: Optional[str] = None
 
 @router.post("/webhook-sync-interaction")
 async def webhook_sync_interaction(entry: InteractionEntry):
@@ -138,7 +138,7 @@ async def webhook_sync_interaction(entry: InteractionEntry):
                 intents = EXCLUDED.intents,
                 subtopic_id = EXCLUDED.subtopic_id;
         """, entry.id, entry.transcriptionFr, entry.transcriptionEn, entry.airtableRecordId,
-             entry.lastModifiedTimeRef, created_at_dt, updated_at_dt, entry.live, entry.intents, entry.subtopic)
+             entry.lastModifiedTimeRef, created_at_dt, updated_at_dt, entry.live, entry.intents, entry.subtopic_id)
         
         await conn.close()
 
