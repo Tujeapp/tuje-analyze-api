@@ -136,7 +136,7 @@ async def webhook_sync_interaction(entry: InteractionEntry):
                 update_at = EXCLUDED.update_at,
                 live = EXCLUDED.live,
                 intents = EXCLUDED.intents,
-                subtopic = EXCLUDED.subtopic;
+                subtopic_id = EXCLUDED.subtopic_id;
         """, entry.id, entry.transcriptionFr, entry.transcriptionEn, entry.airtableRecordId,
              entry.lastModifiedTimeRef, created_at_dt, updated_at_dt, entry.live, entry.intents, entry.subtopic)
         
