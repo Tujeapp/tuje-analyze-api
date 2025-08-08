@@ -111,6 +111,7 @@ class InteractionEntry(BaseModel):
     createdAt: int
     live: bool = True
     intents: List[str] = []
+    subtopic: Optional[str] = None
 
 @router.post("/webhook-sync-interaction")
 async def webhook_sync_interaction(entry: InteractionEntry):
@@ -123,9 +124,9 @@ async def webhook_sync_interaction(entry: InteractionEntry):
         await conn.execute("""
             INSERT INTO brain_interaction (
                 id, transcription_fr, transcription_en, airtable_record_id,
-                last_modified_time_ref, created_at, update_at, live, intents
+                last_modified_time_ref, created_at, update_at, live, intents, subtopic
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::text[])
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::text[], $10)
             ON CONFLICT (id) DO UPDATE SET
                 transcription_fr = EXCLUDED.transcription_fr,
                 transcription_en = EXCLUDED.transcription_en,
@@ -134,9 +135,10 @@ async def webhook_sync_interaction(entry: InteractionEntry):
                 created_at = EXCLUDED.created_at,
                 update_at = EXCLUDED.update_at,
                 live = EXCLUDED.live,
-                intents = EXCLUDED.intents;
+                intents = EXCLUDED.intents,
+                subtopic = EXCLUDED.subtopic;
         """, entry.id, entry.transcriptionFr, entry.transcriptionEn, entry.airtableRecordId,
-             entry.lastModifiedTimeRef, created_at_dt, updated_at_dt, entry.live, entry.intents)
+             entry.lastModifiedTimeRef, created_at_dt, updated_at_dt, entry.live, entry.intents, entry.subtopicId)
         
         await conn.close()
 
