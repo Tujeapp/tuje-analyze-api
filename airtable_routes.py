@@ -107,8 +107,8 @@ class InteractionEntry(BaseModel):
     transcriptionFr: str
     transcriptionEn: str
     airtableRecordId: str
-    lastModifiedTimeRef: int
-    createdAt: int
+    lastModifiedTimeRef: int  # timestamp in ms
+    createdAt: int            # timestamp in ms
     live: bool = True
     intents: List[str] = []
     subtopicId: Optional[str] = None
@@ -116,17 +116,20 @@ class InteractionEntry(BaseModel):
 @router.post("/webhook-sync-interaction")
 async def webhook_sync_interaction(entry: InteractionEntry):
     try:
-        # Convert milliseconds to datetime
+        # Convert timestamps to datetime
         created_at_dt = datetime.utcfromtimestamp(entry.createdAt / 1000)
         updated_at_dt = datetime.utcfromtimestamp(entry.lastModifiedTimeRef / 1000)
-        
+
         conn = await asyncpg.connect(DATABASE_URL)
+
         await conn.execute("""
             INSERT INTO brain_interaction (
                 id, transcription_fr, transcription_en, airtable_record_id,
                 last_modified_time_ref, created_at, update_at, live, intents, subtopic_id
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::text[], $10)
+            VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9::text[], $10
+            )
             ON CONFLICT (id) DO UPDATE SET
                 transcription_fr = EXCLUDED.transcription_fr,
                 transcription_en = EXCLUDED.transcription_en,
@@ -137,11 +140,13 @@ async def webhook_sync_interaction(entry: InteractionEntry):
                 live = EXCLUDED.live,
                 intents = EXCLUDED.intents,
                 subtopic_id = EXCLUDED.subtopic_id;
-        """, entry.id, entry.transcriptionFr, entry.transcriptionEn, entry.airtableRecordId,
-             entry.lastModifiedTimeRef, created_at_dt, updated_at_dt, entry.live, entry.intents, entry.subtopicId)
-        
+        """, entry.id, entry.transcriptionFr, entry.transcriptionEn,
+             entry.airtableRecordId, entry.lastModifiedTimeRef,
+             created_at_dt, updated_at_dt, entry.live, entry.intents, entry.subtopicId)
+
         await conn.close()
 
+        # Update Airtable to confirm sync
         await update_airtable_status(
             record_id=entry.airtableRecordId,
             fields={"LastModifiedSaved": entry.lastModifiedTimeRef},
@@ -149,14 +154,14 @@ async def webhook_sync_interaction(entry: InteractionEntry):
         )
 
         return {
-            "message": "Interaction synced and inserted",
+            "message": "Interaction synced successfully",
             "entry_id": entry.id,
             "airtable_record_id": entry.airtableRecordId,
             "last_modified_time_ref": entry.lastModifiedTimeRef
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Sync error: {str(e)}")
 
 
 
