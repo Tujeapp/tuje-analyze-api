@@ -98,7 +98,7 @@ async def webhook_sync_answer(entry: AnswerEntry):
 # ----------------------
 # Sync Interaction
 # ----------------------
-from typing import List
+from typing import List, Optional
 from datetime import datetime
 from pydantic import BaseModel
 
