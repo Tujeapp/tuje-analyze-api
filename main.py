@@ -14,7 +14,6 @@ from models import (
     GPTFallbackRequest,
     MatchResponse
 )
-
 import aiohttp
 import asyncpg
 import openai
@@ -56,7 +55,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 # -------------------------------
 # Airtable Update Helper
 # -------------------------------
@@ -74,16 +72,19 @@ async def update_airtable_status(record_id: str, fields: dict):
             else:
                 print("✅ Airtable updated successfully.")
 
-
 # -------------------------------
 # Route Inclusion
 # -------------------------------
-from match_routes import router as match_router
-# from airtable_routes import router as airtable_router  # Uncomment if needed
-
 app.include_router(match_router)
 app.include_router(airtable_router)
 app.include_router(data_access_router)
+
+# -------------------------------
+# Root endpoint for testing
+# -------------------------------
+@app.get("/")
+async def root():
+    return {"message": "Tuje API is running"}
 
 # -------------------------------
 # Run locally
