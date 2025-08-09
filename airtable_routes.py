@@ -312,8 +312,6 @@ from pydantic import BaseModel
 from datetime import datetime
 import asyncpg
 
-router = APIRouter()
-
 # Pydantic model
 class SubtopicEntry(BaseModel):
     id: str
