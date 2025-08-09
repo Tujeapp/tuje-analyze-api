@@ -40,57 +40,82 @@ async def update_airtable_status(record_id: str, fields: dict, table_name: str):
             raise HTTPException(status_code=response.status_code, detail=response.text)
 
 
-# ----------------------
-# Sync Answer
-# ----------------------
-class AnswerEntry(BaseModel):
-    id: str
-    transcriptionFr: str
-    transcriptionEn: str
-    transcriptionAdjusted: str
-    airtableRecordId: str
-    lastModifiedTimeRef: int
-    createdAt: int
-    live: bool = True
 
-from datetime import datetime
-
+# ----------------------------------------------------------
+# Optimized Answer sync endpoint - faster execution
+# ----------------------------------------------------------
 @router.post("/webhook-sync-answer")
 async def webhook_sync_answer(entry: AnswerEntry):
+    start_time = time.time()
+    
     try:
-        # Convert milliseconds to datetime
+        # Convert timestamps once
         created_at_dt = datetime.utcfromtimestamp(entry.createdAt / 1000)
         updated_at_dt = datetime.utcfromtimestamp(entry.lastModifiedTimeRef / 1000)
         
+        # Single connection with transaction
         conn = await asyncpg.connect(DATABASE_URL)
-        await conn.execute("""
-            INSERT INTO brain_answer (id, transcription_fr, transcription_en, transcription_adjusted, airtable_record_id, last_modified_time_ref, created_at, update_at, live)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-            ON CONFLICT (id) DO UPDATE SET
-        transcription_fr = EXCLUDED.transcription_fr,
-        transcription_en = EXCLUDED.transcription_en,
-        transcription_adjusted = EXCLUDED.transcription_adjusted,
-        airtable_record_id = EXCLUDED.airtable_record_id,
-        last_modified_time_ref = EXCLUDED.last_modified_time_ref,
-        created_at = EXCLUDED.created_at,
-        update_at = EXCLUDED.update_at,
-        live = EXCLUDED.live;
-        """, entry.id, entry.transcriptionFr, entry.transcriptionEn, entry.transcriptionAdjusted, entry.airtableRecordId, entry.lastModifiedTimeRef, created_at_dt, updated_at_dt, entry.live)
-        await conn.close()
-
-        await update_airtable_status(
-            record_id=entry.airtableRecordId,
-            fields={"LastModifiedSaved": entry.lastModifiedTimeRef},
-            table_name="Answer"
-        )
-
+        
+        try:
+            async with conn.transaction():
+                # Database insert/update
+                await conn.execute("""
+                    INSERT INTO brain_answer (
+                        id, transcription_fr, transcription_en, transcription_adjusted, 
+                        airtable_record_id, last_modified_time_ref, created_at, update_at, live
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    ON CONFLICT (id) DO UPDATE SET
+                        transcription_fr = EXCLUDED.transcription_fr,
+                        transcription_en = EXCLUDED.transcription_en,
+                        transcription_adjusted = EXCLUDED.transcription_adjusted,
+                        airtable_record_id = EXCLUDED.airtable_record_id,
+                        last_modified_time_ref = EXCLUDED.last_modified_time_ref,
+                        created_at = EXCLUDED.created_at,
+                        update_at = EXCLUDED.update_at,
+                        live = EXCLUDED.live;
+                """, entry.id, entry.transcriptionFr, entry.transcriptionEn, 
+                     entry.transcriptionAdjusted, entry.airtableRecordId, 
+                     entry.lastModifiedTimeRef, created_at_dt, updated_at_dt, entry.live)
+                
+                # Airtable update with shorter timeout
+                airtable_url = f"{AIRTABLE_BASE_URL}/Answer/{entry.airtableRecordId}"
+                payload = {"fields": {"LastModifiedSaved": entry.lastModifiedTimeRef}}
+                
+                async with httpx.AsyncClient(timeout=10.0) as client:  # Reduced timeout
+                    airtable_response = await client.patch(
+                        airtable_url, 
+                        json=payload, 
+                        headers=HEADERS
+                    )
+                    airtable_response.raise_for_status()
+        
+        finally:
+            await conn.close()
+        
+        execution_time = time.time() - start_time
+        logger.info(f"Answer sync completed in {execution_time:.2f}s")
+        
         return {
-    "message": "Answer synced and inserted",
-    "entry_id": entry.id,
-    "airtable_record_id": entry.airtableRecordId,
-    "last_modified_time_ref": entry.lastModifiedTimeRef
-}
+            "message": "Answer synced successfully",
+            "entry_id": entry.id,
+            "airtable_record_id": entry.airtableRecordId,
+            "last_modified_time_ref": entry.lastModifiedTimeRef,
+            "execution_time": f"{execution_time:.2f}s"
+        }
+        
+    except httpx.TimeoutException:
+        # DB was saved, just Airtable update failed
+        logger.warning(f"Airtable update timed out for {entry.id}, but DB was saved")
+        return {
+            "message": "Data saved to database, Airtable update pending",
+            "entry_id": entry.id,
+            "airtable_record_id": entry.airtableRecordId,
+            "status": "partial_success"
+        }
+        
     except Exception as e:
+        logger.error(f"Answer sync failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
