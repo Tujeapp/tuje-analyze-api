@@ -70,9 +70,10 @@ class BaseEntry(BaseModel):
     def validate_timestamps(cls, v):
         if v <= 0:
             raise ValueError('Timestamp must be positive')
-        # Check if timestamp is reasonable (not too far in future/past)
+        # Check if timestamp is reasonable (allow 5 years range)
         current_time = int(datetime.now().timestamp() * 1000)
-        if abs(v - current_time) > 365 * 24 * 60 * 60 * 1000:  # 1 year
+        five_years_ms = 5 * 365 * 24 * 60 * 60 * 1000
+        if abs(v - current_time) > five_years_ms:
             raise ValueError('Timestamp seems unrealistic')
         return v
 
@@ -330,3 +331,4 @@ async def sync_health():
     except Exception as e:
         logger.error(f"Health check failed: {e}")
         return {"status": "unhealthy", "error": str(e)}
+        
