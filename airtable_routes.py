@@ -100,6 +100,16 @@ class SubtopicEntry(BaseEntry):
     nameFr: str
     nameEn: str
 
+class InteractionAnswerEntry(BaseEntry):
+    interaction_id: str
+    answer_id: str
+    
+    @validator('interaction_id', 'answer_id')
+    def validate_ids(cls, v):
+        if not v or len(v.strip()) == 0:
+            raise ValueError('Interaction ID and Answer ID cannot be empty')
+        return v.strip()
+
 # Generic sync configuration
 SYNC_CONFIGS = {
     "answer": {
@@ -130,6 +140,12 @@ SYNC_CONFIGS = {
         "table_name": "brain_subtopic",
         "airtable_table": "Subtopic",
         "columns": ["id", "name_fr", "name_en", "airtable_record_id",
+                   "last_modified_time_ref", "created_at", "update_at", "live"]
+    },
+    "interaction_answer": {
+        "table_name": "brain_interaction_answer",
+        "airtable_table": "Interaction-Answer",
+        "columns": ["id", "interaction_id", "answer_id", "airtable_record_id",
                    "last_modified_time_ref", "created_at", "update_at", "live"]
     }
 }
@@ -291,6 +307,10 @@ async def webhook_sync_intent(entry: IntentEntry, background_tasks: BackgroundTa
 @router.post("/webhook-sync-subtopic")
 async def webhook_sync_subtopic(entry: SubtopicEntry, background_tasks: BackgroundTasks):
     return await generic_sync_webhook(entry, "subtopic", background_tasks)
+
+@router.post("/webhook-sync-interaction-answer")
+async def webhook_sync_interaction_answer(entry: InteractionAnswerEntry, background_tasks: BackgroundTasks):
+    return await generic_sync_webhook(entry, "interaction_answer", background_tasks)
 
 # Health check endpoint
 @router.get("/sync-health")
