@@ -1,13 +1,15 @@
 import os
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, BackgroundTasks
 import asyncpg
-from pydantic import BaseModel
+from pydantic import BaseModel, validator
 from datetime import datetime
+from typing import List, Optional, Dict, Any
 import time
 import logging
+from contextlib import asynccontextmanager
 
-# Set up logging to see what's happening
+# Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -17,12 +19,9 @@ AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
 
 # Safety checks
-if not DATABASE_URL:
-    raise RuntimeError("Missing required environment variable: DATABASE_URL")
-if not AIRTABLE_API_KEY:
-    raise RuntimeError("Missing required environment variable: AIRTABLE_API_KEY")
-if not AIRTABLE_BASE_ID:
-    raise RuntimeError("Missing required environment variable: AIRTABLE_BASE_ID")
+for var_name, var_value in [("DATABASE_URL", DATABASE_URL), ("AIRTABLE_API_KEY", AIRTABLE_API_KEY), ("AIRTABLE_BASE_ID", AIRTABLE_BASE_ID)]:
+    if not var_value:
+        raise RuntimeError(f"Missing required environment variable: {var_name}")
 
 # Setup router
 router = APIRouter()
@@ -34,338 +33,280 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-# Function to update Airtable
-async def update_airtable_status(record_id: str, fields: dict, table_name: str):
-    start_time = time.time()
-    url = f"{AIRTABLE_BASE_URL}/{table_name}/{record_id}"
-    payload = { "fields": fields }
+# Connection pool for better performance
+class DatabasePool:
+    def __init__(self):
+        self._pool = None
+    
+    async def get_pool(self):
+        if self._pool is None:
+            self._pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10)
+        return self._pool
+    
+    @asynccontextmanager
+    async def get_connection(self):
+        pool = await self.get_pool()
+        async with pool.acquire() as conn:
+            yield conn
 
-    async with httpx.AsyncClient(timeout=15.0) as client:  # Added timeout
-        try:
-            logger.info(f"Updating Airtable {table_name} record {record_id}")
-            response = await client.patch(url, json=payload, headers=HEADERS)
-            response.raise_for_status()
-            elapsed = time.time() - start_time
-            logger.info(f"Airtable update completed in {elapsed:.2f}s")
-        except httpx.HTTPStatusError as e:
-            logger.error(f"Airtable API error: {e.response.status_code} - {e.response.text}")
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-        except httpx.TimeoutException:
-            logger.error(f"Airtable update timed out after 15 seconds")
-            raise HTTPException(status_code=408, detail="Airtable request timeout")
+# Global pool instance
+db_pool = DatabasePool()
 
-# ----------------------
-# Sync Answer
-# ----------------------
-class AnswerEntry(BaseModel):
+# Enhanced Pydantic Models with validation
+class BaseEntry(BaseModel):
     id: str
-    transcriptionFr: str
-    transcriptionEn: str
-    transcriptionAdjusted: str
     airtableRecordId: str
     lastModifiedTimeRef: int
     createdAt: int
     live: bool = True
-
-@router.post("/webhook-sync-answer")
-async def webhook_sync_answer(entry: AnswerEntry):
-    total_start = time.time()
     
-    try:
-        logger.info(f"Starting sync for Answer {entry.id}")
-        
-        # Convert milliseconds to datetime
-        created_at_dt = datetime.utcfromtimestamp(entry.createdAt / 1000)
-        updated_at_dt = datetime.utcfromtimestamp(entry.lastModifiedTimeRef / 1000)
-        
-        # Database operation
-        db_start = time.time()
-        conn = await asyncpg.connect(DATABASE_URL)
-        await conn.execute("""
-            INSERT INTO brain_answer (id, transcription_fr, transcription_en, transcription_adjusted, airtable_record_id, last_modified_time_ref, created_at, update_at, live)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-            ON CONFLICT (id) DO UPDATE SET
-        transcription_fr = EXCLUDED.transcription_fr,
-        transcription_en = EXCLUDED.transcription_en,
-        transcription_adjusted = EXCLUDED.transcription_adjusted,
-        airtable_record_id = EXCLUDED.airtable_record_id,
-        last_modified_time_ref = EXCLUDED.last_modified_time_ref,
-        created_at = EXCLUDED.created_at,
-        update_at = EXCLUDED.update_at,
-        live = EXCLUDED.live;
-        """, entry.id, entry.transcriptionFr, entry.transcriptionEn, entry.transcriptionAdjusted, entry.airtableRecordId, entry.lastModifiedTimeRef, created_at_dt, updated_at_dt, entry.live)
-        await conn.close()
-        db_elapsed = time.time() - db_start
-        logger.info(f"Database operation completed in {db_elapsed:.2f}s")
+    @validator('id')
+    def validate_id(cls, v):
+        if not v or len(v.strip()) == 0:
+            raise ValueError('ID cannot be empty')
+        return v.strip()
+    
+    @validator('lastModifiedTimeRef', 'createdAt')
+    def validate_timestamps(cls, v):
+        if v <= 0:
+            raise ValueError('Timestamp must be positive')
+        # Check if timestamp is reasonable (not too far in future/past)
+        current_time = int(datetime.now().timestamp() * 1000)
+        if abs(v - current_time) > 365 * 24 * 60 * 60 * 1000:  # 1 year
+            raise ValueError('Timestamp seems unrealistic')
+        return v
 
-        # Airtable update
-        await update_airtable_status(
-            record_id=entry.airtableRecordId,
-            fields={"LastModifiedSaved": entry.lastModifiedTimeRef},
-            table_name="Answer"
-        )
-
-        total_elapsed = time.time() - total_start
-        logger.info(f"Total sync completed in {total_elapsed:.2f}s")
-
-        return {
-            "message": "Answer synced and inserted",
-            "entry_id": entry.id,
-            "airtable_record_id": entry.airtableRecordId,
-            "last_modified_time_ref": entry.lastModifiedTimeRef,
-            "execution_time": f"{total_elapsed:.2f}s",
-            "db_time": f"{db_elapsed:.2f}s"
-        }
-    except Exception as e:
-        total_elapsed = time.time() - total_start
-        logger.error(f"Answer sync failed after {total_elapsed:.2f}s: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ----------------------
-# Sync Interaction
-# ----------------------
-from typing import List, Optional
-from datetime import datetime
-from pydantic import BaseModel
-
-class InteractionEntry(BaseModel):
-    id: str
+class AnswerEntry(BaseEntry):
     transcriptionFr: str
     transcriptionEn: str
-    airtableRecordId: str
-    lastModifiedTimeRef: int  # timestamp in ms
-    createdAt: int            # timestamp in ms
-    live: bool = True
+    transcriptionAdjusted: str
+
+class InteractionEntry(BaseEntry):
+    transcriptionFr: str
+    transcriptionEn: str
     intents: List[str] = []
     subtopicId: Optional[str] = None
 
-@router.post("/webhook-sync-interaction")
-async def webhook_sync_interaction(entry: InteractionEntry):
-    try:
-        # Convert timestamps to datetime
-        created_at_dt = datetime.utcfromtimestamp(entry.createdAt / 1000)
-        updated_at_dt = datetime.utcfromtimestamp(entry.lastModifiedTimeRef / 1000)
-
-        conn = await asyncpg.connect(DATABASE_URL)
-
-        await conn.execute("""
-            INSERT INTO brain_interaction (
-                id, transcription_fr, transcription_en, airtable_record_id,
-                last_modified_time_ref, created_at, update_at, live, intents, subtopic_id
-            )
-            VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9::text[], $10
-            )
-            ON CONFLICT (id) DO UPDATE SET
-                transcription_fr = EXCLUDED.transcription_fr,
-                transcription_en = EXCLUDED.transcription_en,
-                airtable_record_id = EXCLUDED.airtable_record_id,
-                last_modified_time_ref = EXCLUDED.last_modified_time_ref,
-                created_at = EXCLUDED.created_at,
-                update_at = EXCLUDED.update_at,
-                live = EXCLUDED.live,
-                intents = EXCLUDED.intents,
-                subtopic_id = EXCLUDED.subtopic_id;
-        """, entry.id, entry.transcriptionFr, entry.transcriptionEn,
-             entry.airtableRecordId, entry.lastModifiedTimeRef,
-             created_at_dt, updated_at_dt, entry.live, entry.intents, entry.subtopicId)
-
-        await conn.close()
-
-        # Update Airtable to confirm sync
-        await update_airtable_status(
-            record_id=entry.airtableRecordId,
-            fields={"LastModifiedSaved": entry.lastModifiedTimeRef},
-            table_name="Interaction"
-        )
-
-        return {
-            "message": "Interaction synced successfully",
-            "entry_id": entry.id,
-            "airtable_record_id": entry.airtableRecordId,
-            "last_modified_time_ref": entry.lastModifiedTimeRef
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Sync error: {str(e)}")
-
-
-
-# ----------------------
-# Sync Vocab 
-# ----------------------
-# Define the data model for vocab entry
-class VocabEntry(BaseModel):
-    id: str
+class VocabEntry(BaseEntry):
     transcriptionFr: str
     transcriptionEn: str
     transcriptionAdjusted: str
-    airtableRecordId: str
-    lastModifiedTimeRef: int
-    createdAt: int
-    live: bool = True
 
-from datetime import datetime
-
-@router.post("/webhook-sync-vocab")
-async def webhook_sync_vocab(entry: VocabEntry):
-    try:
-        # Convert milliseconds to datetime
-        created_at_dt = datetime.utcfromtimestamp(entry.createdAt / 1000)
-        updated_at_dt = datetime.utcfromtimestamp(entry.lastModifiedTimeRef / 1000)
-        
-        conn = await asyncpg.connect(DATABASE_URL)
-        await conn.execute("""
-            INSERT INTO brain_vocab (id, transcription_fr, transcription_en, transcription_adjusted, airtable_record_id, last_modified_time_ref, created_at, update_at, live)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-    ON CONFLICT (id) DO UPDATE SET
-        transcription_fr = EXCLUDED.transcription_fr,
-        transcription_en = EXCLUDED.transcription_en,
-        transcription_adjusted = EXCLUDED.transcription_adjusted,
-        airtable_record_id = EXCLUDED.airtable_record_id,
-        last_modified_time_ref = EXCLUDED.last_modified_time_ref,
-        created_at = EXCLUDED.created_at,
-        update_at = EXCLUDED.update_at,
-        live = EXCLUDED.live;
-        """, entry.id, entry.transcriptionFr, entry.transcriptionEn, entry.transcriptionAdjusted, entry.airtableRecordId, entry.lastModifiedTimeRef, created_at_dt, updated_at_dt, entry.live)
-        await conn.close()
-
-        await update_airtable_status(
-            record_id=entry.airtableRecordId,
-            fields={"LastModifiedSaved": entry.lastModifiedTimeRef},
-            table_name="Vocab"
-        )
-
-        return {
-    "message": "Vocab synced and inserted",
-    "entry_id": entry.id,
-    "airtable_record_id": entry.airtableRecordId,
-    "last_modified_time_ref": entry.lastModifiedTimeRef
-}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-
-# ----------------------
-# Sync Intent 
-# ----------------------
-# Define the data model for intent entry
-class IntentEntry(BaseModel):
-    id: str
+class IntentEntry(BaseEntry):
     name: str
     description: str
-    airtableRecordId: str
-    lastModifiedTimeRef: int
-    createdAt: int
-    live: bool = True
 
-
-from datetime import datetime
-
-@router.post("/webhook-sync-intent")
-async def webhook_sync_intent(entry: IntentEntry):
-    try:
-        # Convert milliseconds to datetime
-        created_at_dt = datetime.utcfromtimestamp(entry.createdAt / 1000)
-        updated_at_dt = datetime.utcfromtimestamp(entry.lastModifiedTimeRef / 1000)
-
-        conn = await asyncpg.connect(DATABASE_URL)
-        await conn.execute("""
-            INSERT INTO brain_intent (id, name, description, airtable_record_id, last_modified_time_ref, created_at, update_at, live)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            ON CONFLICT (id) DO UPDATE SET
-                name = EXCLUDED.name,
-                description = EXCLUDED.description,
-                airtable_record_id = EXCLUDED.airtable_record_id,
-                last_modified_time_ref = EXCLUDED.last_modified_time_ref,
-                created_at = EXCLUDED.created_at,
-                update_at = EXCLUDED.update_at,
-                live = EXCLUDED.live;
-        """, entry.id, entry.name, entry.description, entry.airtableRecordId, entry.lastModifiedTimeRef, created_at_dt, updated_at_dt, entry.live)
-        await conn.close()
-
-        await update_airtable_status(
-            record_id=entry.airtableRecordId,
-            fields={"LastModifiedSaved": entry.lastModifiedTimeRef},
-            table_name="Intent"
-        )
-
-        return {
-            "message": "Intent synced and inserted",
-            "entry_id": entry.id,
-            "airtable_record_id": entry.airtableRecordId,
-            "last_modified_time_ref": entry.lastModifiedTimeRef
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-
-# ----------------------
-# Sync Subtopic 
-# ----------------------
-
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-from datetime import datetime
-import asyncpg
-
-# Pydantic model
-class SubtopicEntry(BaseModel):
-    id: str
+class SubtopicEntry(BaseEntry):
     nameFr: str
     nameEn: str
-    airtableRecordId: str
-    lastModifiedTimeRef: int  # in ms
-    createdAt: int            # in ms
-    live: bool = True
 
+# Generic sync configuration
+SYNC_CONFIGS = {
+    "answer": {
+        "table_name": "brain_answer",
+        "airtable_table": "Answer",
+        "columns": ["id", "transcription_fr", "transcription_en", "transcription_adjusted", 
+                   "airtable_record_id", "last_modified_time_ref", "created_at", "update_at", "live"]
+    },
+    "interaction": {
+        "table_name": "brain_interaction",
+        "airtable_table": "Interaction",
+        "columns": ["id", "transcription_fr", "transcription_en", "airtable_record_id",
+                   "last_modified_time_ref", "created_at", "update_at", "live", "intents", "subtopic_id"]
+    },
+    "vocab": {
+        "table_name": "brain_vocab",
+        "airtable_table": "Vocab",
+        "columns": ["id", "transcription_fr", "transcription_en", "transcription_adjusted",
+                   "airtable_record_id", "last_modified_time_ref", "created_at", "update_at", "live"]
+    },
+    "intent": {
+        "table_name": "brain_intent",
+        "airtable_table": "Intent",
+        "columns": ["id", "name", "description", "airtable_record_id",
+                   "last_modified_time_ref", "created_at", "update_at", "live"]
+    },
+    "subtopic": {
+        "table_name": "brain_subtopic",
+        "airtable_table": "Subtopic",
+        "columns": ["id", "name_fr", "name_en", "airtable_record_id",
+                   "last_modified_time_ref", "created_at", "update_at", "live"]
+    }
+}
 
-@router.post("/webhook-sync-subtopic")
-async def webhook_sync_subtopic(entry: SubtopicEntry):
+# Utility functions
+def convert_timestamps(entry_data: Dict) -> Dict:
+    """Convert timestamp fields from milliseconds to datetime"""
+    result = entry_data.copy()
+    if 'createdAt' in result:
+        result['created_at'] = datetime.utcfromtimestamp(result.pop('createdAt') / 1000)
+    if 'lastModifiedTimeRef' in result:
+        timestamp = result.pop('lastModifiedTimeRef')
+        result['last_modified_time_ref'] = timestamp
+        result['update_at'] = datetime.utcfromtimestamp(timestamp / 1000)
+    return result
+
+def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
+    """Convert Pydantic model to database-ready dict"""
+    data = entry.dict()
+    
+    # Convert field names for database
+    field_mappings = {
+        "transcriptionFr": "transcription_fr",
+        "transcriptionEn": "transcription_en", 
+        "transcriptionAdjusted": "transcription_adjusted",
+        "airtableRecordId": "airtable_record_id",
+        "nameFr": "name_fr",
+        "nameEn": "name_en",
+        "subtopicId": "subtopic_id"
+    }
+    
+    for old_key, new_key in field_mappings.items():
+        if old_key in data:
+            data[new_key] = data.pop(old_key)
+    
+    return convert_timestamps(data)
+
+# Enhanced Airtable update with retry logic
+async def update_airtable_status(record_id: str, fields: dict, table_name: str, max_retries: int = 2):
+    """Update Airtable with retry logic"""
+    url = f"{AIRTABLE_BASE_URL}/{table_name}/{record_id}"
+    payload = {"fields": fields}
+    
+    for attempt in range(max_retries + 1):
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.patch(url, json=payload, headers=HEADERS)
+                response.raise_for_status()
+                logger.info(f"Airtable updated: {table_name}/{record_id}")
+                return
+                
+        except httpx.TimeoutException:
+            if attempt < max_retries:
+                logger.warning(f"Airtable timeout, retrying {attempt + 1}/{max_retries}")
+                await asyncio.sleep(1)
+                continue
+            logger.error(f"Airtable update failed after {max_retries} retries")
+            raise HTTPException(status_code=408, detail="Airtable update timeout")
+            
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Airtable API error: {e.response.status_code}")
+            raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+
+# Generic sync function
+async def sync_entity_to_database(entry_data: Dict, config: Dict) -> None:
+    """Generic function to sync any entity to database"""
+    async with db_pool.get_connection() as conn:
+        async with conn.transaction():
+            # Build dynamic query
+            columns = config["columns"]
+            placeholders = ', '.join([f'${i+1}' for i in range(len(columns))])
+            update_columns = [col for col in columns if col != 'id']
+            update_set = ', '.join([f'{col} = EXCLUDED.{col}' for col in update_columns])
+            
+            query = f"""
+                INSERT INTO {config["table_name"]} ({', '.join(columns)})
+                VALUES ({placeholders})
+                ON CONFLICT (id) DO UPDATE SET {update_set};
+            """
+            
+            # Handle special cases (arrays, etc.)
+            values = []
+            for col in columns:
+                value = entry_data.get(col)
+                if col == 'intents' and isinstance(value, list):
+                    values.append(value)  # PostgreSQL will handle the array
+                else:
+                    values.append(value)
+            
+            await conn.execute(query, *values)
+
+# Background task for Airtable updates
+async def background_airtable_update(record_id: str, timestamp: int, table_name: str):
+    """Background task to update Airtable without blocking the response"""
     try:
-        # Convert from milliseconds to UTC datetime
-        created_at_dt = datetime.utcfromtimestamp(entry.createdAt / 1000)
-        updated_at_dt = datetime.utcfromtimestamp(entry.lastModifiedTimeRef / 1000)
-
-        # Connect to DB
-        conn = await asyncpg.connect(DATABASE_URL)
-
-        # Insert or update
-        await conn.execute("""
-            INSERT INTO brain_subtopic (
-                id, name_fr, name_en, airtable_record_id, 
-                last_modified_time_ref, created_at, update_at, live
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            ON CONFLICT (id) DO UPDATE SET
-                name_fr = EXCLUDED.name_fr,
-                name_en = EXCLUDED.name_en,
-                airtable_record_id = EXCLUDED.airtable_record_id,
-                last_modified_time_ref = EXCLUDED.last_modified_time_ref,
-                created_at = EXCLUDED.created_at,
-                update_at = EXCLUDED.update_at,
-                live = EXCLUDED.live;
-        """, entry.id, entry.nameFr, entry.nameEn, entry.airtableRecordId,
-             entry.lastModifiedTimeRef, created_at_dt, updated_at_dt, entry.live)
-
-        await conn.close()
-
-        # Update Airtable to mark as saved
         await update_airtable_status(
-            record_id=entry.airtableRecordId,
-            fields={"LastModifiedSaved": entry.lastModifiedTimeRef},
-            table_name="Subtopic"
+            record_id=record_id,
+            fields={"LastModifiedSaved": timestamp},
+            table_name=table_name
         )
+    except Exception as e:
+        logger.error(f"Background Airtable update failed: {e}")
 
+# Generic webhook endpoint
+async def generic_sync_webhook(entry: BaseEntry, entity_type: str, background_tasks: BackgroundTasks):
+    """Generic webhook handler for all entity types"""
+    start_time = time.time()
+    
+    try:
+        logger.info(f"Starting {entity_type} sync for {entry.id}")
+        
+        config = SYNC_CONFIGS[entity_type]
+        entry_data = prepare_entry_data(entry, entity_type)
+        
+        # Sync to database
+        await sync_entity_to_database(entry_data, config)
+        
+        # Queue background Airtable update
+        background_tasks.add_task(
+            background_airtable_update,
+            entry.airtableRecordId,
+            entry.lastModifiedTimeRef,
+            config["airtable_table"]
+        )
+        
+        elapsed = time.time() - start_time
+        logger.info(f"{entity_type.title()} sync completed in {elapsed:.2f}s")
+        
         return {
-            "message": "Subtopic synced successfully",
+            "message": f"{entity_type.title()} synced successfully",
             "entry_id": entry.id,
             "airtable_record_id": entry.airtableRecordId,
-            "last_modified_time_ref": entry.lastModifiedTimeRef
+            "last_modified_time_ref": entry.lastModifiedTimeRef,
+            "execution_time": f"{elapsed:.2f}s"
         }
-
+        
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error syncing subtopic: {e}")
+        elapsed = time.time() - start_time
+        logger.error(f"{entity_type.title()} sync failed after {elapsed:.2f}s: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Specific webhook endpoints using the generic function
+@router.post("/webhook-sync-answer")
+async def webhook_sync_answer(entry: AnswerEntry, background_tasks: BackgroundTasks):
+    return await generic_sync_webhook(entry, "answer", background_tasks)
+
+@router.post("/webhook-sync-interaction")
+async def webhook_sync_interaction(entry: InteractionEntry, background_tasks: BackgroundTasks):
+    return await generic_sync_webhook(entry, "interaction", background_tasks)
+
+@router.post("/webhook-sync-vocab")
+async def webhook_sync_vocab(entry: VocabEntry, background_tasks: BackgroundTasks):
+    return await generic_sync_webhook(entry, "vocab", background_tasks)
+
+@router.post("/webhook-sync-intent")
+async def webhook_sync_intent(entry: IntentEntry, background_tasks: BackgroundTasks):
+    return await generic_sync_webhook(entry, "intent", background_tasks)
+
+@router.post("/webhook-sync-subtopic")
+async def webhook_sync_subtopic(entry: SubtopicEntry, background_tasks: BackgroundTasks):
+    return await generic_sync_webhook(entry, "subtopic", background_tasks)
+
+# Health check endpoint
+@router.get("/sync-health")
+async def sync_health():
+    """Health check for sync services"""
+    try:
+        # Test database connection
+        async with db_pool.get_connection() as conn:
+            await conn.fetchval("SELECT 1")
+        
+        # Test Airtable connection
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(f"{AIRTABLE_BASE_URL}/Answer", headers=HEADERS, params={"maxRecords": 1})
+            response.raise_for_status()
+        
+        return {"status": "healthy", "database": "ok", "airtable": "ok"}
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return {"status": "unhealthy", "error": str(e)}
