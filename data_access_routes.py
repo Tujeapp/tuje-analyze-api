@@ -80,61 +80,78 @@ async def get_interaction_intents(interaction_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+
+
+
 # -----------------
 # Get Interactions Live and grouped by Subtopics
+# Simple endpoint for bottom sheet
 # -----------------
-from pydantic import BaseModel
-from typing import List, Optional
 
-class InteractionOut(BaseModel):
+from pydantic import BaseModel
+from typing import List
+
+# Simple models for bottom sheet
+class SimpleInteraction(BaseModel):
     id: str
     transcriptionFr: str
-    transcriptionEn: str
 
-class SubtopicGroup(BaseModel):
-    subtopic_id: Optional[str]
-    subtopic_name: Optional[str]
-    interactions: List[InteractionOut]
+class SimpleSubtopic(BaseModel):
+    id: str
+    nameFr: str
+    interactions: List[SimpleInteraction]
 
-@router.get("/interactions-by-subtopic", response_model=List[SubtopicGroup])
-async def get_interactions_by_subtopic():
+@router.get("/subtopics-simple", response_model=List[SimpleSubtopic])
+async def get_subtopics_simple():
+    """
+    Get live subtopics with their live interactions (IDs only)
+    Minimal data for bottom sheet accordion
+    """
     try:
         conn = await asyncpg.connect(DATABASE_URL)
         
-        rows = await conn.fetch("""
-            SELECT
-                bi.id,
-                bi.transcription_fr,
-                bi.transcription_en,
-                bi.subtopic_id,
-                bs.name_fr AS subtopic_name
-            FROM brain_interaction bi
-            LEFT JOIN brain_subtopic bs ON bi.subtopic_id = bs.id
-            WHERE bi.live = TRUE
-            ORDER BY bs.name_fr NULLS LAST, bi.created_at
-        """)
+        # Get all live subtopics
+        subtopics_query = """
+            SELECT id, name_fr
+            FROM brain_subtopic
+            WHERE live = TRUE
+            ORDER BY name_fr ASC
+        """
+        
+        subtopic_rows = await conn.fetch(subtopics_query)
+        result = []
+        
+        for subtopic_row in subtopic_rows:
+            # Get live interactions for this subtopic
+            interactions_query = """
+                SELECT id, transcription_fr
+                FROM brain_interaction
+                WHERE subtopic_id = $1 AND live = TRUE
+                ORDER BY created_at ASC
+            """
+            
+            interaction_rows = await conn.fetch(interactions_query, subtopic_row["id"])
+            
+            # Convert to simple format
+            interactions = [
+                SimpleInteraction(
+                    id=interaction_row["id"],
+                    transcriptionFr=interaction_row["transcription_fr"]
+                )
+                for interaction_row in interaction_rows
+            ]
+            
+            # Only include subtopics that have interactions
+            if interactions:
+                result.append(SimpleSubtopic(
+                    id=subtopic_row["id"],
+                    nameFr=subtopic_row["name_fr"],
+                    interactions=interactions
+                ))
         
         await conn.close()
-
-        # Group by subtopic_id
-        grouped = {}
-        for row in rows:
-            key = row["subtopic_id"] or "no_subtopic"
-            if key not in grouped:
-                grouped[key] = {
-                    "subtopic_id": row["subtopic_id"],
-                    "subtopic_name": row["subtopic_name"],
-                    "interactions": []
-                }
-
-            grouped[key]["interactions"].append({
-                "id": row["id"],
-                "transcriptionFr": row["transcription_fr"],
-                "transcriptionEn": row["transcription_en"]
-            })
-
-        return list(grouped.values())
-
+        return result
+        
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
+        
