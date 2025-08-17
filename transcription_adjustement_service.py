@@ -31,17 +31,18 @@ class EntityMatch(BaseModel):
 
 class AdjustmentResult(BaseModel):
     original_transcript: str
+    phase0_result: str       # After preprocessing
     normalized_transcript: str
-    phase1_result: str  # After number conversion
-    adjusted_transcript: str  # Final result
+    phase1_result: str       # After number conversion
+    adjusted_transcript: str # Final result
     entities_found: List[EntityMatch]
     processing_time_ms: int
 
-class TwoPhaseTranscriptionAdjuster:
+class ThreePhaseTranscriptionAdjuster:
     def __init__(self):
-        self.non_number_entities = {}  # Cache for non-number entities
+        self.regular_entities = {}     # Cache for regular entities (no entityNumber)
+        self.pattern_entities = {}     # Cache for pattern entities (with entityNumber)
         self.number_patterns = {}      # Cache for number patterns
-        self.context_rules = {}        # Rules for phase 2 conversion
         self.cache_loaded = False
     
     async def load_entities_cache(self, pool: asyncpg.Pool):
@@ -51,8 +52,8 @@ class TwoPhaseTranscriptionAdjuster:
             
         try:
             async with pool.acquire() as conn:
-                # Load non-number entities (for phase 1)
-                rows = await conn.fetch("""
+                # Load pattern-based entities (contain 'entityNumber' in transcription_fr)
+                pattern_rows = await conn.fetch("""
                     SELECT 
                         bv.transcription_fr,
                         bv.transcription_adjusted, 
@@ -61,7 +62,26 @@ class TwoPhaseTranscriptionAdjuster:
                         bv.entity_priority
                     FROM brain_vocab bv
                     JOIN brain_entity_type bet ON bv.entity_type_id = bet.id
-                    WHERE bv.entity_type_id != 'entityNumber'
+                    WHERE bv.transcription_fr LIKE '%entityNumber%'
+                    AND bv.entity_type_id != 'entityNumber'
+                    ORDER BY 
+                        bet.priority DESC, 
+                        bv.entity_priority DESC,
+                        LENGTH(bv.transcription_fr) DESC
+                """)
+                
+                # Load regular entities (no 'entityNumber' placeholder)
+                entity_rows = await conn.fetch("""
+                    SELECT 
+                        bv.transcription_fr,
+                        bv.transcription_adjusted, 
+                        bv.entity_type_id,
+                        bet.priority as type_priority,
+                        bv.entity_priority
+                    FROM brain_vocab bv
+                    JOIN brain_entity_type bet ON bv.entity_type_id = bet.id
+                    WHERE bv.transcription_fr NOT LIKE '%entityNumber%'
+                    AND bv.entity_type_id != 'entityNumber'
                     AND bv.entity_type_id IS NOT NULL
                     ORDER BY 
                         bet.priority DESC, 
@@ -69,19 +89,7 @@ class TwoPhaseTranscriptionAdjuster:
                         LENGTH(bv.transcription_fr) DESC
                 """)
                 
-                self.non_number_entities = {'entities': []}
-                
-                for row in rows:
-                    entity_data = {
-                        'original_text': row['transcription_fr'],
-                        'normalized_text': self._normalize_text(row['transcription_fr']),
-                        'entity_type': row['entity_type_id'],
-                        'type_priority': row['type_priority'],
-                        'entity_priority': row['entity_priority'] or 0
-                    }
-                    self.non_number_entities['entities'].append(entity_data)
-                
-                # Load number patterns (for phase 1)
+                # Load basic numbers for phase 1
                 number_rows = await conn.fetch("""
                     SELECT transcription_fr, transcription_adjusted
                     FROM brain_vocab bv
@@ -89,62 +97,69 @@ class TwoPhaseTranscriptionAdjuster:
                     ORDER BY LENGTH(transcription_fr) DESC
                 """)
                 
+                # Organize data
+                self.pattern_entities = {'entities': []}
+                self.regular_entities = {'entities': []}
                 self.number_patterns = {
-                    'written_numbers': [],  # un, deux, trois, etc.
-                    'digit_patterns': []    # 1, 2, 3, etc.
+                    'written_numbers': [],
+                    'digit_patterns': [r'\b\d+\b', r'\b\d+h\d*\b', r'\b\d+[.,]\d+\b']
                 }
                 
+                # Process pattern entities
+                for row in pattern_rows:
+                    entity_data = {
+                        'original_text': row['transcription_fr'],
+                        'normalized_text': self._normalize_for_matching(row['transcription_fr']),
+                        'entity_type': row['entity_type_id'],
+                        'type_priority': row['type_priority'],
+                        'entity_priority': row['entity_priority'] or 0
+                    }
+                    self.pattern_entities['entities'].append(entity_data)
+                
+                # Process regular entities
+                for row in entity_rows:
+                    entity_data = {
+                        'original_text': row['transcription_fr'],
+                        'normalized_text': self._normalize_for_matching(row['transcription_fr']),
+                        'entity_type': row['entity_type_id'],
+                        'type_priority': row['type_priority'],
+                        'entity_priority': row['entity_priority'] or 0
+                    }
+                    self.regular_entities['entities'].append(entity_data)
+                
+                # Process number patterns
                 for row in number_rows:
-                    normalized = self._normalize_text(row['transcription_fr'])
+                    normalized = self._normalize_for_matching(row['transcription_fr'])
                     self.number_patterns['written_numbers'].append(normalized)
                 
-                # Add digit patterns
-                self.number_patterns['digit_patterns'] = [
-                    r'\b\d+\b',  # Any sequence of digits
-                    r'\b\d+h\d*\b',  # Time patterns like 14h, 14h30
-                    r'\b\d+[.,]\d+\b'  # Decimal numbers
-                ]
-                
-                # Set up context rules for phase 2
-                self._setup_context_rules()
-                
                 self.cache_loaded = True
-                logger.info(f"Loaded {len(self.non_number_entities['entities'])} non-number entities")
+                logger.info(f"Loaded {len(self.pattern_entities['entities'])} pattern entities")
+                logger.info(f"Loaded {len(self.regular_entities['entities'])} regular entities")
                 logger.info(f"Loaded {len(self.number_patterns['written_numbers'])} written number patterns")
                     
         except Exception as e:
             logger.error(f"Error loading entities cache: {e}")
             raise
     
-    def _setup_context_rules(self):
-        """Define rules for phase 2 entityNumber → specific entity conversion"""
-        self.context_rules = {
-            'entityAge': {
-                'patterns': [
-                    r'entityNumber\s+ans?\b',           # "entityNumber ans"
-                    r'\b(age|ages?|vieux|jeune)\b.*entityNumber',  # context words before
-                    r'entityNumber.*\b(age|ages?|vieux|jeune)\b',  # context words after
-                    r'\b(jai|ai)\s+entityNumber\b'     # "j'ai entityNumber" in age context
-                ],
-                'context_phrases': [
-                    'quel age', 'ton age', 'votre age', 'mon age', 'ans', 'annees',
-                    'ne en', 'naissance', 'anniversaire'
-                ]
-            },
-            'entityTime': {
-                'patterns': [
-                    r'entityNumber\s*h(?:eures?)?\b',              # "entityNumber h"
-                    r'\b(a|vers|depuis|jusqu)\s+entityNumber\b',  # "à entityNumber"
-                    r'entityNumber\s+(heures?|h\d+)\b'            # "entityNumber heures"
-                ],
-                'context_phrases': [
-                    'quelle heure', 'a quelle heure', 'vers', 'depuis', 'jusqua',
-                    'matin', 'soir', 'apres-midi', 'midi', 'minuit'
-                ]
-            },
-            'entityPeriodOfTime': {
-                'patterns': [
-                    r'entityNumber\s+(ans?|annees?|mois|jours?|semaines?|heures?)\b',  # "entityNumber ans"
+    def _normalize_for_matching(self, text: str) -> str:
+        """Normalize text for entity matching (used for database patterns)"""
+        # This is a lighter normalization for matching against database entries
+        if not text:
+            return ""
+        
+        # Remove accents
+        text = unicodedata.normalize('NFD', text)
+        text = ''.join(c for c in text if unicodedata.category(c) != 'Mn')
+        
+        # Convert to lowercase
+        text = text.lower()
+        
+        # Basic contraction handling for matching
+        text = re.sub(r"\bj'", "jai ", text)
+        text = re.sub(r"\bd'", "de ", text)
+        text = re.sub(r"\bl'", "le ", text)
+        
+        return text.strip()entityNumber\s+(ans?|annees?|mois|jours?|semaines?|heures?)\b',  # "entityNumber ans"
                     r'\b(depuis|pendant|durant|en)\s+entityNumber\b',                 # "depuis entityNumber"
                     r'entityNumber\s+(de|d)\s+(temps|duree)\b'                        # "entityNumber de temps"
                 ],
@@ -189,19 +204,21 @@ class TwoPhaseTranscriptionAdjuster:
             }
         }
     
-    def _normalize_text(self, text: str) -> str:
-        """Normalize text by removing accents, converting to lowercase, handling contractions"""
+    def _phase0_preprocessing(self, text: str) -> str:
+        """Phase 0: Clean and standardize the input text"""
         if not text:
             return ""
-            
-        # Remove accents
+        
+        logger.info(f"Phase 0 input: '{text}'")
+        
+        # Step 1: Remove accents but preserve structure
         text = unicodedata.normalize('NFD', text)
         text = ''.join(c for c in text if unicodedata.category(c) != 'Mn')
         
-        # Convert to lowercase
+        # Step 2: Convert to lowercase
         text = text.lower()
         
-        # Handle French contractions and articles
+        # Step 3: Handle French contractions (preserve word boundaries)
         contractions = {
             r"\bj'": "jai ",
             r"\bd'": "de ",
@@ -211,18 +228,75 @@ class TwoPhaseTranscriptionAdjuster:
             r"\bn'": "ne ",
             r"\bt'": "te ",
             r"\bs'": "se ",
-            r"\bm'": "me "
+            r"\bm'": "me ",
+            r"\bv'": "ve "
         }
         
         for pattern, replacement in contractions.items():
             text = re.sub(pattern, replacement, text)
         
-        # Remove punctuation but keep spaces
-        text = re.sub(r'[^\w\s]', ' ', text)
+        # Step 4: PRESERVE DECIMAL COMMAS - Handle decimal numbers carefully
+        # First, identify and temporarily mark decimal patterns
+        # French uses comma as decimal separator: 1,50 euros, 2,75
+        decimal_placeholder_map = {}
+        decimal_counter = 0
         
-        # Normalize whitespace
-        text = re.sub(r'\s+', ' ', text).strip()
+        # Find decimal patterns with comma (digit,digit format)
+        decimal_pattern = r'(\d+),(\d{1,2})\b'  # 1,50 or 12,99 (1-2 digits after comma)
         
+        def replace_decimal(match):
+            nonlocal decimal_counter
+            decimal_counter += 1
+            full_match = match.group(0)
+            placeholder = f"DECIMAL_PLACEHOLDER_{decimal_counter}"
+            # Convert comma to period for internal processing: 1,50 -> 1.50
+            decimal_value = f"{match.group(1)}.{match.group(2)}"
+            decimal_placeholder_map[placeholder] = decimal_value
+            logger.info(f"Preserving decimal: '{full_match}' -> '{decimal_value}' (placeholder: {placeholder})")
+            return placeholder
+        
+        text = re.sub(decimal_pattern, replace_decimal, text)
+        
+        # Step 5: Remove most punctuation but preserve important separators
+        # Now safe to remove commas since decimals are protected
+        text = re.sub(r'[^\w\s\.]', ' ', text)
+        
+        # Step 6: Handle space normalization
+        text = re.sub(r'\s+', ' ', text)
+        text = text.strip()
+        
+        # Step 7: Handle specific French number words that might have been split
+        french_compound_numbers = {
+            'vingt et un': 'vingtetun',
+            'vingt deux': 'vingtdeux', 
+            'vingt trois': 'vingttrois',
+            'vingt quatre': 'vingtquatre',
+            'vingt cinq': 'vingtcinq',
+            'vingt six': 'vingtsix',
+            'vingt sept': 'vingtsept',
+            'vingt huit': 'vingthuit',
+            'vingt neuf': 'vingtneuf',
+            'trente et un': 'trenteun',
+            'trente deux': 'trentedeux',
+            'trente trois': 'trentetrois',
+            'trente quatre': 'trentequatre',
+            'trente cinq': 'trentecinq',
+            'quarante cinq': 'quarantecinq',
+            'cinquante trois': 'cinquantetrois',
+            'soixante dix': 'soixantedix',
+            'quatre vingt': 'quatrevingt',
+            'quatre vingt dix': 'quatrevingdix'
+        }
+        
+        for compound, replacement in french_compound_numbers.items():
+            text = text.replace(compound, replacement)
+        
+        # Step 8: Restore decimal numbers with periods
+        for placeholder, decimal_value in decimal_placeholder_map.items():
+            text = text.replace(placeholder, decimal_value)
+            logger.info(f"Restored decimal: {placeholder} -> {decimal_value}")
+        
+        logger.info(f"Phase 0 output: '{text}'")
         return text
     
     def _phase1_convert_numbers(self, text: str) -> Tuple[str, List[EntityMatch]]:
@@ -230,7 +304,14 @@ class TwoPhaseTranscriptionAdjuster:
         phase1_matches = []
         result_text = text
         
-        # Process written numbers first (longer matches)
+        # Enhanced digit patterns to handle decimals
+        digit_patterns = [
+            r'\b\d+\.\d+\b',  # Decimal numbers like 1.50, 2.75
+            r'\b\d+\b',       # Regular integers
+            r'\b\d+h\d*\b'    # Time patterns like 14h, 14h30
+        ]
+        
+        # Process written numbers first (longer matches have priority)
         for written_number in self.number_patterns['written_numbers']:
             pattern = r'\b' + re.escape(written_number) + r'\b'
             matches = list(re.finditer(pattern, result_text))
@@ -253,8 +334,8 @@ class TwoPhaseTranscriptionAdjuster:
                              'entityNumber' + 
                              result_text[match.end():])
         
-        # Then process digit patterns
-        for digit_pattern in self.number_patterns['digit_patterns']:
+        # Then process digit patterns (including decimals)
+        for digit_pattern in digit_patterns:
             matches = list(re.finditer(digit_pattern, result_text))
             
             # Process matches in reverse order to maintain positions
@@ -279,101 +360,87 @@ class TwoPhaseTranscriptionAdjuster:
                              'entityNumber' + 
                              result_text[match.end():])
         
+        logger.info(f"Phase 1: '{text}' -> '{result_text}'")
         return result_text, phase1_matches
     
-    def _phase2_contextualize_numbers(self, text: str, expected_entities: Optional[List[str]] = None) -> Tuple[str, List[EntityMatch]]:
-        """Phase 2: Convert entityNumber to specific entities based on context"""
+    def _phase2_database_pattern_matching(self, text: str, expected_entities: Optional[List[str]] = None) -> Tuple[str, List[EntityMatch]]:
+        """Phase 2: Use database patterns to convert entityNumber to specific entities"""
         if 'entityNumber' not in text:
             return text, []
         
         phase2_matches = []
         result_text = text
         
-        # Determine which entity types to check
-        entity_types_to_check = expected_entities if expected_entities else list(self.context_rules.keys())
-        
-        # Sort by priority if expected entities are provided
+        # Filter pattern entities by expected types if provided
+        patterns_to_check = self.pattern_entities['entities']
         if expected_entities:
-            # Check expected entities first
-            priority_order = expected_entities + [et for et in self.context_rules.keys() if et not in expected_entities]
-        else:
-            priority_order = list(self.context_rules.keys())
+            patterns_to_check = [
+                pattern for pattern in patterns_to_check
+                if pattern['entity_type'] in expected_entities
+            ]
+            logger.info(f"Filtering to {len(patterns_to_check)} patterns from expected types: {expected_entities}")
         
-        # Find entityNumber positions
-        entity_number_positions = []
-        for match in re.finditer(r'\bentityNumber\b', result_text):
-            entity_number_positions.append((match.start(), match.end()))
+        # Sort patterns by priority and length (longest first for greedy matching)
+        sorted_patterns = sorted(patterns_to_check, key=lambda x: (
+            -x['type_priority'], 
+            -x['entity_priority'], 
+            -len(x['normalized_text'])
+        ))
         
-        # Process each entityNumber position
-        for start_pos, end_pos in entity_number_positions:
-            best_match = None
-            best_confidence = 0
+        # Track replaced positions to avoid overlaps
+        replaced_positions = set()
+        
+        for pattern in sorted_patterns:
+            pattern_text = pattern['normalized_text']
             
-            # Check each entity type
-            for entity_type in priority_order:
-                if entity_type not in self.context_rules:
+            # Create regex pattern for matching
+            pattern_regex = r'\b' + re.escape(pattern_text) + r'\b'
+            
+            for match in re.finditer(pattern_regex, result_text):
+                start_pos = match.start()
+                end_pos = match.end()
+                
+                # Check if this position overlaps with already replaced text
+                if any(pos in replaced_positions for pos in range(start_pos, end_pos)):
                     continue
-                    
-                rule = self.context_rules[entity_type]
-                confidence = 0
                 
-                # Check patterns
-                for pattern in rule['patterns']:
-                    if re.search(pattern, result_text):
-                        confidence += 0.4
-                        logger.info(f"Pattern matched for {entity_type}: {pattern}")
+                # Calculate confidence
+                confidence = 0.90  # High confidence for database patterns
+                if expected_entities and pattern['entity_type'] in expected_entities:
+                    confidence = 0.95  # Even higher for expected entities
                 
-                # Check context phrases in surrounding text (±20 characters)
-                context_start = max(0, start_pos - 20)
-                context_end = min(len(result_text), end_pos + 20)
-                context_text = result_text[context_start:context_end]
-                
-                for phrase in rule['context_phrases']:
-                    if phrase in context_text:
-                        confidence += 0.3
-                        logger.info(f"Context phrase matched for {entity_type}: {phrase}")
-                
-                # Boost confidence for expected entities
-                if expected_entities and entity_type in expected_entities:
-                    confidence += 0.2
-                    logger.info(f"Expected entity boost for {entity_type}")
-                
-                # Track best match
-                if confidence > best_confidence and confidence > 0.5:  # Minimum threshold
-                    best_confidence = confidence
-                    best_match = {
-                        'entity_type': entity_type,
-                        'confidence': min(confidence, 0.95)  # Cap at 95%
-                    }
-            
-            # Apply best match if found
-            if best_match:
                 phase2_matches.append(EntityMatch(
-                    original_text='entityNumber',
-                    entity_replacement=best_match['entity_type'],
-                    entity_type=best_match['entity_type'],
+                    original_text=match.group(),
+                    entity_replacement=pattern['entity_type'],
+                    entity_type=pattern['entity_type'],
                     start_pos=start_pos,
                     end_pos=end_pos,
-                    confidence=best_match['confidence'],
-                    source='context_analysis',
+                    confidence=confidence,
+                    source='database_pattern',
                     phase=2
                 ))
                 
                 # Replace in text
                 result_text = (result_text[:start_pos] + 
-                             best_match['entity_type'] + 
+                             pattern['entity_type'] + 
                              result_text[end_pos:])
                 
-                logger.info(f"Phase 2: entityNumber -> {best_match['entity_type']} (confidence: {best_match['confidence']:.2f})")
+                # Mark positions as replaced
+                replaced_positions.update(range(start_pos, start_pos + len(pattern['entity_type'])))
+                
+                logger.info(f"Phase 2 DB pattern: '{match.group()}' -> {pattern['entity_type']} (confidence: {confidence})")
+                
+                # Break to avoid multiple replacements of the same pattern
+                break
         
         return result_text, phase2_matches
     
-    def _find_non_number_entities(self, text: str, expected_entities: Optional[List[str]] = None) -> List[EntityMatch]:
-        """Find non-number entities in the text"""
+    def _find_regular_entities(self, text: str, expected_entities: Optional[List[str]] = None) -> List[EntityMatch]:
+        """Find regular entities in the text (no entityNumber placeholder)"""
         matches = []
         
         # Filter entities if expected_entities provided
-        entities_to_search = self.non_number_entities['entities']
+        entities_to_search = self.regular_entities['entities']
         if expected_entities:
             entities_to_search = [
                 entity for entity in entities_to_search
@@ -402,7 +469,7 @@ class TwoPhaseTranscriptionAdjuster:
         return matches
     
     async def adjust_transcription(self, request: TranscriptionAdjustRequest, pool: asyncpg.Pool) -> AdjustmentResult:
-        """Main two-phase adjustment function"""
+        """Main three-phase adjustment function"""
         start_time = datetime.now()
         
         # Load cache if needed
@@ -424,33 +491,36 @@ class TwoPhaseTranscriptionAdjuster:
             except Exception as e:
                 logger.warning(f"Could not fetch expected entities: {e}")
         
-        # Normalize the original transcript
-        normalized_text = self._normalize_text(request.original_transcript)
+        # Phase 0: Preprocessing - clean and standardize input
+        phase0_result = self._phase0_preprocessing(request.original_transcript)
         
-        # Phase 1: Convert all numbers to entityNumber + find non-number entities
-        phase1_text, number_matches = self._phase1_convert_numbers(normalized_text)
-        non_number_matches = self._find_non_number_entities(phase1_text, expected_entities)
+        # Legacy normalization for backward compatibility in logs
+        normalized_text = phase0_result  # Same as phase0 for now
         
-        # Apply non-number entity replacements to phase1 text
+        # Phase 1: Convert all numbers to entityNumber + find regular entities
+        phase1_text, number_matches = self._phase1_convert_numbers(phase0_result)
+        regular_matches = self._find_regular_entities(phase1_text, expected_entities)
+        
+        # Apply regular entity replacements to phase1 text
         # Sort by position in reverse order to maintain positions
-        sorted_non_number = sorted(non_number_matches, key=lambda x: x.start_pos, reverse=True)
-        for match in sorted_non_number:
+        sorted_regular = sorted(regular_matches, key=lambda x: x.start_pos, reverse=True)
+        for match in sorted_regular:
             phase1_text = (phase1_text[:match.start_pos] + 
                           match.entity_replacement + 
                           phase1_text[match.end_pos:])
         
-        # Phase 2: Contextualize entityNumber → specific entities
-        final_text, context_matches = self._phase2_contextualize_numbers(phase1_text, expected_entities)
+        # Phase 2: Use database patterns to contextualize entityNumber → specific entities
+        final_text, pattern_matches = self._phase2_database_pattern_matching(phase1_text, expected_entities)
         
         # Combine all matches
-        all_matches = number_matches + non_number_matches + context_matches
+        all_matches = number_matches + regular_matches + pattern_matches
         
         # Calculate processing time
         processing_time = (datetime.now() - start_time).total_seconds() * 1000
         
-        logger.info(f"Two-phase adjustment completed in {processing_time:.2f}ms")
+        logger.info(f"Three-phase adjustment completed in {processing_time:.2f}ms")
         logger.info(f"Original: '{request.original_transcript}'")
-        logger.info(f"Normalized: '{normalized_text}'")
+        logger.info(f"Phase 0 (preprocessing): '{phase0_result}'")
         logger.info(f"Phase 1 (numbers): '{phase1_text}'")
         logger.info(f"Final: '{final_text}'")
         logger.info(f"Expected entities: {expected_entities}")
@@ -458,6 +528,7 @@ class TwoPhaseTranscriptionAdjuster:
         
         return AdjustmentResult(
             original_transcript=request.original_transcript,
+            phase0_result=phase0_result,
             normalized_transcript=normalized_text,
             phase1_result=phase1_text,
             adjusted_transcript=final_text,
@@ -466,7 +537,7 @@ class TwoPhaseTranscriptionAdjuster:
         )
 
 # Global adjuster instance
-adjuster = TwoPhaseTranscriptionAdjuster()
+adjuster = ThreePhaseTranscriptionAdjuster()
 
 @router.post("/adjust-transcription", response_model=AdjustmentResult)
 async def adjust_transcription_endpoint(request: TranscriptionAdjustRequest):
@@ -484,8 +555,120 @@ async def adjust_transcription_endpoint(request: TranscriptionAdjustRequest):
         logger.error(f"Transcription adjustment failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/test-two-phase")
-async def test_two_phase():
+@router.post("/test-whisper-scenarios")
+async def test_whisper_scenarios():
+    """Test common Whisper transcription scenarios including decimal handling"""
+    whisper_test_cases = [
+        {
+            "scenario": "Decimal price - French comma format",
+            "whisper_output": "Un café coûte 1,50 euros à Paris",
+            "expected_entities": ["entityPrice", "entityCity"],
+            "expected_result": "un cafe coute entityPrice a entityCity",
+            "key_test": "Preserves 1,50 as 1.50 in entityNumber conversion"
+        },
+        {
+            "scenario": "Complex decimal price",
+            "whisper_output": "Le repas coûte 12,75 euros",
+            "expected_entities": ["entityPrice"],
+            "expected_result": "le repas coute entityPrice",
+            "key_test": "Handles 12,75 -> 12.75"
+        },
+        {
+            "scenario": "Age - digit form (common Whisper output)",
+            "whisper_output": "J'ai 35 ans",
+            "expected_entities": ["entityAge"],
+            "expected_result": "jai entityAge"
+        },
+        {
+            "scenario": "Age - written compound number",
+            "whisper_output": "J'ai trente-cinq ans", 
+            "expected_entities": ["entityAge"],
+            "expected_result": "jai entityAge",
+            "key_test": "Handles trente-cinq -> trentecinq -> entityNumber"
+        },
+        {
+            "scenario": "Time with contractions",
+            "whisper_output": "À 14h du matin",
+            "expected_entities": ["entityTime"],
+            "expected_result": "a entityTime"
+        },
+        {
+            "scenario": "Mixed punctuation and decimals",
+            "whisper_output": "Ça coûte 2,99 euros, vraiment!",
+            "expected_entities": ["entityPrice"],
+            "expected_result": "ca coute entityPrice vraiment",
+            "key_test": "Removes punctuation but preserves decimal 2,99 -> 2.99"
+        },
+        {
+            "scenario": "Multiple decimals in sentence",
+            "whisper_output": "J'ai acheté 1,5 kg de pommes pour 3,75 euros",
+            "expected_entities": ["entityPrice"],
+            "expected_result": "jai achete entityNumber kg de pommes pour entityPrice",
+            "key_test": "Handles multiple decimals: 1,5 and 3,75"
+        },
+        {
+            "scenario": "Decimal without price context",
+            "whisper_output": "Il mesure 1,80 mètres",
+            "expected_entities": [],
+            "expected_result": "il mesure entityNumber metres",
+            "key_test": "Preserves 1,80 as entityNumber when no price context"
+        }
+    ]
+    
+    results = []
+    for case in whisper_test_cases:
+        try:
+            request = TranscriptionAdjustRequest(
+                original_transcript=case["whisper_output"],
+                expected_entities=case["expected_entities"] if case["expected_entities"] else None
+            )
+            result = await adjust_transcription_endpoint(request)
+            
+            results.append({
+                "scenario": case["scenario"],
+                "whisper_input": case["whisper_output"],
+                "expected_entities": case["expected_entities"],
+                "expected_result": case["expected_result"],
+                "actual_result": result.adjusted_transcript,
+                "phase0_result": result.phase0_result,
+                "phase1_result": result.phase1_result,
+                "matches_expected": result.adjusted_transcript == case["expected_result"],
+                "key_test": case.get("key_test", ""),
+                "entities_found": [
+                    {
+                        "text": e.original_text,
+                        "entity": e.entity_replacement,
+                        "phase": e.phase,
+                        "source": e.source,
+                        "confidence": e.confidence
+                    } for e in result.entities_found
+                ],
+                "processing_time": result.processing_time_ms
+            })
+        except Exception as e:
+            results.append({
+                "scenario": case["scenario"],
+                "error": str(e)
+            })
+    
+    return {
+        "decimal_preservation_tests": results,
+        "summary": {
+            "total_tests": len(whisper_test_cases),
+            "successful": len([r for r in results if r.get("matches_expected", False)]),
+            "failed": len([r for r in results if not r.get("matches_expected", False) and "error" not in r]),
+            "phase_breakdown": {
+                "phase0": "Preprocessing - handles accents, contractions, decimal preservation",
+                "phase1": "Number conversion - all numbers become entityNumber", 
+                "phase2": "Context matching - entityNumber becomes specific entities based on patterns"
+            },
+            "decimal_handling": {
+                "input_format": "French comma decimals (1,50 euros)",
+                "internal_format": "Period decimals (1.50)",
+                "preservation": "Decimal structure maintained through all phases"
+            }
+        }
+    }
     """Test the two-phase system with various scenarios"""
     test_cases = [
         {
