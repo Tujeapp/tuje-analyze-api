@@ -299,54 +299,70 @@ class ThreePhaseTranscriptionAdjuster:
         logger.info(f"Phase 0 output: '{text}'")
         return text
     
-    def _phase1_convert_numbers(self, text: str) -> Tuple[str, List[EntityMatch]]:
-        """Phase 1: Convert all numbers to entityNumber"""
+    def _phase1_convert_numbers_digit_by_digit(self, text: str) -> Tuple[str, List[EntityMatch]]:
+        """Phase 1: Convert numbers digit-by-digit to entityNumber patterns"""
         phase1_matches = []
         result_text = text
         
-        # Enhanced digit patterns to handle decimals
-        digit_patterns = [
-            r'\b\d+\.\d+\b',  # Decimal numbers like 1.50, 2.75
-            r'\b\d+\b',       # Regular integers
-            r'\b\d+h\d*\b'    # Time patterns like 14h, 14h30
-        ]
-        
-        # Process written numbers first (longer matches have priority)
+        # First, handle written numbers (convert to digits for consistency)
         for written_number in self.number_patterns['written_numbers']:
             pattern = r'\b' + re.escape(written_number) + r'\b'
             matches = list(re.finditer(pattern, result_text))
             
-            # Process matches in reverse order to maintain positions
             for match in reversed(matches):
-                phase1_matches.append(EntityMatch(
-                    original_text=match.group(),
-                    entity_replacement='entityNumber',
-                    entity_type='entityNumber',
-                    start_pos=match.start(),
-                    end_pos=match.end(),
-                    confidence=0.95,
-                    source='written_number',
-                    phase=1
-                ))
-                
-                # Replace in text
-                result_text = (result_text[:match.start()] + 
-                             'entityNumber' + 
-                             result_text[match.end():])
+                # Convert written number to its digit equivalent
+                digit_equivalent = self._written_to_digit(written_number)
+                if digit_equivalent:
+                    # Replace with digit equivalent, will be processed in next step
+                    result_text = (result_text[:match.start()] + 
+                                 str(digit_equivalent) + 
+                                 result_text[match.end():])
+                    
+                    phase1_matches.append(EntityMatch(
+                        original_text=match.group(),
+                        entity_replacement=str(digit_equivalent),
+                        entity_type='entityNumber',
+                        start_pos=match.start(),
+                        end_pos=match.end(),
+                        confidence=0.95,
+                        source='written_to_digit',
+                        phase=1
+                    ))
         
-        # Then process digit patterns (including decimals)
+        # Enhanced digit patterns including decimals and multi-digit numbers
+        digit_patterns = [
+            r'\b\d+\.\d+\b',    # Decimal numbers like 1.50, 2.75 (handle first - longer pattern)
+            r'\b\d{4}\b',       # 4-digit numbers like 2025, 1990 (years)
+            r'\b\d{3}\b',       # 3-digit numbers like 150, 250
+            r'\b\d{2}\b',       # 2-digit numbers like 35, 99
+            r'\b\d{1}\b',       # 1-digit numbers like 5, 9
+            r'\b\d+h\d*\b'      # Time patterns like 14h, 14h30
+        ]
+        
         for digit_pattern in digit_patterns:
             matches = list(re.finditer(digit_pattern, result_text))
             
-            # Process matches in reverse order to maintain positions
             for match in reversed(matches):
-                # Skip if this position was already replaced
+                # Skip if already converted
                 if 'entityNumber' in result_text[match.start():match.end()]:
                     continue
-                    
+                
+                number_str = match.group()
+                
+                # Convert digit-by-digit for numbers 
+                if '.' in number_str:
+                    # Handle decimals specially - keep as single entityNumber
+                    entity_replacement = 'entityNumber'
+                elif 'h' in number_str:
+                    # Handle time patterns specially
+                    entity_replacement = 'entityNumber'
+                else:
+                    # Convert each digit to entityNumber
+                    entity_replacement = self._convert_number_to_entity_pattern(number_str)
+                
                 phase1_matches.append(EntityMatch(
-                    original_text=match.group(),
-                    entity_replacement='entityNumber',
+                    original_text=number_str,
+                    entity_replacement=entity_replacement,
                     entity_type='entityNumber',
                     start_pos=match.start(),
                     end_pos=match.end(),
@@ -357,11 +373,45 @@ class ThreePhaseTranscriptionAdjuster:
                 
                 # Replace in text
                 result_text = (result_text[:match.start()] + 
-                             'entityNumber' + 
+                             entity_replacement + 
                              result_text[match.end():])
         
-        logger.info(f"Phase 1: '{text}' -> '{result_text}'")
+        logger.info(f"Phase 1 digit-by-digit: '{text}' -> '{result_text}'")
         return result_text, phase1_matches
+    
+    def _written_to_digit(self, written_number: str) -> int:
+        """Convert written French numbers to digits"""
+        number_map = {
+            'zero': 0, 'un': 1, 'deux': 2, 'trois': 3, 'quatre': 4, 'cinq': 5,
+            'six': 6, 'sept': 7, 'huit': 8, 'neuf': 9, 'dix': 10,
+            'onze': 11, 'douze': 12, 'treize': 13, 'quatorze': 14, 'quinze': 15,
+            'seize': 16, 'dix-sept': 17, 'dix-huit': 18, 'dix-neuf': 19,
+            'vingt': 20, 'trente': 30, 'quarante': 40, 'cinquante': 50,
+            'soixante': 60, 'soixante-dix': 70, 'quatre-vingt': 80, 'quatre-vingt-dix': 90,
+            'cent': 100,
+            # Compound numbers from preprocessing
+            'vingtetun': 21, 'vingtdeux': 22, 'vingttrois': 23, 'vingtquatre': 24,
+            'vingtcinq': 25, 'vingtsix': 26, 'vingtsept': 27, 'vingthuit': 28, 'vingtneuf': 29,
+            'trenteun': 31, 'trentedeux': 32, 'trentetrois': 33, 'trentequatre': 34,
+            'trentecinq': 35, 'quarantecinq': 45, 'cinquantetrois': 53,
+            'soixantedix': 70, 'quatrevingt': 80, 'quatrevingdix': 90
+        }
+        return number_map.get(written_number.lower())
+    
+    def _convert_number_to_entity_pattern(self, number_str: str) -> str:
+        """Convert a number string to entityNumber pattern digit-by-digit"""
+        # For each digit, create entityNumber
+        entity_parts = []
+        for char in number_str:
+            if char.isdigit():
+                entity_parts.append('entityNumber')
+            # Skip non-digit characters for now
+        
+        return ''.join(entity_parts)
+    
+    def _phase1_convert_numbers(self, text: str) -> Tuple[str, List[EntityMatch]]:
+        """Phase 1: Use the new digit-by-digit approach"""
+        return self._phase1_convert_numbers_digit_by_digit(text)
     
     def _phase2_database_pattern_matching(self, text: str, expected_entities: Optional[List[str]] = None) -> Tuple[str, List[EntityMatch]]:
         """Phase 2: Use database patterns to convert entityNumber to specific entities"""
@@ -555,7 +605,142 @@ async def adjust_transcription_endpoint(request: TranscriptionAdjustRequest):
         logger.error(f"Transcription adjustment failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/test-whisper-scenarios")
+@router.post("/test-digit-by-digit")
+async def test_digit_by_digit():
+    """Test the digit-by-digit number composition approach"""
+    test_cases = [
+        {
+            "scenario": "Year - 4 digits",
+            "input": "On est en 2025",
+            "expected_entities": ["entityDate"],
+            "phase1_expected": "on est en entityNumberentityNumberentityNumberentityNumber",
+            "final_expected": "on est en entityYear",
+            "explanation": "2025 becomes 4 entityNumbers, matches year pattern"
+        },
+        {
+            "scenario": "Price - 3 digits",
+            "input": "Ça coûte 150 euros",
+            "expected_entities": ["entityPrice"],
+            "phase1_expected": "ca coute entityNumberentityNumberentityNumber euros",
+            "final_expected": "ca coute entityPrice",
+            "explanation": "150 becomes 3 entityNumbers, matches price pattern"
+        },
+        {
+            "scenario": "Price - 2 digits", 
+            "input": "Ça coûte 75 euros",
+            "expected_entities": ["entityPrice"],
+            "phase1_expected": "ca coute entityNumberentityNumber euros",
+            "final_expected": "ca coute entityPrice",
+            "explanation": "75 becomes 2 entityNumbers, matches price pattern"
+        },
+        {
+            "scenario": "Age - 2 digits",
+            "input": "J'ai 35 ans",
+            "expected_entities": ["entityAge"],
+            "phase1_expected": "jai entityNumberentityNumber ans",
+            "final_expected": "jai entityAge",
+            "explanation": "35 becomes 2 entityNumbers, matches age pattern"
+        },
+        {
+            "scenario": "Time - 2 digits",
+            "input": "À 14h",
+            "expected_entities": ["entityTime"],
+            "phase1_expected": "a entityNumberentityNumber h",
+            "final_expected": "a entityTime",
+            "explanation": "14 becomes 2 entityNumbers, matches time pattern"
+        },
+        {
+            "scenario": "Written number conversion",
+            "input": "J'ai trente-cinq ans",
+            "expected_entities": ["entityAge"],
+            "phase1_expected": "jai entityNumberentityNumber ans",
+            "final_expected": "jai entityAge", 
+            "explanation": "trente-cinq -> trentecinq -> 35 -> entityNumberentityNumber"
+        },
+        {
+            "scenario": "Decimal price (special case)",
+            "input": "Ça coûte 12,50 euros",
+            "expected_entities": ["entityPrice"],
+            "phase1_expected": "ca coute entityNumber euros",
+            "final_expected": "ca coute entityPrice",
+            "explanation": "12.50 stays as single entityNumber (decimal)"
+        },
+        {
+            "scenario": "Mixed numbers",
+            "input": "J'ai 25 ans depuis 2020",
+            "expected_entities": ["entityAge", "entityYear"],
+            "phase1_expected": "jai entityNumberentityNumber ans depuis entityNumberentityNumberentityNumberentityNumber",
+            "final_expected": "jai entityAge depuis entityYear",
+            "explanation": "25 (2 digits) and 2020 (4 digits) get different patterns"
+        },
+        {
+            "scenario": "Single digit",
+            "input": "J'ai 5 ans",
+            "expected_entities": ["entityAge"],
+            "phase1_expected": "jai entityNumber ans",
+            "final_expected": "jai entityAge",
+            "explanation": "5 becomes single entityNumber, matches 1-digit age pattern"
+        }
+    ]
+    
+    results = []
+    for case in test_cases:
+        try:
+            request = TranscriptionAdjustRequest(
+                original_transcript=case["input"],
+                expected_entities=case["expected_entities"]
+            )
+            result = await adjust_transcription_endpoint(request)
+            
+            results.append({
+                "scenario": case["scenario"],
+                "input": case["input"],
+                "expected_entities": case["expected_entities"],
+                "phase0_result": result.phase0_result,
+                "phase1_result": result.phase1_result,
+                "phase1_expected": case["phase1_expected"],
+                "phase1_matches": result.phase1_result == case["phase1_expected"],
+                "final_result": result.adjusted_transcript,
+                "final_expected": case["final_expected"],
+                "final_matches": result.adjusted_transcript == case["final_expected"],
+                "explanation": case["explanation"],
+                "entities_found": [
+                    {
+                        "original": e.original_text,
+                        "replacement": e.entity_replacement,
+                        "type": e.entity_type,
+                        "phase": e.phase,
+                        "source": e.source
+                    } for e in result.entities_found
+                ],
+                "processing_time": result.processing_time_ms
+            })
+        except Exception as e:
+            results.append({
+                "scenario": case["scenario"],
+                "error": str(e)
+            })
+    
+    return {
+        "digit_by_digit_tests": results,
+        "summary": {
+            "total_tests": len(test_cases),
+            "phase1_successful": len([r for r in results if r.get("phase1_matches", False)]),
+            "final_successful": len([r for r in results if r.get("final_matches", False)]),
+            "approach_benefits": [
+                "Only need 0-99 numbers in database (100 entries vs 1000s)",
+                "Handles any number composition automatically",
+                "More flexible pattern matching",
+                "Easier to maintain and extend"
+            ],
+            "pattern_examples": {
+                "1_digit": "entityNumber (5, 8, 9)",
+                "2_digit": "entityNumberentityNumber (35, 75, 99)",
+                "3_digit": "entityNumberentityNumberentityNumber (150, 250, 999)",
+                "4_digit": "entityNumberentityNumberentityNumberentityNumber (2025, 1990)"
+            }
+        }
+    }
 async def test_whisper_scenarios():
     """Test common Whisper transcription scenarios including decimal handling"""
     whisper_test_cases = [
