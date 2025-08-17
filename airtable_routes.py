@@ -111,6 +111,23 @@ class InteractionAnswerEntry(BaseEntry):
             raise ValueError('Interaction ID and Answer ID cannot be empty')
         return v.strip()
 
+class EntityEntry(BaseEntry):
+    name: str
+    description: str
+    priority: int  # numeric type in your schema
+    
+    @validator('name')
+    def validate_name(cls, v):
+        if not v or len(v.strip()) == 0:
+            raise ValueError('Entity name cannot be empty')
+        return v.strip()
+    
+    @validator('priority')
+    def validate_priority(cls, v):
+        if v < 0 or v > 1000:  # Reasonable priority range
+            raise ValueError('Priority must be between 0 and 1000')
+        return v
+
 # Generic sync configuration
 SYNC_CONFIGS = {
     "answer": {
@@ -148,10 +165,28 @@ SYNC_CONFIGS = {
         "airtable_table": "Interaction-Answer",
         "columns": ["id", "interaction_id", "answer_id", "airtable_record_id",
                    "last_modified_time_ref", "created_at", "update_at", "live"]
+    },
+    "entity": {
+        "table_name": "brain_entity",
+        "airtable_table": "Entity",
+        "columns": ["id", "name", "description", "priority", 
+                   "created_at", "update_at", "airtable_record_id", 
+                   "last_modified_time_ref", "live"]
     }
 }
 
 # Utility functions
+def convert_timestamps(entry_data: Dict) -> Dict:
+    """Convert timestamp fields from milliseconds to datetime"""
+    result = entry_data.copy()
+    if 'createdAt' in result:
+        result['created_at'] = datetime.utcfromtimestamp(result.pop('createdAt') / 1000)
+    if 'lastModifiedTimeRef' in result:
+        timestamp = result.pop('lastModifiedTimeRef')
+        result['last_modified_time_ref'] = timestamp
+        result['update_at'] = datetime.utcfromtimestamp(timestamp / 1000)  # ✅ Now matches your schema
+    return result
+
 def convert_timestamps(entry_data: Dict) -> Dict:
     """Convert timestamp fields from milliseconds to datetime"""
     result = entry_data.copy()
@@ -312,6 +347,10 @@ async def webhook_sync_subtopic(entry: SubtopicEntry, background_tasks: Backgrou
 @router.post("/webhook-sync-interaction-answer")
 async def webhook_sync_interaction_answer(entry: InteractionAnswerEntry, background_tasks: BackgroundTasks):
     return await generic_sync_webhook(entry, "interaction_answer", background_tasks)
+
+@router.post("/webhook-sync-entity")
+async def webhook_sync_entity(entry: EntityEntry, background_tasks: BackgroundTasks):
+    return await generic_sync_webhook(entry, "entity", background_tasks)
 
 # Health check endpoint
 @router.get("/sync-health")
