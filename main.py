@@ -2,6 +2,8 @@ from fastapi import FastAPI, HTTPException, Header
 from match_routes import router as match_router
 from airtable_routes import router as airtable_router
 from data_access_routes import router as data_access_router
+# ADD THIS LINE - Import the new transcription router
+from transcription_adjustement_service import router as transcription_router
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Dict
@@ -14,7 +16,6 @@ from models import (
     GPTFallbackRequest,
     MatchResponse
 )
-from transcription_adjustement_service import router as transcription_router
 import aiohttp
 import asyncpg
 import openai
@@ -35,6 +36,89 @@ AIRTABLE_TOKEN = os.getenv("AIRTABLE_TOKEN")
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
 AIRTABLE_TABLE_NAME = os.getenv("AIRTABLE_TABLE_NAME")
 
+if not DATABASE_URL:
+    raise RuntimeError("Missing required environment variable: DATABASE_URL")
+if not OPENAI_API_KEY:
+    raise RuntimeError("Missing required environment variable: OPENAI_API_KEY")
+
+openai.api_key = OPENAI_API_KEY
+
+# -------------------------------
+# FastAPI App Setup
+# -------------------------------
+app = FastAPI(
+    title="TuJe French Learning API",
+    description="API for French conversation learning with transcription adjustment and answer matching",
+    version="1.0.0"
+)
+API_KEY = "tuje-secure-key"
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# -------------------------------
+# Airtable Update Helper
+# -------------------------------
+async def update_airtable_status(record_id: str, fields: dict):
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_NAME}/{record_id}"
+    headers = {
+        "Authorization": f"Bearer {AIRTABLE_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    async with aiohttp.ClientSession() as session:
+        async with session.patch(url, headers=headers, json={"fields": fields}) as resp:
+            if resp.status != 200:
+                text = await resp.text()
+                print(f"⚠️ Airtable update failed: {resp.status} {text}")
+            else:
+                print("✅ Airtable updated successfully.")
+
+# -------------------------------
+# Route Inclusion - ADD THE TRANSCRIPTION ROUTER
+# -------------------------------
+app.include_router(match_router)
+app.include_router(airtable_router)
+app.include_router(data_access_router)
+# ADD THIS LINE - Include the transcription adjustment router
+app.include_router(transcription_router, prefix="/api", tags=["transcription"])
+
+# -------------------------------
+# Root endpoint for testing
+# -------------------------------
+@app.get("/")
+async def root():
+    return {
+        "message": "TuJe API is running",
+        "version": "1.0.0",
+        "endpoints": {
+            "transcription_adjustment": "/api/adjust-transcription",
+            "match_answer": "/match-answer",
+            "health": "/sync-health"
+        }
+    }
+
+# -------------------------------
+# Health check endpoint
+# -------------------------------
+@app.get("/health")
+async def health_check():
+    return {
+        "status": "healthy",
+        "service": "TuJe API",
+        "database": "connected" if DATABASE_URL else "not configured"
+    }
+
+# -------------------------------
+# Run locally
+# -------------------------------
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=10000)
 if not DATABASE_URL:
     raise RuntimeError("Missing required environment variable: DATABASE_URL")
 if not OPENAI_API_KEY:
