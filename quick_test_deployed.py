@@ -5,7 +5,7 @@ import requests
 import json
 
 # Your Render URL (replace with your actual URL)
-API_URL = "https://your-app-name.onrender.com"  # ← Replace this with your actual Render URL
+API_URL = "https://tuje-analyze-api.onrender.com"  # ← Replace this with your actual Render URL
 
 def test_basic_endpoints():
     """Test basic endpoints are working"""
