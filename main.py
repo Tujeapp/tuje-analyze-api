@@ -14,6 +14,7 @@ from models import (
     GPTFallbackRequest,
     MatchResponse
 )
+from transcription_adjustement_service import router as transcription_router
 import aiohttp
 import asyncpg
 import openai
@@ -78,6 +79,7 @@ async def update_airtable_status(record_id: str, fields: dict):
 app.include_router(match_router)
 app.include_router(airtable_router)
 app.include_router(data_access_router)
+app.include_router(transcription_router, prefix="/api", tags=["transcription"])
 
 # -------------------------------
 # Root endpoint for testing
