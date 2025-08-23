@@ -38,7 +38,7 @@ class AdjustmentResult(BaseModel):
     adjusted_transcript: str
     list_of_vocabulary: List[VocabularyMatch]
     list_of_entities: List[EntityMatch]
-    processing_time_ms: int
+    processing_time_ms: float  # FIXED: Changed from int to float
 
 class TranscriptionAdjuster:
     def __init__(self):
@@ -280,10 +280,10 @@ class TranscriptionAdjuster:
         # Phase 2: Entity extraction
         final_transcript, vocab_matches, entity_matches = self._phase2_entity_extraction(normalized)
         
-        # Calculate processing time
-        processing_time = (datetime.now() - start_time).total_seconds() * 1000
+        # Calculate processing time - FIXED: Keep as float, round to 2 decimal places
+        processing_time = round((datetime.now() - start_time).total_seconds() * 1000, 2)
         
-        logger.info(f"Adjustment completed in {processing_time:.2f}ms")
+        logger.info(f"Adjustment completed in {processing_time}ms")
         logger.info(f"Original: '{original}'")
         logger.info(f"Pre-adjusted: '{pre_adjusted}'")
         logger.info(f"Final: '{final_transcript}'")
@@ -296,7 +296,7 @@ class TranscriptionAdjuster:
             adjusted_transcript=final_transcript,
             list_of_vocabulary=vocab_matches,
             list_of_entities=entity_matches,
-            processing_time_ms=round(processing_time, 2)
+            processing_time_ms=processing_time  # Now returns float
         )
 
 # Global adjuster instance
