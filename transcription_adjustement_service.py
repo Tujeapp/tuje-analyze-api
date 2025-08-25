@@ -84,11 +84,20 @@ class TranscriptionAdjuster:
                     ORDER BY LENGTH(transcription_adjusted) DESC
                 """)
                 
+                # Load all entities for Phase 3
+                entity_rows = await conn.fetch("""
+                    SELECT id, name
+                    FROM brain_entity
+                    WHERE live = TRUE
+                """)
+                
                 self.vocab_cache = {
                     'all_vocab': [],
-                    'entitynumber_patterns': []  # For subprocess
+                    'entitynumber_patterns': [],  # For subprocess
+                    'entities': {}  # NEW: Entity ID → name mapping
                 }
                 
+                # Process vocabulary
                 for row in rows:
                     vocab_entry = {
                         'id': row['id'],
@@ -102,8 +111,13 @@ class TranscriptionAdjuster:
                     if 'entitynumber' in str(row['transcription_fr'] or '').lower():
                         self.vocab_cache['entitynumber_patterns'].append(vocab_entry)
                 
+                # Process entities
+                for entity_row in entity_rows:
+                    self.vocab_cache['entities'][entity_row['id']] = entity_row['name']
+                
                 self.cache_loaded = True
                 logger.info(f"Loaded {len(self.vocab_cache['all_vocab'])} vocabulary entries")
+                logger.info(f"Loaded {len(self.vocab_cache['entities'])} entity definitions")
                 logger.info(f"Found {len(self.vocab_cache['entitynumber_patterns'])} entitynumber patterns for subprocess")
                     
         except Exception as e:
@@ -434,33 +448,53 @@ class TranscriptionAdjuster:
                     break
             
             if vocab_entry and vocab_entry.get('entity_type_id'):
-                entity_type_id = vocab_entry['entity_type_id']
-                logger.info(f"Found entity for vocab '{vocab_match.transcription_adjusted}': {entity_type_id}")
+                entity_type_id = vocab_entry['entity_type_id']  # This IS the entity ID!
+                logger.info(f"Found entity_type_id for vocab '{vocab_match.transcription_adjusted}': {entity_type_id}")
                 
-                # Replace the vocabulary text with the entity name (lowercase)
-                entity_name_lower = entity_type_id.lower()
+                # Get the actual entity name from cached entities using the entity_type_id
+                entity_name = self.vocab_cache.get('entities', {}).get(entity_type_id)
+                if entity_name:
+                    entity_name_lower = entity_name.lower()
+                    logger.info(f"Found entity name: {entity_name}")
+                else:
+                    # Fallback to entity_type_id if entity name not found in cache
+                    entity_name_lower = entity_type_id.lower()
+                    entity_name = entity_type_id
+                    logger.warning(f"Entity name not found for {entity_type_id}, using fallback")
                 
                 # Find and replace the exact vocabulary text in the completed transcript
                 old_text = vocab_match.transcription_adjusted
                 completed_transcript = completed_transcript.replace(old_text, entity_name_lower, 1)
                 
-                # Create entity match with proper ID
-                entity_id = f"ENTI{vocab_match.id[5:]}"  # Convert VOCAB202... to ENTI202...
-                
+                # FIXED: Use the actual entity_type_id as the entity ID
                 entity_matches.append(EntityMatch(
-                    id=entity_id,
-                    name=entity_type_id,
-                    value=old_text  # Keep the original vocabulary value
+                    id=entity_type_id,  # FIXED: Use entity_type_id directly (e.g., "ENTI202408081621")
+                    name=entity_name,   # Actual entity name from brain_entity table
+                    value=old_text      # Keep the original vocabulary value
                 ))
                 
                 logger.info(f"Replaced '{old_text}' with '{entity_name_lower}' in completed transcript")
+                logger.info(f"Created entity match: ID={entity_type_id}, name={entity_name}")
+            else:
+                logger.info(f"No entity found for vocab '{vocab_match.transcription_adjusted}' - keeping as is")
         
         # Sort entities by their appearance order (based on original position)
-        entity_matches.sort(key=lambda x: next(m['position'] for m in matches_with_positions 
-                                              if f"ENTI{m['vocab_match'].id[5:]}" == x.id))
+        if entity_matches:
+            # Create a mapping of entity_type_id to position for sorting
+            entity_id_to_position = {}
+            for match_data in matches_with_positions:
+                vocab_entry = None
+                for entry in self.vocab_cache.get('all_vocab', []):
+                    if entry['id'] == match_data['vocab_match'].id:
+                        vocab_entry = entry
+                        break
+                if vocab_entry and vocab_entry.get('entity_type_id'):
+                    entity_id_to_position[vocab_entry['entity_type_id']] = match_data['position']
+            
+            entity_matches.sort(key=lambda x: entity_id_to_position.get(x.id, 999))
         
         logger.info(f"Phase 3 result: '{adjusted_transcript}' → '{completed_transcript}'")
-        logger.info(f"Entities found: {[e.name for e in entity_matches]}")
+        logger.info(f"Entities found: {[(e.id, e.name) for e in entity_matches]}")
         
         return completed_transcript, entity_matches
     
