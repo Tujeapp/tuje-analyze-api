@@ -305,11 +305,13 @@ class TranscriptionAdjuster:
                     'word_count': len(normalized_adjusted.split())
                 })
         
-        # Step 3: Sort by word count (longer phrases first)
-        sorted_vocab = sorted(normalized_vocab, key=lambda x: x['word_count'], reverse=True)
+        # Step 3: Sort by word count (longer phrases first), then by length of text
+        sorted_vocab = sorted(normalized_vocab, 
+                             key=lambda x: (x['word_count'], len(x['normalized_adjusted'])), 
+                             reverse=True)
         
-        logger.info(f"Sorted vocabulary by length - top 5 entries:")
-        for i, entry in enumerate(sorted_vocab[:5]):
+        logger.info(f"Sorted vocabulary by priority - top 10 entries:")
+        for i, entry in enumerate(sorted_vocab[:10]):
             logger.info(f"  {i+1}. '{entry['normalized_adjusted']}' ({entry['word_count']} words)")
         
         # Step 4: Track which parts of the text have been matched
@@ -317,7 +319,7 @@ class TranscriptionAdjuster:
         matched_positions = [False] * len(input_words)
         final_transcript_parts = ['vocabnotfound'] * len(input_words)
         
-        # Step 5: Find matches, prioritizing longer phrases
+        # Step 5: Find matches using word boundaries to prevent partial matches
         for vocab_data in sorted_vocab:
             vocab_entry = vocab_data['original_entry']
             normalized_adjusted = vocab_data['normalized_adjusted']
@@ -325,18 +327,21 @@ class TranscriptionAdjuster:
             
             # Look for this vocabulary sequence in the normalized text
             for i in range(len(input_words) - len(vocab_words) + 1):
-                # Check if this span is already matched
-                if any(matched_positions[i:i+len(vocab_words)]):
-                    continue
+                # CRITICAL: Check if ANY part of this span is already matched
+                span_positions = list(range(i, i + len(vocab_words)))
+                if any(matched_positions[pos] for pos in span_positions):
+                    continue  # Skip this position - overlap detected
                 
-                # Check if words match exactly
-                text_segment = ' '.join(input_words[i:i+len(vocab_words)])
+                # Check if words match exactly (word-by-word comparison)
+                text_segment_words = input_words[i:i+len(vocab_words)]
                 
-                if text_segment == normalized_adjusted:
-                    logger.info(f"MATCH FOUND: '{text_segment}' matches vocab '{normalized_adjusted}'")
+                # Must match exactly word for word
+                if text_segment_words == vocab_words:
+                    text_segment = ' '.join(text_segment_words)
+                    logger.info(f"MATCH FOUND: '{text_segment}' matches vocab '{normalized_adjusted}' at positions {span_positions}")
                     
-                    # Mark positions as matched
-                    for j in range(i, i + len(vocab_words)):
+                    # Mark ALL positions in this span as matched
+                    for j in span_positions:
                         matched_positions[j] = True
                         # Use the original transcription_adjusted for the final transcript
                         final_transcript_parts[j] = vocab_entry['transcription_adjusted'] if j == i else None
@@ -355,6 +360,7 @@ class TranscriptionAdjuster:
                             value=vocab_entry['transcription_adjusted']
                         ))
                     
+                    # IMPORTANT: Break after first match to avoid multiple matches of the same phrase
                     break
         
         # Step 6: Build final transcript
@@ -362,7 +368,7 @@ class TranscriptionAdjuster:
         final_transcript = ' '.join(final_parts)
         
         logger.info(f"Phase 2 matching summary:")
-        logger.info(f"  Input: '{normalized_text}'")
+        logger.info(f"  Input words: {input_words}")
         logger.info(f"  Matched positions: {matched_positions}")
         logger.info(f"  Final parts: {final_parts}")
         logger.info(f"  Final transcript: '{final_transcript}'")
