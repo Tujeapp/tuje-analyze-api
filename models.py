@@ -17,24 +17,20 @@ class VocabEntry(BaseModel):
     transcriptionFr: str
     transcriptionEn: str
     transcriptionAdjusted: str
-    entityTypeId: Optional[str] = None  # NEW: Added entity type support
+    entityTypeId: Optional[str] = None  # Simple text from lookup column
     airtableRecordId: str
     lastModifiedTimeRef: int
     createdAt: int
     live: bool = True
     
     @validator('entityTypeId')
-    def validate_entity_type_id(cls, v):
-        # Allow None/empty for vocab without entity types
-        if v is not None and isinstance(v, str):
-            v = v.strip()
+    def clean_entity_type_id(cls, v):
+        # Simple cleanup - just strip whitespace and handle empty strings
+        if v is not None:
+            v = str(v).strip()
             if len(v) == 0:
                 return None
         return v
-    
-    class Config:
-        # Allow field name variations
-        allow_population_by_field_name = True
 
 
 # -------------------------------
