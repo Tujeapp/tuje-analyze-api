@@ -425,7 +425,7 @@ class TranscriptionAdjuster:
         logger.info(f"  Vocabulary matches: {len(vocabulary_matches)}")
         logger.info(f"  Entity matches: {len(entity_list)}")
         
-        return final_transcript, vocabulary_matches, entity_list, completed_transcript
+        return final_transcript, vocabulary_matches, entity_list, completed_transcript, matches_with_positions
     
     def _phase3_entity_replacement(self, adjusted_transcript: str, matches_with_positions: List[Dict], pre_adjusted_transcript: str) -> Tuple[str, List[EntityMatch]]:
         """Phase 3: Replace vocabulary entries with entity names to create completed transcript"""
