@@ -310,14 +310,18 @@ class TranscriptionAdjuster:
                              key=lambda x: (x['word_count'], len(x['normalized_adjusted'])), 
                              reverse=True)
         
-        logger.info(f"Sorted vocabulary by priority - top 10 entries:")
-        for i, entry in enumerate(sorted_vocab[:10]):
-            logger.info(f"  {i+1}. '{entry['normalized_adjusted']}' ({entry['word_count']} words)")
+        logger.info(f"Sorted vocabulary by priority - entries containing 'jai' or 'ai':")
+        for entry in sorted_vocab:
+            if 'jai' in entry['normalized_adjusted'] or 'ai' in entry['normalized_adjusted']:
+                logger.info(f"  - '{entry['normalized_adjusted']}' ({entry['word_count']} words) ID: {entry['original_entry']['id']}")
         
         # Step 4: Track which parts of the text have been matched
         input_words = normalized_text.split()
         matched_positions = [False] * len(input_words)
         final_transcript_parts = ['vocabnotfound'] * len(input_words)
+        
+        logger.info(f"Input words to match: {input_words}")
+        logger.info(f"Initial matched positions: {matched_positions}")
         
         # Step 5: Find matches using word boundaries to prevent partial matches
         for vocab_data in sorted_vocab:
@@ -325,15 +329,25 @@ class TranscriptionAdjuster:
             normalized_adjusted = vocab_data['normalized_adjusted']
             vocab_words = normalized_adjusted.split()
             
+            # DEBUG: Log attempts for jai/ai entries
+            if 'jai' in normalized_adjusted or 'ai' in normalized_adjusted:
+                logger.info(f"TRYING TO MATCH: '{normalized_adjusted}' (words: {vocab_words})")
+            
             # Look for this vocabulary sequence in the normalized text
             for i in range(len(input_words) - len(vocab_words) + 1):
                 # CRITICAL: Check if ANY part of this span is already matched
                 span_positions = list(range(i, i + len(vocab_words)))
                 if any(matched_positions[pos] for pos in span_positions):
+                    if 'jai' in normalized_adjusted or 'ai' in normalized_adjusted:
+                        logger.info(f"  SKIPPED: positions {span_positions} already matched")
                     continue  # Skip this position - overlap detected
                 
                 # Check if words match exactly (word-by-word comparison)
                 text_segment_words = input_words[i:i+len(vocab_words)]
+                
+                # DEBUG: Log comparison for jai/ai entries
+                if 'jai' in normalized_adjusted or 'ai' in normalized_adjusted:
+                    logger.info(f"  COMPARING: {text_segment_words} vs {vocab_words}")
                 
                 # Must match exactly word for word
                 if text_segment_words == vocab_words:
@@ -345,6 +359,9 @@ class TranscriptionAdjuster:
                         matched_positions[j] = True
                         # Use the original transcription_adjusted for the final transcript
                         final_transcript_parts[j] = vocab_entry['transcription_adjusted'] if j == i else None
+                    
+                    logger.info(f"Updated matched positions: {matched_positions}")
+                    logger.info(f"Updated final parts: {final_transcript_parts}")
                     
                     vocabulary_matches.append(VocabularyMatch(
                         id=vocab_entry['id'],
@@ -369,8 +386,8 @@ class TranscriptionAdjuster:
         
         logger.info(f"Phase 2 matching summary:")
         logger.info(f"  Input words: {input_words}")
-        logger.info(f"  Matched positions: {matched_positions}")
-        logger.info(f"  Final parts: {final_parts}")
+        logger.info(f"  Final matched positions: {matched_positions}")
+        logger.info(f"  Final parts before joining: {final_parts}")
         logger.info(f"  Final transcript: '{final_transcript}'")
         logger.info(f"  Vocabulary matches: {len(vocabulary_matches)}")
         
