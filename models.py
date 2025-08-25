@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, validator
 from typing import List, Optional, Dict
 
 # -------------------------------
@@ -17,8 +17,24 @@ class VocabEntry(BaseModel):
     transcriptionFr: str
     transcriptionEn: str
     transcriptionAdjusted: str
+    entityTypeId: Optional[str] = None  # NEW: Added entity type support
     airtableRecordId: str
     lastModifiedTimeRef: int
+    createdAt: int
+    live: bool = True
+    
+    @validator('entityTypeId')
+    def validate_entity_type_id(cls, v):
+        # Allow None/empty for vocab without entity types
+        if v is not None and isinstance(v, str):
+            v = v.strip()
+            if len(v) == 0:
+                return None
+        return v
+    
+    class Config:
+        # Allow field name variations
+        allow_population_by_field_name = True
 
 
 # -------------------------------
