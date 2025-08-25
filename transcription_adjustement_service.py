@@ -121,17 +121,19 @@ class TranscriptionAdjuster:
         # Convert to lowercase
         text = text.lower()
         
-        # Handle French contractions
+        # Handle French contractions - FIXED: Don't add extra spaces
         contractions = {
-            r"\bj'": "jai ",
-            r"\bd'": "de ",
-            r"\bl'": "le ",
-            r"\bc'": "ce ",
-            r"\bqu'": "que ",
-            r"\bn'": "ne ",
-            r"\bt'": "te ",
-            r"\bs'": "se ",
-            r"\bm'": "me "
+            r"\bj'ai\b": "jai",      # FIXED: j'ai → jai (no space)
+            r"\bj'": "jai ",         # j'aime → jai aime
+            r"\bd'": "de ",          # d'accord → de accord  
+            r"\bl'": "le ",          # l'école → le ecole
+            r"\bc'est\b": "cest",    # c'est → cest (no space)
+            r"\bc'": "ce ",          # c'était → ce etait
+            r"\bqu'": "que ",        # qu'est → que est
+            r"\bn'": "ne ",          # n'est → ne est
+            r"\bt'": "te ",          # t'aime → te aime
+            r"\bs'": "se ",          # s'appelle → se appelle
+            r"\bm'": "me "           # m'appelle → me appelle
         }
         
         for pattern, replacement in contractions.items():
