@@ -274,41 +274,72 @@ class TranscriptionAdjuster:
         vocabulary_matches = []
         entity_matches = []
         
-        # Get all vocabulary entries, sorted by length (longest first)
+        logger.info(f"Phase 2 input: '{text}'")
+        
+        # Step 1: Normalize the input text (lowercase, remove accents/symbols)
+        normalized_text = self._normalize_basic(text)
+        # Remove punctuation except spaces
+        normalized_text = re.sub(r'[^\w\s]', ' ', normalized_text)
+        # Normalize whitespace
+        normalized_text = re.sub(r'\s+', ' ', normalized_text).strip()
+        
+        logger.info(f"Phase 2 normalized input: '{normalized_text}'")
+        
+        # Step 2: Get all vocabulary entries and normalize their transcription_adjusted
         all_vocab = self.vocab_cache.get('all_vocab', [])
-        sorted_vocab = sorted(all_vocab, 
-                            key=lambda x: len(x['transcription_adjusted'].split()) if x['transcription_adjusted'] else 0, 
-                            reverse=True)
+        normalized_vocab = []
         
-        # Track which parts of the text have been matched
-        words = text.split()
-        matched_positions = [False] * len(words)
-        final_transcript_parts = ['vocabnotfound'] * len(words)
-        
-        # Find matches, prioritizing longer phrases
-        for vocab_entry in sorted_vocab:
+        for vocab_entry in all_vocab:
             if not vocab_entry.get('transcription_adjusted'):
                 continue
                 
-            vocab_text = vocab_entry['transcription_adjusted'].strip()
-            if not vocab_text:
-                continue
-                
-            vocab_words = vocab_text.split()
+            # Normalize the transcription_adjusted for comparison
+            normalized_adjusted = self._normalize_basic(vocab_entry['transcription_adjusted'])
+            normalized_adjusted = re.sub(r'[^\w\s]', ' ', normalized_adjusted)
+            normalized_adjusted = re.sub(r'\s+', ' ', normalized_adjusted).strip()
             
-            # Look for this vocabulary sequence in the text
-            for i in range(len(words) - len(vocab_words) + 1):
+            if normalized_adjusted:  # Only keep non-empty entries
+                normalized_vocab.append({
+                    'original_entry': vocab_entry,
+                    'normalized_adjusted': normalized_adjusted,
+                    'word_count': len(normalized_adjusted.split())
+                })
+        
+        # Step 3: Sort by word count (longer phrases first)
+        sorted_vocab = sorted(normalized_vocab, key=lambda x: x['word_count'], reverse=True)
+        
+        logger.info(f"Sorted vocabulary by length - top 5 entries:")
+        for i, entry in enumerate(sorted_vocab[:5]):
+            logger.info(f"  {i+1}. '{entry['normalized_adjusted']}' ({entry['word_count']} words)")
+        
+        # Step 4: Track which parts of the text have been matched
+        input_words = normalized_text.split()
+        matched_positions = [False] * len(input_words)
+        final_transcript_parts = ['vocabnotfound'] * len(input_words)
+        
+        # Step 5: Find matches, prioritizing longer phrases
+        for vocab_data in sorted_vocab:
+            vocab_entry = vocab_data['original_entry']
+            normalized_adjusted = vocab_data['normalized_adjusted']
+            vocab_words = normalized_adjusted.split()
+            
+            # Look for this vocabulary sequence in the normalized text
+            for i in range(len(input_words) - len(vocab_words) + 1):
                 # Check if this span is already matched
                 if any(matched_positions[i:i+len(vocab_words)]):
                     continue
                 
-                # Check if words match
-                text_segment = ' '.join(words[i:i+len(vocab_words)])
-                if text_segment.lower() == vocab_text.lower():
+                # Check if words match exactly
+                text_segment = ' '.join(input_words[i:i+len(vocab_words)])
+                
+                if text_segment == normalized_adjusted:
+                    logger.info(f"MATCH FOUND: '{text_segment}' matches vocab '{normalized_adjusted}'")
+                    
                     # Mark positions as matched
                     for j in range(i, i + len(vocab_words)):
                         matched_positions[j] = True
-                        final_transcript_parts[j] = vocab_text if j == i else None
+                        # Use the original transcription_adjusted for the final transcript
+                        final_transcript_parts[j] = vocab_entry['transcription_adjusted'] if j == i else None
                     
                     vocabulary_matches.append(VocabularyMatch(
                         id=vocab_entry['id'],
@@ -324,14 +355,19 @@ class TranscriptionAdjuster:
                             value=vocab_entry['transcription_adjusted']
                         ))
                     
-                    logger.info(f"Matched vocabulary: '{text_segment}' → '{vocab_text}' (ID: {vocab_entry['id']})")
                     break
         
-        # Build final transcript
+        # Step 6: Build final transcript
         final_parts = [part for part in final_transcript_parts if part is not None]
         final_transcript = ' '.join(final_parts)
         
-        logger.info(f"Phase 2 result: '{text}' → '{final_transcript}'")
+        logger.info(f"Phase 2 matching summary:")
+        logger.info(f"  Input: '{normalized_text}'")
+        logger.info(f"  Matched positions: {matched_positions}")
+        logger.info(f"  Final parts: {final_parts}")
+        logger.info(f"  Final transcript: '{final_transcript}'")
+        logger.info(f"  Vocabulary matches: {len(vocabulary_matches)}")
+        
         return final_transcript, vocabulary_matches, entity_matches
     
     async def adjust_transcription(self, request: TranscriptionAdjustRequest, pool: asyncpg.Pool) -> AdjustmentResult:
