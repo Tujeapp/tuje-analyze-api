@@ -148,7 +148,7 @@ SYNC_CONFIGS = {
         "columns": ["id", "transcription_fr", "transcription_en", "transcription_adjusted",
                    "entity_type_id", "airtable_record_id", "last_modified_time_ref", 
                    "created_at", "update_at", "live"]
-    }
+    },
     "intent": {
         "table_name": "brain_intent",
         "airtable_table": "Intent",
