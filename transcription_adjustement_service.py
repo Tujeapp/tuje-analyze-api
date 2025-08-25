@@ -411,6 +411,59 @@ class TranscriptionAdjuster:
         
         return final_transcript, vocabulary_matches, entity_list, completed_transcript
     
+    def _phase3_entity_replacement(self, adjusted_transcript: str, matches_with_positions: List[Dict]) -> Tuple[str, List[EntityMatch]]:
+        """Phase 3: Replace vocabulary entries with entity names to create completed transcript"""
+        logger.info(f"Phase 3 input: '{adjusted_transcript}'")
+        
+        # Start with the adjusted transcript
+        completed_transcript = adjusted_transcript
+        entity_matches = []
+        
+        # Process matches in reverse order to maintain string positions when replacing
+        sorted_matches = sorted(matches_with_positions, key=lambda x: x['position'], reverse=True)
+        
+        for match_data in sorted_matches:
+            vocab_match = match_data['vocab_match']
+            position = match_data['position']
+            
+            # Check if this vocabulary entry has an entity_type_id
+            vocab_entry = None
+            for entry in self.vocab_cache.get('all_vocab', []):
+                if entry['id'] == vocab_match.id:
+                    vocab_entry = entry
+                    break
+            
+            if vocab_entry and vocab_entry.get('entity_type_id'):
+                entity_type_id = vocab_entry['entity_type_id']
+                logger.info(f"Found entity for vocab '{vocab_match.transcription_adjusted}': {entity_type_id}")
+                
+                # Replace the vocabulary text with the entity name (lowercase)
+                entity_name_lower = entity_type_id.lower()
+                
+                # Find and replace the exact vocabulary text in the completed transcript
+                old_text = vocab_match.transcription_adjusted
+                completed_transcript = completed_transcript.replace(old_text, entity_name_lower, 1)
+                
+                # Create entity match with proper ID
+                entity_id = f"ENTI{vocab_match.id[5:]}"  # Convert VOCAB202... to ENTI202...
+                
+                entity_matches.append(EntityMatch(
+                    id=entity_id,
+                    name=entity_type_id,
+                    value=old_text  # Keep the original vocabulary value
+                ))
+                
+                logger.info(f"Replaced '{old_text}' with '{entity_name_lower}' in completed transcript")
+        
+        # Sort entities by their appearance order (based on original position)
+        entity_matches.sort(key=lambda x: next(m['position'] for m in matches_with_positions 
+                                              if f"ENTI{m['vocab_match'].id[5:]}" == x.id))
+        
+        logger.info(f"Phase 3 result: '{adjusted_transcript}' → '{completed_transcript}'")
+        logger.info(f"Entities found: {[e.name for e in entity_matches]}")
+        
+        return completed_transcript, entity_matches
+    
     async def adjust_transcription(self, request: TranscriptionAdjustRequest, pool: asyncpg.Pool) -> AdjustmentResult:
         """Main adjustment function following the 4-phase process"""
         start_time = datetime.now()
