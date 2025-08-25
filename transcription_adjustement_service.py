@@ -36,6 +36,7 @@ class AdjustmentResult(BaseModel):
     original_transcript: str
     pre_adjusted_transcript: str
     adjusted_transcript: str
+    completed_transcript: str  # NEW: Phase 3 result
     list_of_vocabulary: List[VocabularyMatch]
     list_of_entities: List[EntityMatch]
     processing_time_ms: float
@@ -396,14 +397,19 @@ class TranscriptionAdjuster:
         final_parts = [part for part in final_transcript_parts if part is not None]
         final_transcript = ' '.join(final_parts)
         
+        # Step 9: Phase 3 - Build completed transcript with entity replacements
+        completed_transcript, entity_list = self._phase3_entity_replacement(final_transcript, matches_with_positions)
+        
         logger.info(f"Phase 2 matching summary:")
         logger.info(f"  Input words: {input_words}")
         logger.info(f"  Final matched positions: {matched_positions}")
         logger.info(f"  Final parts before joining: {final_parts}")
         logger.info(f"  Final transcript: '{final_transcript}'")
+        logger.info(f"  Completed transcript: '{completed_transcript}'")
         logger.info(f"  Vocabulary matches: {len(vocabulary_matches)}")
+        logger.info(f"  Entity matches: {len(entity_list)}")
         
-        return final_transcript, vocabulary_matches, entity_matches
+        return final_transcript, vocabulary_matches, entity_list, completed_transcript
     
     async def adjust_transcription(self, request: TranscriptionAdjustRequest, pool: asyncpg.Pool) -> AdjustmentResult:
         """Main adjustment function following the 4-phase process"""
@@ -425,7 +431,7 @@ class TranscriptionAdjuster:
         normalized = self._phase1_normalization(pre_adjusted)
         
         # Phase 2: Entity extraction
-        final_transcript, vocab_matches, entity_matches = self._phase2_entity_extraction(normalized)
+        final_transcript, vocab_matches, entity_matches, completed_transcript = self._phase2_entity_extraction(normalized)
         
         # Calculate processing time
         processing_time = round((datetime.now() - start_time).total_seconds() * 1000, 2)
@@ -437,6 +443,7 @@ class TranscriptionAdjuster:
             original_transcript=original,
             pre_adjusted_transcript=pre_adjusted,
             adjusted_transcript=final_transcript,
+            completed_transcript=completed_transcript,  # NEW: Phase 3 result
             list_of_vocabulary=vocab_matches,
             list_of_entities=entity_matches,
             processing_time_ms=processing_time
