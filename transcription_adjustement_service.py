@@ -326,6 +326,8 @@ class TranscriptionAdjuster:
         logger.info(f"Initial matched positions: {matched_positions}")
         
         # Step 5: Find matches using word boundaries to prevent partial matches
+        matches_with_positions = []  # Store matches with their positions
+        
         for vocab_data in sorted_vocab:
             vocab_entry = vocab_data['original_entry']
             normalized_adjusted = vocab_data['normalized_adjusted']
@@ -365,24 +367,32 @@ class TranscriptionAdjuster:
                     logger.info(f"Updated matched positions: {matched_positions}")
                     logger.info(f"Updated final parts: {final_transcript_parts}")
                     
-                    vocabulary_matches.append(VocabularyMatch(
-                        id=vocab_entry['id'],
-                        transcription_fr=vocab_entry['transcription_fr'],
-                        transcription_adjusted=vocab_entry['transcription_adjusted']
-                    ))
-                    
-                    # Add entity if it has one
-                    if vocab_entry.get('entity_type_id'):
-                        entity_matches.append(EntityMatch(
+                    # Store match with position for later sorting
+                    matches_with_positions.append({
+                        'position': i,
+                        'vocab_match': VocabularyMatch(
+                            id=vocab_entry['id'],
+                            transcription_fr=vocab_entry['transcription_fr'],
+                            transcription_adjusted=vocab_entry['transcription_adjusted']
+                        ),
+                        'entity_match': EntityMatch(
                             id=f"ENTI{vocab_entry['id'][4:]}",  # Convert VOCAB to ENTI
                             name=vocab_entry['entity_type_id'],
                             value=vocab_entry['transcription_adjusted']
-                        ))
+                        ) if vocab_entry.get('entity_type_id') else None
+                    })
                     
                     # IMPORTANT: Break after first match to avoid multiple matches of the same phrase
                     break
         
-        # Step 6: Build final transcript
+        # Step 6: Sort matches by position in transcript (left to right)
+        matches_with_positions.sort(key=lambda x: x['position'])
+        
+        # Step 7: Extract sorted vocabulary and entity matches
+        vocabulary_matches = [match['vocab_match'] for match in matches_with_positions]
+        entity_matches = [match['entity_match'] for match in matches_with_positions if match['entity_match']]
+        
+        # Step 8: Build final transcript
         final_parts = [part for part in final_transcript_parts if part is not None]
         final_transcript = ' '.join(final_parts)
         
