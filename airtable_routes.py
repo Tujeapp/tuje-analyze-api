@@ -146,6 +146,7 @@ SYNC_CONFIGS = {
         "table_name": "brain_vocab",
         "airtable_table": "Vocab",
         "columns": ["id", "transcription_fr", "transcription_en", "transcription_adjusted",
+                   "entity_type_id",  # NEW: Added entity_type_id column
                    "airtable_record_id", "last_modified_time_ref", "created_at", "update_at", "live"]
     },
     "intent": {
@@ -207,6 +208,7 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "transcriptionFr": "transcription_fr",
         "transcriptionEn": "transcription_en", 
         "transcriptionAdjusted": "transcription_adjusted",
+        "entityTypeId": "entity_type_id",  # NEW: Added entity type mapping
         "airtableRecordId": "airtable_record_id",
         "nameFr": "name_fr",
         "nameEn": "name_en",
