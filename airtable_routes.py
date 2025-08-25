@@ -146,9 +146,9 @@ SYNC_CONFIGS = {
         "table_name": "brain_vocab",
         "airtable_table": "Vocab",
         "columns": ["id", "transcription_fr", "transcription_en", "transcription_adjusted",
-                   "entity_type_id",  # NEW: Added entity_type_id column
-                   "airtable_record_id", "last_modified_time_ref", "created_at", "update_at", "live"]
-    },
+                   "entity_type_id", "airtable_record_id", "last_modified_time_ref", 
+                   "created_at", "update_at", "live"]
+    }
     "intent": {
         "table_name": "brain_intent",
         "airtable_table": "Intent",
