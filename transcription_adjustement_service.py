@@ -412,9 +412,7 @@ class TranscriptionAdjuster:
         final_transcript = ' '.join(final_parts)
         
         # Step 9: Phase 3 - Build completed transcript with entity replacements
-        completed_transcript, entity_list = self._phase3_entity_replacement(
-            final_transcript, matches_with_positions, original
-        )
+        completed_transcript, entity_list = self._phase3_entity_replacement(final_transcript, matches_with_positions)
         
         logger.info(f"Phase 2 matching summary:")
         logger.info(f"  Input words: {input_words}")
@@ -425,12 +423,11 @@ class TranscriptionAdjuster:
         logger.info(f"  Vocabulary matches: {len(vocabulary_matches)}")
         logger.info(f"  Entity matches: {len(entity_list)}")
         
-        return final_transcript, vocabulary_matches, entity_list, completed_transcript, matches_with_positions
+        return final_transcript, vocabulary_matches, entity_list, completed_transcript
     
-    def _phase3_entity_replacement(self, adjusted_transcript: str, matches_with_positions: List[Dict], pre_adjusted_transcript: str) -> Tuple[str, List[EntityMatch]]:
+    def _phase3_entity_replacement(self, adjusted_transcript: str, matches_with_positions: List[Dict]) -> Tuple[str, List[EntityMatch]]:
         """Phase 3: Replace vocabulary entries with entity names to create completed transcript"""
         logger.info(f"Phase 3 input: '{adjusted_transcript}'")
-        logger.info(f"Original transcript reference: '{pre_adjusted_transcript}'")
         
         # Start with the adjusted transcript
         completed_transcript = adjusted_transcript
@@ -451,7 +448,7 @@ class TranscriptionAdjuster:
                     break
             
             if vocab_entry and vocab_entry.get('entity_type_id'):
-                entity_type_id = vocab_entry['entity_type_id']
+                entity_type_id = vocab_entry['entity_type_id']  # This IS the entity ID!
                 logger.info(f"Found entity_type_id for vocab '{vocab_match.transcription_adjusted}': {entity_type_id}")
                 
                 # Get the actual entity name from cached entities using the entity_type_id
@@ -469,20 +466,15 @@ class TranscriptionAdjuster:
                 old_text = vocab_match.transcription_adjusted
                 completed_transcript = completed_transcript.replace(old_text, entity_name_lower, 1)
                 
-                # FIXED: Get the original text from pre-adjusted transcript
-                original_value = self._get_original_value_for_entity(
-                    vocab_match, pre_adjusted_transcript, old_text
-                )
-                
-                # Use the actual entity_type_id as the entity ID
+                # FIXED: Use the actual entity_type_id as the entity ID
                 entity_matches.append(EntityMatch(
-                    id=entity_type_id,  # Use entity_type_id directly (e.g., "ENTI202408081621")
+                    id=entity_type_id,  # FIXED: Use entity_type_id directly (e.g., "ENTI202408081621")
                     name=entity_name,   # Actual entity name from brain_entity table
-                    value=original_value  # FIXED: Original text from pre-adjusted transcript
+                    value=old_text      # Keep the original vocabulary value
                 ))
                 
                 logger.info(f"Replaced '{old_text}' with '{entity_name_lower}' in completed transcript")
-                logger.info(f"Created entity match: ID={entity_type_id}, name={entity_name}, value='{original_value}'")
+                logger.info(f"Created entity match: ID={entity_type_id}, name={entity_name}")
             else:
                 logger.info(f"No entity found for vocab '{vocab_match.transcription_adjusted}' - keeping as is")
         
@@ -502,53 +494,9 @@ class TranscriptionAdjuster:
             entity_matches.sort(key=lambda x: entity_id_to_position.get(x.id, 999))
         
         logger.info(f"Phase 3 result: '{adjusted_transcript}' → '{completed_transcript}'")
-        logger.info(f"Entities found: {[(e.id, e.name, e.value) for e in entity_matches]}")
+        logger.info(f"Entities found: {[(e.id, e.name) for e in entity_matches]}")
         
         return completed_transcript, entity_matches
-    
-    def _get_original_value_for_entity(self, vocab_match: VocabularyMatch, original_transcript: str, adjusted_value: str) -> str:
-        """Extract the original text from original transcript for entity value"""
-        
-        # If the vocabulary transcription_fr contains "entityNumber", 
-        # we need to find the original number words in the original transcript
-        if "entityNumber" in vocab_match.transcription_fr:
-            # This is a pattern like "entityNumber ans" 
-            # We need to find what the original words were before any processing
-            
-            # Get the pattern parts (e.g., "entityNumber ans" → ["entityNumber", "ans"])
-            pattern_parts = vocab_match.transcription_fr.split()
-            
-            if len(pattern_parts) >= 2 and pattern_parts[0] == "entityNumber":
-                # Look for the pattern in original transcript
-                # e.g., find "vingt ans" where "ans" matches the second part
-                
-                # Normalize the original transcript for searching
-                normalized_original = self._normalize_basic(original_transcript)
-                normalized_original = re.sub(r'[^\w\s]', ' ', normalized_original)
-                normalized_original = re.sub(r'\s+', ' ', normalized_original).strip()
-                
-                words = normalized_original.split()
-                remaining_pattern = [part.lower() for part in pattern_parts[1:]]  # ["ans"]
-                
-                # Find segments that end with the pattern
-                for i in range(len(words) - len(remaining_pattern)):
-                    # Check if this segment ends with our pattern
-                    segment_end = words[i + 1:i + 1 + len(remaining_pattern)]
-                    if [word.lower() for word in segment_end] == remaining_pattern:
-                        # Found a match! The number word should be at position i
-                        number_word = words[i]
-                        full_segment = [number_word] + segment_end
-                        original_segment = " ".join(full_segment)
-                        logger.info(f"Found original value: '{original_segment}' for pattern '{vocab_match.transcription_fr}'")
-                        return original_segment
-            
-            # If pattern matching fails, try to extract just the number part
-            logger.warning(f"Could not find original pattern for '{vocab_match.transcription_fr}', using fallback")
-            return vocab_match.transcription_fr.replace("entityNumber", "[number]")
-        
-        else:
-            # For non-entityNumber vocabulary, return the original transcription_fr
-            return vocab_match.transcription_fr
     
     async def adjust_transcription(self, request: TranscriptionAdjustRequest, pool: asyncpg.Pool) -> AdjustmentResult:
         """Main adjustment function following the 4-phase process"""
