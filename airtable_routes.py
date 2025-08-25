@@ -92,6 +92,16 @@ class VocabEntry(BaseEntry):
     transcriptionFr: str
     transcriptionEn: str
     transcriptionAdjusted: str
+    entityTypeId: Optional[str] = None  # ← ADD THIS LINE
+    
+    @validator('entityTypeId')
+    def clean_entity_type_id(cls, v):
+        """Clean entity type ID - handle empty strings"""
+        if v is not None:
+            v = str(v).strip()
+            if len(v) == 0:
+                return None
+        return v
 
 class IntentEntry(BaseEntry):
     name: str
@@ -146,7 +156,8 @@ SYNC_CONFIGS = {
         "table_name": "brain_vocab",
         "airtable_table": "Vocab",
         "columns": ["id", "transcription_fr", "transcription_en", "transcription_adjusted",
-                   "entity_type_id", "airtable_record_id", "last_modified_time_ref", 
+                   "entity_type_id",  # ← ADD THIS LINE
+                   "airtable_record_id", "last_modified_time_ref", 
                    "created_at", "update_at", "live"]
     },
     "intent": {
@@ -208,7 +219,7 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "transcriptionFr": "transcription_fr",
         "transcriptionEn": "transcription_en", 
         "transcriptionAdjusted": "transcription_adjusted",
-        "entityTypeId": "entity_type_id",  # NEW: Added entity type mapping
+        "entityTypeId": "entity_type_id",  # ← ADD THIS LINE
         "airtableRecordId": "airtable_record_id",
         "nameFr": "name_fr",
         "nameEn": "name_en",
