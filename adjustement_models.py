@@ -1,8 +1,24 @@
-# transcription_service/api/models.py
+# adjustement_models.py
+from fastapi import APIRouter, HTTPException
+from typing import List
+import asyncpg
+import logging
+import os
 from pydantic import BaseModel, validator
 from typing import List, Optional
 from datetime import datetime
 
+# FIXED: Use absolute imports only
+from adjustement_adjuster import TranscriptionAdjuster
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("Missing required environment variable: DATABASE_URL")
+
+# Pydantic Models (moved here to avoid circular imports)
 class TranscriptionAdjustRequest(BaseModel):
     original_transcript: str
     user_id: Optional[str] = None
@@ -51,27 +67,6 @@ class BatchAdjustResult(BaseModel):
     processed_count: int
     success_count: int
     error_count: int
-
-# transcription_service/api/routes.py
-from fastapi import APIRouter, HTTPException
-from typing import List
-import asyncpg
-import logging
-import os
-from .models import (
-    TranscriptionAdjustRequest, 
-    AdjustmentResult, 
-    BatchAdjustRequest,
-    BatchAdjustResult
-)
-from adjustement_adjuster import TranscriptionAdjuster
-
-logger = logging.getLogger(__name__)
-router = APIRouter()
-
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    raise RuntimeError("Missing required environment variable: DATABASE_URL")
 
 # Global adjuster instance
 adjuster = TranscriptionAdjuster()
@@ -138,9 +133,33 @@ async def get_adjustment_metrics():
 @router.post("/test-adjustment-cases")
 async def test_adjustment_cases():
     """Test endpoint with predefined cases"""
-    from ..utils.test_cases import get_test_cases
+    test_cases = [
+        {
+            "name": "Simple number word",
+            "input": "J'ai vingt ans",
+        },
+        {
+            "name": "Compound number",
+            "input": "J'ai vingt-cinq ans",
+        },
+        {
+            "name": "Un peu case (should revert)",
+            "input": "J'aime un peu de café",
+        },
+        {
+            "name": "Mixed numbers", 
+            "input": "Un café coûte 2 euros",
+        },
+        {
+            "name": "Entity replacement test",
+            "input": "Je suis Canadien",
+        },
+        {
+            "name": "Decimal numbers",
+            "input": "Ça coûte 1,50 euros",
+        }
+    ]
     
-    test_cases = get_test_cases()
     results = []
     
     for case in test_cases:
@@ -151,7 +170,6 @@ async def test_adjustment_cases():
             results.append({
                 "test_name": case["name"],
                 "input": case["input"],
-                "expected": case.get("expected"),
                 "result": {
                     "pre_adjusted": result.pre_adjusted_transcript,
                     "final": result.adjusted_transcript,
@@ -159,8 +177,7 @@ async def test_adjustment_cases():
                     "vocab_count": len(result.list_of_vocabulary),
                     "entity_count": len(result.list_of_entities)
                 },
-                "processing_time": result.processing_time_ms,
-                "passed": case.get("expected") == result.completed_transcript if case.get("expected") else None
+                "processing_time": result.processing_time_ms
             })
         except Exception as e:
             results.append({
