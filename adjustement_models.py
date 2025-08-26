@@ -64,7 +64,7 @@ from .models import (
     BatchAdjustRequest,
     BatchAdjustResult
 )
-from ..core.adjuster import TranscriptionAdjuster
+from adjustement_adjuster import TranscriptionAdjuster
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
