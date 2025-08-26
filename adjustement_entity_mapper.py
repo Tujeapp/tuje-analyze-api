@@ -5,7 +5,7 @@ SINGLE RESPONSIBILITY: Map vocabulary to entities and replace in transcript
 import re
 import logging
 from typing import List, Tuple
-from adjustement_models import EntityMatch
+from adjustement_types import EntityMatch
 from adjustement_cache_manager import VocabularyCacheManager
 from adjustement_vocabulary_finder import VocabularyMatchResult
 
