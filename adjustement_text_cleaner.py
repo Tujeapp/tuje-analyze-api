@@ -13,7 +13,7 @@ class TextCleaner:
     """Handles basic text cleaning operations"""
     
     def __init__(self):
-        from ..constants.french_contractions import CONTRACTION_PATTERNS
+        # Use the imported patterns
         self.contractions = CONTRACTION_PATTERNS
         
         # Precompile for performance
