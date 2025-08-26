@@ -5,6 +5,7 @@ SINGLE RESPONSIBILITY: Clean and normalize text only
 import re
 import unicodedata
 import logging
+from adjustement_french_contractions import CONTRACTION_PATTERNS
 
 logger = logging.getLogger(__name__)
 
