@@ -83,6 +83,30 @@ async def get_adjustment_metrics():
         ]
     }
 
+@router.get("/entity-status")
+async def get_entity_status():
+    """Get current entity availability status for monitoring"""
+    try:
+        pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=2)
+        try:
+            # Load fresh cache to get current entity status
+            await adjuster.cache_manager.ensure_cache_loaded(pool)
+            cache_status = adjuster.get_cache_status()
+            
+            return {
+                "live_entities": cache_status.get("live_entity_count", 0),
+                "inactive_entities": cache_status.get("inactive_entity_count", 0),
+                "total_entities": cache_status.get("live_entity_count", 0) + cache_status.get("inactive_entity_count", 0),
+                "cache_age_seconds": cache_status.get("age_seconds"),
+                "last_updated": datetime.now().isoformat(),
+                "status": "healthy" if cache_status.get("loaded") else "cache_not_loaded"
+            }
+        finally:
+            await pool.close()
+    except Exception as e:
+        logger.error(f"Entity status check failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.post("/test-adjustment-cases")
 async def test_adjustment_cases():
     """Test endpoint with predefined cases"""
