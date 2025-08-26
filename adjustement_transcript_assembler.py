@@ -4,7 +4,7 @@ SINGLE RESPONSIBILITY: Assemble final transcript from matches
 """
 import logging
 from typing import List
-from .vocabulary_finder import VocabularyMatchResult
+from adjustement_vocabulary_finder import VocabularyMatchResult
 
 logger = logging.getLogger(__name__)
 
