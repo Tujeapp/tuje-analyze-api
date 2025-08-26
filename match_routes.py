@@ -10,7 +10,8 @@ import time
 import os
 
 # Import from your transcription service
-from transcription_adjustement_service import TranscriptionAdjustRequest, adjust_transcription_endpoint
+from adjustement_types import TranscriptionAdjustRequest, AdjustmentResult
+from adjustement_models import adjust_transcription_endpoint
 
 # Use the same pattern as your other files
 DATABASE_URL = os.getenv("DATABASE_URL")
