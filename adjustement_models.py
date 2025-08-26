@@ -1,14 +1,17 @@
 # adjustement_models.py
+
 from fastapi import APIRouter, HTTPException
-from typing import List
 import asyncpg
 import logging
 import os
-from pydantic import BaseModel, validator
-from typing import List, Optional
-from datetime import datetime
 
-# FIXED: Use absolute imports only
+# FIXED: Import Pydantic models from separate types file (no circular import)
+from adjustement_types import (
+    TranscriptionAdjustRequest,
+    AdjustmentResult,
+    BatchAdjustRequest,
+    BatchAdjustResult
+)
 from adjustement_adjuster import TranscriptionAdjuster
 
 logger = logging.getLogger(__name__)
@@ -17,56 +20,6 @@ router = APIRouter()
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError("Missing required environment variable: DATABASE_URL")
-
-# Pydantic Models (moved here to avoid circular imports)
-class TranscriptionAdjustRequest(BaseModel):
-    original_transcript: str
-    user_id: Optional[str] = None
-    interaction_id: Optional[str] = None
-    
-    @validator('original_transcript')
-    def validate_transcript(cls, v):
-        if not v or not v.strip():
-            raise ValueError("Original transcript cannot be empty")
-        if len(v) > 1000:
-            raise ValueError("Transcript too long (max 1000 characters)")
-        return v.strip()
-
-class VocabularyMatch(BaseModel):
-    id: str
-    transcription_fr: str
-    transcription_adjusted: str
-
-class EntityMatch(BaseModel):
-    id: str
-    name: str
-    value: str
-
-class AdjustmentResult(BaseModel):
-    original_transcript: str
-    pre_adjusted_transcript: str
-    adjusted_transcript: str
-    completed_transcript: str
-    list_of_vocabulary: List[VocabularyMatch]
-    list_of_entities: List[EntityMatch]
-    processing_time_ms: float
-
-class BatchAdjustRequest(BaseModel):
-    requests: List[TranscriptionAdjustRequest]
-    
-    @validator('requests')
-    def validate_batch_size(cls, v):
-        if len(v) > 50:
-            raise ValueError("Batch size too large (max 50)")
-        if len(v) == 0:
-            raise ValueError("Batch cannot be empty")
-        return v
-
-class BatchAdjustResult(BaseModel):
-    batch_results: List[dict]
-    processed_count: int
-    success_count: int
-    error_count: int
 
 # Global adjuster instance
 adjuster = TranscriptionAdjuster()
