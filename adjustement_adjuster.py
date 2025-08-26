@@ -3,9 +3,10 @@ import asyncpg
 import logging
 from datetime import datetime
 from typing import Dict, Any
-from ..api.models import TranscriptionAdjustRequest, AdjustmentResult
-from ..data.cache_manager import VocabularyCacheManager
-from .phases.pre_adjustment import PreAdjustmentPhase
+from adjustement_models import TranscriptionAdjustRequest, AdjustmentResult
+from adjustement_cache_manager import VocabularyCacheManager
+from adjustement_validators import validate_input
+from adjustement_performance_tracker import PerformanceTracker
 from .phases.normalization import NormalizationPhase  
 from .phases.extraction import ExtractionPhase
 from .phases.completion import CompletionPhase
@@ -18,103 +19,136 @@ class TranscriptionAdjuster:
     """Main orchestrator for the transcription adjustment process"""
     
     def __init__(self):
+        # Import components
+        from adjustement_cache_manager import VocabularyCacheManager
+        from adjustement_french_nbr_detector import FrenchNumberDetector
+        from adjustement_digit_nbr_detector import DigitNumberDetector
+        from adjustement_decimal_nbr_detector import DecimalNumberDetector
+        from adjustement_text_cleaner import TextCleaner
+        from adjustement_entity_consolidator import EntityConsolidator
+        from adjustement_vocabulary_finder import VocabularyFinder
+        from adjustement_transcript_assembler import TranscriptAssembler
+        from adjustement_entity_mapper import EntityMapper
+        from adjustement_un_une_analyzer import UnUneAnalyzer
+        
         # Initialize cache manager
         self.cache_manager = VocabularyCacheManager()
         
-        # Initialize phases
-        self.pre_adjustment = PreAdjustmentPhase()
-        self.normalization = NormalizationPhase()
-        self.extraction = ExtractionPhase()
-        self.completion = CompletionPhase()
+        # Initialize processors
+        self.french_number_detector = FrenchNumberDetector()
+        self.digit_detector = DigitNumberDetector()
+        self.decimal_detector = DecimalNumberDetector()
+        self.text_cleaner = TextCleaner()
+        self.consolidator = EntityConsolidator()
+        self.vocab_finder = VocabularyFinder()
+        self.transcript_assembler = TranscriptAssembler()
+        self.entity_mapper = EntityMapper()
         
         # Performance tracking
+        from adjustement_performance_tracker import PerformanceTracker
         self.performance = PerformanceTracker()
     
-    async def adjust_transcription(self, request: TranscriptionAdjustRequest, pool: asyncpg.Pool) -> AdjustmentResult:
+    async def adjust_transcription(self, request, pool):
         """Main adjustment function orchestrating all phases"""
-        
-        # Start performance tracking
-        tracker = self.performance.start_tracking()
+        start_time = datetime.now()
         
         try:
-            # Step 1: Input validation
+            # Input validation
+            from adjustement_validators import validate_input
             validate_input(request.original_transcript)
-            tracker.add_checkpoint("validation")
             
-            # Step 2: Load cache if needed
+            # Load cache
             await self.cache_manager.ensure_cache_loaded(pool)
-            tracker.add_checkpoint("cache_load")
             
             original = request.original_transcript
             logger.info(f"Starting adjustment for: '{original}'")
             
-            # Phase 0: Pre-adjustment (number detection)
+            # Phase 0: Number replacement (with error handling)
             try:
-                pre_adjusted, un_une_replaced = await self.pre_adjustment.process(
-                    original, self.cache_manager
-                )
-                tracker.add_checkpoint("pre_adjustment")
+                # Replace French numbers
+                pre_adjusted, un_une_replaced, _ = self.french_number_detector.replace_french_numbers(original)
+                
+                # Replace digits  
+                pre_adjusted, _ = self.digit_detector.replace_digits(pre_adjusted)
+                
+                # Replace decimals
+                pre_adjusted, _ = self.decimal_detector.replace_decimals(pre_adjusted)
+                
+                # Handle un/une subprocess
+                if un_une_replaced:
+                    un_une_analyzer = UnUneAnalyzer(self.cache_manager)
+                    pre_adjusted = un_une_analyzer.analyze_and_fix(pre_adjusted)
+                    
             except Exception as e:
                 logger.error(f"Pre-adjustment failed: {e}")
                 pre_adjusted = original
-                un_une_replaced = False
             
-            # Phase 1: Normalization  
+            # Phase 1: Normalization
             try:
-                normalized = await self.normalization.process(
-                    pre_adjusted, un_une_replaced, self.cache_manager
-                )
-                tracker.add_checkpoint("normalization")
+                # Basic cleaning
+                normalized = self.text_cleaner.clean_basic(pre_adjusted)
+                normalized = self.text_cleaner.expand_contractions(normalized)
+                normalized = self.text_cleaner.remove_punctuation(normalized)
+                
+                # Consolidate entityNumbers
+                normalized = self.consolidator.consolidate(normalized)
+                
+                # Clean whitespace
+                normalized = self.text_cleaner.normalize_whitespace(normalized)
+                
             except Exception as e:
                 logger.error(f"Normalization failed: {e}")
                 normalized = pre_adjusted.lower()
             
-            # Phase 2: Vocabulary extraction
+            # Phase 2: Vocabulary matching
             try:
-                extraction_result = await self.extraction.process(
-                    normalized, self.cache_manager
-                )
-                final_transcript = extraction_result.final_transcript
-                vocab_matches = extraction_result.vocabulary_matches
-                matched_entries = extraction_result.matched_entries
-                tracker.add_checkpoint("extraction")
+                # Find vocabulary matches
+                vocab_matches = self.vocab_finder.find_matches(normalized, self.cache_manager)
+                
+                # Build transcript
+                final_transcript = self.transcript_assembler.assemble_transcript(normalized, vocab_matches)
+                
+                # Extract data for phase 3
+                vocabulary_matches = [match.vocab_match for match in vocab_matches]
+                matched_entries = [match.vocab_entry for match in vocab_matches]
+                
             except Exception as e:
-                logger.error(f"Extraction failed: {e}")
+                logger.error(f"Vocabulary matching failed: {e}")
                 final_transcript = normalized
-                vocab_matches = []
+                vocabulary_matches = []
                 matched_entries = []
             
-            # Phase 3: Entity completion
+            # Phase 3: Entity completion (THE KEY FIX!)
             try:
-                completion_result = await self.completion.process(
-                    final_transcript, matched_entries, self.cache_manager
+                completed_transcript, entity_matches = self.entity_mapper.map_entities(
+                    final_transcript, vocab_matches, self.cache_manager
                 )
-                completed_transcript = completion_result.completed_transcript
-                entity_matches = completion_result.entity_matches
-                tracker.add_checkpoint("completion")
             except Exception as e:
-                logger.error(f"Completion failed: {e}")
+                logger.error(f"Entity completion failed: {e}")
                 completed_transcript = final_transcript
                 entity_matches = []
             
-            # Calculate total processing time
-            processing_time = tracker.get_total_time_ms()
+            # Calculate processing time
+            processing_time = round((datetime.now() - start_time).total_seconds() * 1000, 2)
             
-            # Validation: Ensure we don't return worse results than input
+            # Ensure we don't return worse results than input
             if not final_transcript:
                 final_transcript = original.lower()
             if not completed_transcript:
                 completed_transcript = final_transcript
             
-            logger.info(f"Adjustment completed in {processing_time:.2f}ms")
+            logger.info(f"Adjustment completed in {processing_time}ms")
             logger.info(f"Result: '{original}' → '{completed_transcript}'")
+            
+            # Import here to avoid circular import
+            from adjustement_models import AdjustmentResult
             
             return AdjustmentResult(
                 original_transcript=original,
                 pre_adjusted_transcript=pre_adjusted,
                 adjusted_transcript=final_transcript,
                 completed_transcript=completed_transcript,
-                list_of_vocabulary=vocab_matches,
+                list_of_vocabulary=vocabulary_matches,
                 list_of_entities=entity_matches,
                 processing_time_ms=processing_time
             )
@@ -122,8 +156,10 @@ class TranscriptionAdjuster:
         except Exception as e:
             logger.error(f"Complete transcription adjustment failed: {e}")
             
-            # Return minimal valid result for reliability
-            processing_time = tracker.get_total_time_ms()
+            # Return minimal valid result
+            processing_time = round((datetime.now() - start_time).total_seconds() * 1000, 2)
+            from adjustement_models import AdjustmentResult
+            
             return AdjustmentResult(
                 original_transcript=request.original_transcript,
                 pre_adjusted_transcript=request.original_transcript,
@@ -134,8 +170,8 @@ class TranscriptionAdjuster:
                 processing_time_ms=processing_time
             )
     
-    def get_cache_status(self) -> Dict[str, Any]:
-        """Get current cache status for monitoring"""
+    def get_cache_status(self):
+        """Get cache status for monitoring"""
         return self.cache_manager.get_status()
     
     async def warm_cache(self, pool: asyncpg.Pool):
