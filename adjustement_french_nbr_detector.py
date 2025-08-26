@@ -13,8 +13,7 @@ class FrenchNumberDetector:
     """Detects French number words and replaces them with entityNumber"""
     
     def __init__(self):
-        # Import from constants - keep this class focused
-        from ..constants.french_numbers import FRENCH_NUMBERS_SORTED
+        # Use the imported numbers
         self.french_numbers = FRENCH_NUMBERS_SORTED
     
     def replace_french_numbers(self, text: str) -> Tuple[str, bool, Dict[str, str]]:
