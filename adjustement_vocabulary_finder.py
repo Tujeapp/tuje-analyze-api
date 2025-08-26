@@ -6,6 +6,7 @@ import logging
 from adjustement_models import VocabularyMatch
 from adjustement_cache_manager import VocabularyCacheManager
 from adjustement_text_cleaner import TextCleaner
+from typing import List, Dict, NamedTuple
 
 logger = logging.getLogger(__name__)
 
