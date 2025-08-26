@@ -45,7 +45,7 @@ class TranscriptionAdjuster:
     async def adjust_transcription(self, request, pool: asyncpg.Pool):
         """Main adjustment function orchestrating all phases"""
         # Import here to avoid circular import
-        from adjustement_models import AdjustmentResult
+        from adjustement_types import AdjustmentResult
         
         start_time = datetime.now()
         
