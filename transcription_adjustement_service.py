@@ -286,217 +286,200 @@ class TranscriptionAdjuster:
         logger.info(f"Phase 1 normalization: '{text}' → '{normalized}'")
         return normalized
     
-    def _phase2_entity_extraction(self, text: str) -> Tuple[str, List[VocabularyMatch], List[EntityMatch]]:
-        """Phase 2: Extract vocabulary and build final transcript"""
-        vocabulary_matches = []
-        entity_matches = []
-        
-        logger.info(f"Phase 2 input: '{text}'")
-        
-        # Step 1: Normalize the input text (lowercase, remove accents/symbols)
-        normalized_text = self._normalize_basic(text)
-        # Remove punctuation except spaces
-        normalized_text = re.sub(r'[^\w\s]', ' ', normalized_text)
-        # Normalize whitespace
-        normalized_text = re.sub(r'\s+', ' ', normalized_text).strip()
-        
-        logger.info(f"Phase 2 normalized input: '{normalized_text}'")
-        
-        # Step 2: Get all vocabulary entries and normalize their transcription_adjusted
-        all_vocab = self.vocab_cache.get('all_vocab', [])
-        normalized_vocab = []
-        
-        for vocab_entry in all_vocab:
-            if not vocab_entry.get('transcription_adjusted'):
-                continue
-                
-            # Normalize the transcription_adjusted for comparison
-            normalized_adjusted = self._normalize_basic(vocab_entry['transcription_adjusted'])
-            normalized_adjusted = re.sub(r'[^\w\s]', ' ', normalized_adjusted)
-            normalized_adjusted = re.sub(r'\s+', ' ', normalized_adjusted).strip()
-            
-            if normalized_adjusted:  # Only keep non-empty entries
-                normalized_vocab.append({
-                    'original_entry': vocab_entry,
-                    'normalized_adjusted': normalized_adjusted,
-                    'word_count': len(normalized_adjusted.split())
-                })
-        
-        # Step 3: Sort by word count (longer phrases first), then by length of text
-        sorted_vocab = sorted(normalized_vocab, 
-                             key=lambda x: (x['word_count'], len(x['normalized_adjusted'])), 
-                             reverse=True)
-        
-        logger.info(f"Sorted vocabulary by priority - entries containing 'jai' or 'ai':")
-        for entry in sorted_vocab:
-            if 'jai' in entry['normalized_adjusted'] or 'ai' in entry['normalized_adjusted']:
-                logger.info(f"  - '{entry['normalized_adjusted']}' ({entry['word_count']} words) ID: {entry['original_entry']['id']}")
-        
-        # Step 4: Track which parts of the text have been matched
-        input_words = normalized_text.split()
-        matched_positions = [False] * len(input_words)
-        final_transcript_parts = ['vocabnotfound'] * len(input_words)
-        
-        logger.info(f"Input words to match: {input_words}")
-        logger.info(f"Initial matched positions: {matched_positions}")
-        
-        # Step 5: Find matches using word boundaries to prevent partial matches
-        matches_with_positions = []  # Store matches with their positions
-        
-        for vocab_data in sorted_vocab:
-            vocab_entry = vocab_data['original_entry']
-            normalized_adjusted = vocab_data['normalized_adjusted']
-            vocab_words = normalized_adjusted.split()
-            
-            # DEBUG: Log attempts for jai/ai entries
-            if 'jai' in normalized_adjusted or 'ai' in normalized_adjusted:
-                logger.info(f"TRYING TO MATCH: '{normalized_adjusted}' (words: {vocab_words})")
-            
-            # Look for this vocabulary sequence in the normalized text
-            for i in range(len(input_words) - len(vocab_words) + 1):
-                # CRITICAL: Check if ANY part of this span is already matched
-                span_positions = list(range(i, i + len(vocab_words)))
-                if any(matched_positions[pos] for pos in span_positions):
-                    if 'jai' in normalized_adjusted or 'ai' in normalized_adjusted:
-                        logger.info(f"  SKIPPED: positions {span_positions} already matched")
-                    continue  # Skip this position - overlap detected
-                
-                # Check if words match exactly (word-by-word comparison)
-                text_segment_words = input_words[i:i+len(vocab_words)]
-                
-                # DEBUG: Log comparison for jai/ai entries
-                if 'jai' in normalized_adjusted or 'ai' in normalized_adjusted:
-                    logger.info(f"  COMPARING: {text_segment_words} vs {vocab_words}")
-                
-                # Must match exactly word for word
-                if text_segment_words == vocab_words:
-                    text_segment = ' '.join(text_segment_words)
-                    logger.info(f"MATCH FOUND: '{text_segment}' matches vocab '{normalized_adjusted}' at positions {span_positions}")
-                    
-                    # Mark ALL positions in this span as matched
-                    for j in span_positions:
-                        matched_positions[j] = True
-                        # Use the original transcription_adjusted for the final transcript
-                        final_transcript_parts[j] = vocab_entry['transcription_adjusted'] if j == i else None
-                    
-                    logger.info(f"Updated matched positions: {matched_positions}")
-                    logger.info(f"Updated final parts: {final_transcript_parts}")
-                    
-                    # Store match with position for later sorting
-                    matches_with_positions.append({
-                        'position': i,
-                        'vocab_match': VocabularyMatch(
-                            id=vocab_entry['id'],
-                            transcription_fr=vocab_entry['transcription_fr'],
-                            transcription_adjusted=vocab_entry['transcription_adjusted']
-                        ),
-                        'entity_match': EntityMatch(
-                            id=f"ENTI{vocab_entry['id'][4:]}",  # Convert VOCAB to ENTI
-                            name=vocab_entry['entity_type_id'],
-                            value=vocab_entry['transcription_adjusted']
-                        ) if vocab_entry.get('entity_type_id') else None
-                    })
-                    
-                    # IMPORTANT: Break after first match to avoid multiple matches of the same phrase
-                    break
-        
-        # Step 6: Sort matches by position in transcript (left to right)
-        matches_with_positions.sort(key=lambda x: x['position'])
-        
-        # Step 7: Extract sorted vocabulary and entity matches
-        vocabulary_matches = [match['vocab_match'] for match in matches_with_positions]
-        entity_matches = [match['entity_match'] for match in matches_with_positions if match['entity_match']]
-        
-        # Step 8: Build final transcript
-        final_parts = [part for part in final_transcript_parts if part is not None]
-        final_transcript = ' '.join(final_parts)
-        
-        # Step 9: Phase 3 - Build completed transcript with entity replacements
-        completed_transcript, entity_list = self._phase3_entity_replacement(final_transcript, matches_with_positions)
-        
-        logger.info(f"Phase 2 matching summary:")
-        logger.info(f"  Input words: {input_words}")
-        logger.info(f"  Final matched positions: {matched_positions}")
-        logger.info(f"  Final parts before joining: {final_parts}")
-        logger.info(f"  Final transcript: '{final_transcript}'")
-        logger.info(f"  Completed transcript: '{completed_transcript}'")
-        logger.info(f"  Vocabulary matches: {len(vocabulary_matches)}")
-        logger.info(f"  Entity matches: {len(entity_list)}")
-        
-        return final_transcript, vocabulary_matches, entity_list, completed_transcript
+def _phase2_entity_extraction(self, text: str) -> Tuple[str, List[VocabularyMatch], List[EntityMatch]]:
+    """Phase 2: Extract vocabulary and build final transcript"""
+    vocabulary_matches = []
+    entity_matches = []
     
-    def _phase3_entity_replacement(self, adjusted_transcript: str, matches_with_positions: List[Dict]) -> Tuple[str, List[EntityMatch]]:
-        """Phase 3: Replace vocabulary entries with entity names to create completed transcript"""
-        logger.info(f"Phase 3 input: '{adjusted_transcript}'")
-        
-        # Start with the adjusted transcript
-        completed_transcript = adjusted_transcript
-        entity_matches = []
-        
-        # Process matches in reverse order to maintain string positions when replacing
-        sorted_matches = sorted(matches_with_positions, key=lambda x: x['position'], reverse=True)
-        
-        for match_data in sorted_matches:
-            vocab_match = match_data['vocab_match']
-            position = match_data['position']
+    logger.info(f"Phase 2 input: '{text}'")
+    
+    # Step 1: Normalize the input text (lowercase, remove accents/symbols)
+    normalized_text = self._normalize_basic(text)
+    # Remove punctuation except spaces
+    normalized_text = re.sub(r'[^\w\s]', ' ', normalized_text)
+    # Normalize whitespace
+    normalized_text = re.sub(r'\s+', ' ', normalized_text).strip()
+    
+    logger.info(f"Phase 2 normalized input: '{normalized_text}'")
+    
+    # Step 2: Get all vocabulary entries and normalize their transcription_adjusted
+    all_vocab = self.vocab_cache.get('all_vocab', [])
+    normalized_vocab = []
+    
+    for vocab_entry in all_vocab:
+        if not vocab_entry.get('transcription_adjusted'):
+            continue
             
-            # Check if this vocabulary entry has an entity_type_id
-            vocab_entry = None
-            for entry in self.vocab_cache.get('all_vocab', []):
-                if entry['id'] == vocab_match.id:
-                    vocab_entry = entry
-                    break
+        # Normalize the transcription_adjusted for comparison
+        normalized_adjusted = self._normalize_basic(vocab_entry['transcription_adjusted'])
+        normalized_adjusted = re.sub(r'[^\w\s]', ' ', normalized_adjusted)
+        normalized_adjusted = re.sub(r'\s+', ' ', normalized_adjusted).strip()
+        
+        if normalized_adjusted:  # Only keep non-empty entries
+            normalized_vocab.append({
+                'original_entry': vocab_entry,
+                'normalized_adjusted': normalized_adjusted,
+                'word_count': len(normalized_adjusted.split())
+            })
+    
+    # Step 3: Sort by word count (longer phrases first), then by length of text
+    sorted_vocab = sorted(normalized_vocab, 
+                         key=lambda x: (x['word_count'], len(x['normalized_adjusted'])), 
+                         reverse=True)
+    
+    logger.info(f"Sorted vocabulary by priority - entries containing 'jai' or 'ai':")
+    for entry in sorted_vocab:
+        if 'jai' in entry['normalized_adjusted'] or 'ai' in entry['normalized_adjusted']:
+            logger.info(f"  - '{entry['normalized_adjusted']}' ({entry['word_count']} words) ID: {entry['original_entry']['id']}")
+    
+    # Step 4: Track which parts of the text have been matched
+    input_words = normalized_text.split()
+    matched_positions = [False] * len(input_words)
+    final_transcript_parts = ['vocabnotfound'] * len(input_words)
+    
+    logger.info(f"Input words to match: {input_words}")
+    logger.info(f"Initial matched positions: {matched_positions}")
+    
+    # Step 5: Find matches using word boundaries to prevent partial matches
+    matches_with_positions = []  # Store matches with their positions
+    
+    for vocab_data in sorted_vocab:
+        vocab_entry = vocab_data['original_entry']
+        normalized_adjusted = vocab_data['normalized_adjusted']
+        vocab_words = normalized_adjusted.split()
+        
+        # DEBUG: Log attempts for jai/ai entries
+        if 'jai' in normalized_adjusted or 'ai' in normalized_adjusted:
+            logger.info(f"TRYING TO MATCH: '{normalized_adjusted}' (words: {vocab_words})")
+        
+        # Look for this vocabulary sequence in the normalized text
+        for i in range(len(input_words) - len(vocab_words) + 1):
+            # CRITICAL: Check if ANY part of this span is already matched
+            span_positions = list(range(i, i + len(vocab_words)))
+            if any(matched_positions[pos] for pos in span_positions):
+                if 'jai' in normalized_adjusted or 'ai' in normalized_adjusted:
+                    logger.info(f"  SKIPPED: positions {span_positions} already matched")
+                continue  # Skip this position - overlap detected
             
-            if vocab_entry and vocab_entry.get('entity_type_id'):
-                entity_type_id = vocab_entry['entity_type_id']  # This IS the entity ID!
-                logger.info(f"Found entity_type_id for vocab '{vocab_match.transcription_adjusted}': {entity_type_id}")
+            # Check if words match exactly (word-by-word comparison)
+            text_segment_words = input_words[i:i+len(vocab_words)]
+            
+            # DEBUG: Log comparison for jai/ai entries
+            if 'jai' in normalized_adjusted or 'ai' in normalized_adjusted:
+                logger.info(f"  COMPARING: {text_segment_words} vs {vocab_words}")
+            
+            # Must match exactly word for word
+            if text_segment_words == vocab_words:
+                text_segment = ' '.join(text_segment_words)
+                logger.info(f"MATCH FOUND: '{text_segment}' matches vocab '{normalized_adjusted}' at positions {span_positions}")
                 
-                # Get the actual entity name from cached entities using the entity_type_id
-                entity_name = self.vocab_cache.get('entities', {}).get(entity_type_id)
-                if entity_name:
-                    entity_name_lower = entity_name.lower()
-                    logger.info(f"Found entity name: {entity_name}")
-                else:
-                    # Fallback to entity_type_id if entity name not found in cache
-                    entity_name_lower = entity_type_id.lower()
-                    entity_name = entity_type_id
-                    logger.warning(f"Entity name not found for {entity_type_id}, using fallback")
+                # Mark ALL positions in this span as matched
+                for j in span_positions:
+                    matched_positions[j] = True
+                    # Use the original transcription_adjusted for the final transcript
+                    final_transcript_parts[j] = vocab_entry['transcription_adjusted'] if j == i else None
                 
-                # Find and replace the exact vocabulary text in the completed transcript
-                old_text = vocab_match.transcription_adjusted
-                completed_transcript = completed_transcript.replace(old_text, entity_name_lower, 1)
+                logger.info(f"Updated matched positions: {matched_positions}")
+                logger.info(f"Updated final parts: {final_transcript_parts}")
                 
-                # FIXED: Use the actual entity_type_id as the entity ID
-                entity_matches.append(EntityMatch(
-                    id=entity_type_id,  # FIXED: Use entity_type_id directly (e.g., "ENTI202408081621")
-                    name=entity_name,   # Actual entity name from brain_entity table
-                    value=old_text      # Keep the original vocabulary value
-                ))
+                # FIXED: Store complete vocabulary entry info for Phase 3
+                matches_with_positions.append({
+                    'position': i,
+                    'vocab_entry': vocab_entry,  # Store the complete entry
+                    'vocab_match': VocabularyMatch(
+                        id=vocab_entry['id'],
+                        transcription_fr=vocab_entry['transcription_fr'],
+                        transcription_adjusted=vocab_entry['transcription_adjusted']
+                    )
+                })
                 
-                logger.info(f"Replaced '{old_text}' with '{entity_name_lower}' in completed transcript")
-                logger.info(f"Created entity match: ID={entity_type_id}, name={entity_name}")
+                # IMPORTANT: Break after first match to avoid multiple matches of the same phrase
+                break
+    
+    # Step 6: Sort matches by position in transcript (left to right)
+    matches_with_positions.sort(key=lambda x: x['position'])
+    
+    # Step 7: Extract sorted vocabulary matches
+    vocabulary_matches = [match['vocab_match'] for match in matches_with_positions]
+    
+    # Step 8: Build final transcript
+    final_parts = [part for part in final_transcript_parts if part is not None]
+    final_transcript = ' '.join(final_parts)
+    
+    # Step 9: Phase 3 - Build completed transcript with entity replacements
+    completed_transcript, entity_list = self._phase3_entity_replacement(final_transcript, matches_with_positions)
+    
+    logger.info(f"Phase 2 matching summary:")
+    logger.info(f"  Input words: {input_words}")
+    logger.info(f"  Final matched positions: {matched_positions}")
+    logger.info(f"  Final parts before joining: {final_parts}")
+    logger.info(f"  Final transcript: '{final_transcript}'")
+    logger.info(f"  Completed transcript: '{completed_transcript}'")
+    logger.info(f"  Vocabulary matches: {len(vocabulary_matches)}")
+    logger.info(f"  Entity matches: {len(entity_list)}")
+    
+    return final_transcript, vocabulary_matches, entity_list, completed_transcript
+    
+def _phase3_entity_replacement(self, adjusted_transcript: str, matches_with_positions: List[Dict]) -> Tuple[str, List[EntityMatch]]:
+    """Phase 3: Replace vocabulary entries with entity names to create completed transcript"""
+    logger.info(f"Phase 3 input: '{adjusted_transcript}'")
+    
+    # Start with the adjusted transcript
+    completed_transcript = adjusted_transcript
+    entity_matches = []
+    
+    # FIXED: Process ALL vocabulary matches to check for entities
+    for match_data in matches_with_positions:
+        vocab_entry = match_data['vocab_entry']  # Use stored vocab_entry
+        vocab_match = match_data['vocab_match']
+        
+        logger.info(f"Processing vocab '{vocab_match.transcription_adjusted}' for entity replacement")
+        logger.info(f"  entity_type_id: {vocab_entry.get('entity_type_id')}")
+        
+        # Check if this vocabulary entry has an entity_type_id
+        if vocab_entry.get('entity_type_id'):
+            entity_type_id = vocab_entry['entity_type_id']
+            logger.info(f"Found entity_type_id for vocab '{vocab_match.transcription_adjusted}': {entity_type_id}")
+            
+            # Get the actual entity name from cached entities
+            entity_name = self.vocab_cache.get('entities', {}).get(entity_type_id)
+            if entity_name:
+                entity_name_lower = entity_name.lower()
+                logger.info(f"Found entity name: {entity_name}")
             else:
-                logger.info(f"No entity found for vocab '{vocab_match.transcription_adjusted}' - keeping as is")
-        
-        # Sort entities by their appearance order (based on original position)
-        if entity_matches:
-            # Create a mapping of entity_type_id to position for sorting
-            entity_id_to_position = {}
-            for match_data in matches_with_positions:
-                vocab_entry = None
-                for entry in self.vocab_cache.get('all_vocab', []):
-                    if entry['id'] == match_data['vocab_match'].id:
-                        vocab_entry = entry
-                        break
-                if vocab_entry and vocab_entry.get('entity_type_id'):
-                    entity_id_to_position[vocab_entry['entity_type_id']] = match_data['position']
+                # Fallback to entity_type_id if entity name not found in cache
+                entity_name_lower = entity_type_id.lower()
+                entity_name = entity_type_id
+                logger.warning(f"Entity name not found for {entity_type_id}, using fallback")
             
-            entity_matches.sort(key=lambda x: entity_id_to_position.get(x.id, 999))
-        
-        logger.info(f"Phase 3 result: '{adjusted_transcript}' → '{completed_transcript}'")
-        logger.info(f"Entities found: {[(e.id, e.name) for e in entity_matches]}")
-        
-        return completed_transcript, entity_matches
+            # FIXED: Replace the exact vocabulary text in the completed transcript
+            old_text = vocab_match.transcription_adjusted
+            logger.info(f"Attempting to replace '{old_text}' with '{entity_name_lower}'")
+            
+            # Use word boundary replacement to avoid partial matches
+            import re
+            pattern = r'\b' + re.escape(old_text) + r'\b'
+            if re.search(pattern, completed_transcript):
+                completed_transcript = re.sub(pattern, entity_name_lower, completed_transcript, count=1)
+                logger.info(f"Successfully replaced '{old_text}' with '{entity_name_lower}'")
+            else:
+                logger.warning(f"Could not find '{old_text}' in '{completed_transcript}' for replacement")
+            
+            # Create entity match
+            entity_matches.append(EntityMatch(
+                id=entity_type_id,
+                name=entity_name,
+                value=old_text
+            ))
+            
+            logger.info(f"Created entity match: ID={entity_type_id}, name={entity_name}, value={old_text}")
+        else:
+            logger.info(f"No entity found for vocab '{vocab_match.transcription_adjusted}' - keeping as is")
+    
+    logger.info(f"Phase 3 result: '{adjusted_transcript}' → '{completed_transcript}'")
+    logger.info(f"Entities found: {[(e.id, e.name, e.value) for e in entity_matches]}")
+    
+    return completed_transcript, entity_matches
     
     async def adjust_transcription(self, request: TranscriptionAdjustRequest, pool: asyncpg.Pool) -> AdjustmentResult:
         """Main adjustment function following the 4-phase process"""
