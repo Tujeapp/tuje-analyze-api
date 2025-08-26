@@ -4,7 +4,7 @@ SINGLE RESPONSIBILITY: Detect and replace digit numbers only
 """
 import re
 import logging
-from typing import Dict
+from typing import Tuple, Dict
 
 logger = logging.getLogger(__name__)
 
