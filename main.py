@@ -3,7 +3,7 @@ from match_routes import router as match_router
 from airtable_routes import router as airtable_router
 from data_access_routes import router as data_access_router
 # ADD THIS LINE - Import the new transcription router
-from transcription_adjustement_service import router as transcription_router
+from adjustement_main_router import router as transcription_router
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Dict
