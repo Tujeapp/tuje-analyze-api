@@ -3,7 +3,7 @@ from fastapi import APIRouter
 import os
 
 # Import your new components
-from .adjustement_models import router as api_router
+from adjustement_models import router as api_router
 
 # This will be your main router to replace the old service
 router = APIRouter()
