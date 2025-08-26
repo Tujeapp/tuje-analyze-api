@@ -5,6 +5,7 @@ SINGLE RESPONSIBILITY: Detect and replace French number words only
 import re
 import logging
 from typing import Tuple, Dict
+from adjustement_french_numbers import FRENCH_NUMBERS_SORTED
 
 logger = logging.getLogger(__name__)
 
