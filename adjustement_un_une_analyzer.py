@@ -4,7 +4,7 @@ SINGLE RESPONSIBILITY: Analyze un/une context to decide number vs article
 """
 import logging
 from typing import List
-from ..data.cache_manager import VocabularyCacheManager
+from adjustement_cache_manager import VocabularyCacheManager
 
 logger = logging.getLogger(__name__)
 
