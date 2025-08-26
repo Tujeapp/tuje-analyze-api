@@ -3,10 +3,9 @@
 SINGLE RESPONSIBILITY: Find vocabulary matches in text
 """
 import logging
-from typing import List, Dict, NamedTuple
-from ..api.models import VocabularyMatch
-from ..data.cache_manager import VocabularyCacheManager
-from .text_cleaner import TextCleaner
+from adjustement_models import VocabularyMatch
+from adjustement_cache_manager import VocabularyCacheManager
+from adjustement_text_cleaner import TextCleaner
 
 logger = logging.getLogger(__name__)
 
