@@ -87,6 +87,18 @@ class InteractionEntry(BaseEntry):
     transcriptionEn: str
     intents: List[str] = []
     subtopicId: Optional[str] = None
+    expectedEntitiesIds: Optional[List[str]] = []  # NEW: Add expected entities
+    
+    @validator('expectedEntitiesIds')
+    def clean_expected_entities_ids(cls, v):
+        """Clean expected entities list"""
+        if v is None:
+            return []
+        if not isinstance(v, list):
+            return []
+        # Filter out empty strings and None values
+        cleaned = [str(entity_id).strip() for entity_id in v if entity_id and str(entity_id).strip()]
+        return cleaned
 
 class VocabEntry(BaseEntry):
     transcriptionFr: str
@@ -150,7 +162,8 @@ SYNC_CONFIGS = {
         "table_name": "brain_interaction",
         "airtable_table": "Interaction",
         "columns": ["id", "transcription_fr", "transcription_en", "airtable_record_id",
-                   "last_modified_time_ref", "created_at", "update_at", "live", "intents", "subtopic_id"]
+                   "last_modified_time_ref", "created_at", "update_at", "live", 
+                   "intents", "subtopic_id", "expected_entities_id"]  # NEW: Add expected_entities_id
     },
     "vocab": {
         "table_name": "brain_vocab",
@@ -219,7 +232,8 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "transcriptionFr": "transcription_fr",
         "transcriptionEn": "transcription_en", 
         "transcriptionAdjusted": "transcription_adjusted",
-        "entityTypeId": "entity_type_id",  # ← ADD THIS LINE
+        "entityTypeId": "entity_type_id",
+        "expectedEntitiesIds": "expected_entities_id",  # NEW: Add expected entities mapping
         "airtableRecordId": "airtable_record_id",
         "nameFr": "name_fr",
         "nameEn": "name_en",
@@ -260,9 +274,10 @@ async def update_airtable_status(record_id: str, fields: dict, table_name: str, 
 
 # Generic sync function
 async def sync_entity_to_database(entry_data: Dict, config: Dict) -> None:
-    """Generic function to sync any entity to database"""
+    """Generic function to sync any entity to database with array handling"""
     async with db_pool.get_connection() as conn:
         async with conn.transaction():
+            
             # Build dynamic query
             columns = config["columns"]
             placeholders = ', '.join([f'${i+1}' for i in range(len(columns))])
@@ -279,12 +294,17 @@ async def sync_entity_to_database(entry_data: Dict, config: Dict) -> None:
             values = []
             for col in columns:
                 value = entry_data.get(col)
-                if col == 'intents' and isinstance(value, list):
+                if col in ['intents', 'expected_entities_id'] and isinstance(value, list):
                     values.append(value)  # PostgreSQL will handle the array
                 else:
                     values.append(value)
             
             await conn.execute(query, *values)
+            
+            # Log expected entities sync for debugging
+            if config["table_name"] == "brain_interaction":
+                logger.info(f"Interaction synced: id={entry_data.get('id')}, "
+                           f"expected_entities_id={entry_data.get('expected_entities_id')}")
 
 # Background task for Airtable updates
 async def background_airtable_update(record_id: str, timestamp: int, table_name: str):
