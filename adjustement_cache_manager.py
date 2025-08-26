@@ -30,7 +30,7 @@ class VocabularyCacheManager:
         """Load vocabulary and entities from database"""
         try:
             async with pool.acquire() as conn:
-                # Single optimized query with JOIN
+                # UPDATED: Single optimized query with JOIN and live entity filter
                 query = """
                     SELECT 
                         v.id, 
@@ -38,7 +38,8 @@ class VocabularyCacheManager:
                         v.transcription_en, 
                         v.transcription_adjusted, 
                         v.entity_type_id,
-                        e.name as entity_name
+                        e.name as entity_name,
+                        e.live as entity_live
                     FROM brain_vocab v
                     LEFT JOIN brain_entity e ON v.entity_type_id = e.id
                     WHERE v.live = TRUE
@@ -51,7 +52,8 @@ class VocabularyCacheManager:
                 self.cache = {
                     'all_vocab': [],
                     'entitynumber_patterns': [],
-                    'entities': {}
+                    'entities': {},  # Only live entities
+                    'inactive_entities': {}  # Track inactive entities for logging
                 }
                 
                 for row in rows:
@@ -65,9 +67,13 @@ class VocabularyCacheManager:
                     
                     self.cache['all_vocab'].append(vocab_entry)
                     
-                    # Cache entity names
+                    # UPDATED: Only cache live entities
                     if row['entity_type_id'] and row['entity_name']:
-                        self.cache['entities'][row['entity_type_id']] = row['entity_name']
+                        if row['entity_live']:  # Only add live entities
+                            self.cache['entities'][row['entity_type_id']] = row['entity_name']
+                        else:
+                            # Track inactive entities for debugging
+                            self.cache['inactive_entities'][row['entity_type_id']] = row['entity_name']
                     
                     # EntityNumber patterns for subprocess
                     if 'entitynumber' in str(row['transcription_fr'] or '').lower():
@@ -76,9 +82,15 @@ class VocabularyCacheManager:
                 self.cache_loaded = True
                 self.cache_timestamp = time.time()
                 
+                # UPDATED: Enhanced logging for entity filtering
                 logger.info(f"Cache refreshed: {len(self.cache['all_vocab'])} vocab entries, "
-                          f"{len(self.cache['entities'])} entities, "
+                          f"{len(self.cache['entities'])} live entities, "
+                          f"{len(self.cache['inactive_entities'])} inactive entities, "
                           f"{len(self.cache['entitynumber_patterns'])} number patterns")
+                
+                # Log inactive entities for monitoring
+                if self.cache['inactive_entities']:
+                    logger.info(f"Inactive entities (will be skipped): {list(self.cache['inactive_entities'].keys())}")
                 
         except Exception as e:
             logger.error(f"Cache loading failed: {e}")
@@ -94,8 +106,16 @@ class VocabularyCacheManager:
         return self.cache.get('entitynumber_patterns', [])
     
     def get_entity_name(self, entity_id: str) -> Optional[str]:
-        """Get entity name by ID"""
+        """Get entity name by ID (only returns live entities)"""
         return self.cache.get('entities', {}).get(entity_id)
+    
+    def is_entity_live(self, entity_id: str) -> bool:
+        """Check if entity is live and available for use"""
+        return entity_id in self.cache.get('entities', {})
+    
+    def get_inactive_entity_name(self, entity_id: str) -> Optional[str]:
+        """Get inactive entity name (for debugging purposes only)"""
+        return self.cache.get('inactive_entities', {}).get(entity_id)
     
     def get_status(self) -> Dict[str, Any]:
         """Get cache status for monitoring"""
@@ -105,6 +125,7 @@ class VocabularyCacheManager:
             "age_seconds": time.time() - self.cache_timestamp if self.cache_timestamp else None,
             "ttl_seconds": self.ttl_seconds,
             "vocab_count": len(self.cache.get('all_vocab', [])),
-            "entity_count": len(self.cache.get('entities', {})),
+            "live_entity_count": len(self.cache.get('entities', {})),
+            "inactive_entity_count": len(self.cache.get('inactive_entities', {})),
             "pattern_count": len(self.cache.get('entitynumber_patterns', []))
         }
