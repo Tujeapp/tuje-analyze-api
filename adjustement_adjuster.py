@@ -4,7 +4,7 @@
 import asyncpg
 import logging
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
 
 # FIXED: All absolute imports - no dots!
 from adjustement_cache_manager import VocabularyCacheManager
