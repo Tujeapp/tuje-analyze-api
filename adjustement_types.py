@@ -6,6 +6,7 @@ class TranscriptionAdjustRequest(BaseModel):
     original_transcript: str
     user_id: Optional[str] = None
     interaction_id: Optional[str] = None
+    expected_entities_ids: Optional[List[str]] = None  
     
     @validator('original_transcript')
     def validate_transcript(cls, v):
