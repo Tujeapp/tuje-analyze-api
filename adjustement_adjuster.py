@@ -98,8 +98,12 @@ class TranscriptionAdjuster:
             
             # Phase 2: Vocabulary extraction
             try:
-                # Find vocabulary matches
-                vocab_matches = self.vocab_finder.find_matches(normalized, self.cache_manager)
+                # Find vocabulary matches with entity context
+                vocab_matches = self.vocab_finder.find_matches(
+                    normalized, 
+                    self.cache_manager, 
+                    expected_entities_ids=request.expected_entities_ids  # NEW: Pass context
+                )
                 
                 # Build transcript
                 final_transcript = self.transcript_assembler.assemble_transcript(normalized, vocab_matches)
