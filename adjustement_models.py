@@ -107,6 +107,75 @@ async def get_entity_status():
         logger.error(f"Entity status check failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.post("/force-cache-refresh")
+async def force_cache_refresh():
+    """Force refresh the cache to pick up database changes immediately"""
+    try:
+        pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=2)
+        try:
+            # Force cache refresh by resetting the timestamp
+            adjuster.cache_manager.cache_timestamp = None
+            adjuster.cache_manager.cache_loaded = False
+            
+            # Load fresh cache
+            await adjuster.cache_manager.ensure_cache_loaded(pool)
+            cache_status = adjuster.get_cache_status()
+            
+            return {
+                "message": "Cache refreshed successfully",
+                "cache_status": cache_status,
+                "live_entities": cache_status.get("live_entity_count", 0),
+                "inactive_entities": cache_status.get("inactive_entity_count", 0)
+            }
+        finally:
+            await pool.close()
+    except Exception as e:
+        logger.error(f"Force cache refresh failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/debug-entity/{entity_id}")
+async def debug_specific_entity(entity_id: str):
+    """Debug a specific entity's live status"""
+    try:
+        pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=2)
+        try:
+            # Check entity directly in database
+            async with pool.acquire() as conn:
+                db_result = await conn.fetchrow("""
+                    SELECT id, name, live, created_at, update_at
+                    FROM brain_entity 
+                    WHERE id = $1
+                """, entity_id)
+            
+            # Check entity in cache
+            await adjuster.cache_manager.ensure_cache_loaded(pool)
+            
+            cache_live = adjuster.cache_manager.is_entity_live(entity_id)
+            cache_name = adjuster.cache_manager.get_entity_name(entity_id)
+            inactive_name = adjuster.cache_manager.get_inactive_entity_name(entity_id)
+            
+            return {
+                "entity_id": entity_id,
+                "database_status": {
+                    "found": db_result is not None,
+                    "name": db_result["name"] if db_result else None,
+                    "live": db_result["live"] if db_result else None,
+                    "last_updated": db_result["update_at"].isoformat() if db_result and db_result["update_at"] else None
+                },
+                "cache_status": {
+                    "is_live_in_cache": cache_live,
+                    "cached_name": cache_name,
+                    "inactive_name": inactive_name,
+                    "cache_age_seconds": adjuster.cache_manager.cache_timestamp and (time.time() - adjuster.cache_manager.cache_timestamp)
+                },
+                "recommendation": "Call /api/force-cache-refresh if database and cache don't match"
+            }
+        finally:
+            await pool.close()
+    except Exception as e:
+        logger.error(f"Entity debug failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.post("/test-adjustment-cases")
 async def test_adjustment_cases():
     """Test endpoint with predefined cases"""
