@@ -30,6 +30,46 @@ async def adjust_transcription_endpoint(request: TranscriptionAdjustRequest):
     pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5)
     
     try:
+        # NEW: Load expected entities from database if not provided but interaction_id exists
+        if request.interaction_id and (not request.expected_entities_ids or len(request.expected_entities_ids) == 0):
+            try:
+                # Load expected entities from database
+                async with pool.acquire() as conn:
+                    db_result = await conn.fetchrow("""
+                        SELECT expected_entities_id
+                        FROM brain_interaction
+                        WHERE id = $1 AND live = TRUE
+                    """, request.interaction_id)
+                    
+                    if db_result and db_result["expected_entities_id"]:
+                        expected_entities = db_result["expected_entities_id"]
+                        logger.info(f"🔍 Loaded expected entities from DB for {request.interaction_id}: {expected_entities}")
+                        
+                        # Handle different formats
+                        if isinstance(expected_entities, list):
+                            cleaned = [str(eid).strip() for eid in expected_entities if eid and str(eid).strip()]
+                        elif isinstance(expected_entities, str):
+                            cleaned = [eid.strip() for eid in expected_entities.split(',') if eid.strip()]
+                        else:
+                            cleaned = []
+                        
+                        if cleaned:
+                            # Create a new request with the loaded entities
+                            request = TranscriptionAdjustRequest(
+                                original_transcript=request.original_transcript,
+                                user_id=request.user_id,
+                                interaction_id=request.interaction_id,
+                                expected_entities_ids=cleaned
+                            )
+                            logger.info(f"✅ Updated request with expected entities: {cleaned}")
+                        else:
+                            logger.warning(f"⚠️ No valid expected entities found for interaction {request.interaction_id}")
+                    else:
+                        logger.info(f"ℹ️ No expected entities in database for interaction {request.interaction_id}")
+            except Exception as e:
+                logger.warning(f"Failed to load expected entities from database: {e}")
+        
+        # Proceed with normal adjustment
         result = await adjuster.adjust_transcription(request, pool)
         return result
     except Exception as e:
