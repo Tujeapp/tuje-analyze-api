@@ -81,11 +81,19 @@ async def match_answer_with_adjustment(request: MatchAnswerRequest, background_t
             logger.info(f"Applying transcription adjustment to: '{original_transcript}'")
             
             try:
-                # Call the adjustment service
+                # NEW: Load expected entities from interaction if interaction_id provided
+                expected_entities_ids = None
+                if request.interaction_id:
+                    expected_entities_ids = await get_interaction_expected_entities(request.interaction_id)
+                    if expected_entities_ids:
+                        logger.info(f"Loaded expected entities for interaction {request.interaction_id}: {expected_entities_ids}")
+                
+                # Call the adjustment service with context
                 adjustment_request = TranscriptionAdjustRequest(
                     original_transcript=original_transcript,
                     user_id=request.user_id,
-                    interaction_id=request.interaction_id
+                    interaction_id=request.interaction_id,
+                    expected_entities_ids=expected_entities_ids  # NEW: Pass expected entities
                 )
                 
                 adjustment_result = await adjust_transcription_endpoint(adjustment_request)
