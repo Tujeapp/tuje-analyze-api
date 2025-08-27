@@ -21,16 +21,19 @@ class VocabularyFinder:
     def __init__(self):
         self.text_cleaner = TextCleaner()
     
-    def find_matches(self, text: str, cache_manager: VocabularyCacheManager) -> List[VocabularyMatchResult]:
-        """Find all vocabulary matches in text"""
+    def find_matches(self, text: str, cache_manager: VocabularyCacheManager, 
+                    expected_entities_ids: Optional[List[str]] = None) -> List[VocabularyMatchResult]:
+        """Find all vocabulary matches in text with entity context filtering"""
         logger.debug(f"Finding vocabulary matches in: '{text}'")
+        if expected_entities_ids:
+            logger.info(f"Using expected entities context: {expected_entities_ids}")
         
         # Normalize text for matching
         normalized_text = self._normalize_for_matching(text)
         
         # Get and prepare vocabulary
         vocab_entries = cache_manager.get_all_vocab()
-        prepared_vocab = self._prepare_vocab_for_matching(vocab_entries)
+        prepared_vocab = self._prepare_vocab_for_matching(vocab_entries, expected_entities_ids)
         
         # Find matches
         matches = self._match_vocabulary(normalized_text, prepared_vocab)
