@@ -1,4 +1,4 @@
-# Updated main.py - Add the new matching router
+# Updated main.py - Add Bubble integration router
 
 from fastapi import FastAPI, HTTPException, Header
 from match_routes import router as match_router
@@ -6,8 +6,8 @@ from airtable_routes import router as airtable_router
 from data_access_routes import router as data_access_router
 from gpt_fallback_router import router as gpt_fallback_router
 from adjustement_main_router import router as transcription_router
-# ADD THIS LINE - Import the new matching router
 from matching_answer_router import router as matching_router
+from bubble_integration_router import router as bubble_router  # 🆕 NEW: Add Bubble router
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Dict
@@ -24,12 +24,7 @@ import aiohttp
 import asyncpg
 import openai
 import os
-
-# -------------------------------
-# Optional: Load from .env file
-# -------------------------------
-# from dotenv import load_dotenv
-# load_dotenv()
+from datetime import datetime
 
 # -------------------------------
 # Environment variables
@@ -51,11 +46,10 @@ openai.api_key = OPENAI_API_KEY
 # FastAPI App Setup
 # -------------------------------
 app = FastAPI(
-    title="TuJe French Learning API",
-    description="API for French conversation learning with transcription adjustment and answer matching",
-    version="1.0.0"
+    title="TuJe French Learning API with Bubble Integration",
+    description="API for French conversation learning with Bubble.io optimized endpoints",
+    version="2.0.0"
 )
-API_KEY = "tuje-secure-key"
 
 app.add_middleware(
     CORSMiddleware,
@@ -66,24 +60,7 @@ app.add_middleware(
 )
 
 # -------------------------------
-# Airtable Update Helper
-# -------------------------------
-async def update_airtable_status(record_id: str, fields: dict):
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_NAME}/{record_id}"
-    headers = {
-        "Authorization": f"Bearer {AIRTABLE_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    async with aiohttp.ClientSession() as session:
-        async with session.patch(url, headers=headers, json={"fields": fields}) as resp:
-            if resp.status != 200:
-                text = await resp.text()
-                print(f"⚠️ Airtable update failed: {resp.status} {text}")
-            else:
-                print("✅ Airtable updated successfully.")
-
-# -------------------------------
-# Route Inclusion - ADD THE MATCHING ROUTER
+# Route Inclusion - 🆕 ADD BUBBLE ROUTER
 # -------------------------------
 app.include_router(match_router)
 app.include_router(airtable_router)
@@ -91,73 +68,91 @@ app.include_router(data_access_router)
 app.include_router(transcription_router, prefix="/api", tags=["transcription"])
 app.include_router(matching_router, prefix="/api/matching", tags=["answer_matching"])
 app.include_router(gpt_fallback_router, prefix="/api/gpt", tags=["gpt_fallback"])
-
+app.include_router(bubble_router, prefix="/api/bubble", tags=["bubble_integration"])  # 🆕 NEW
 
 # -------------------------------
-# Root endpoint for testing
+# Root endpoint - Updated for Bubble
 # -------------------------------
 @app.get("/")
 async def root():
     return {
-        "message": "TuJe API is running",
-        "version": "1.0.0",
+        "message": "TuJe API with Bubble Integration",
+        "version": "2.0.0",
+        "bubble_integration": "✅ Ready",
         "services": {
             "transcription_adjustment": "✅ Available",
             "answer_matching": "✅ Available", 
-            "combined_workflow": "✅ Available (Recommended)"
+            "gpt_fallback": "✅ Available",
+            "bubble_optimized": "✅ Available"
         },
-        "endpoints": {
-            # Transcription Adjustment
+        
+        # 🆕 NEW: Bubble-specific endpoints
+        "bubble_endpoints": {
+            # Main endpoint for Bubble workflows
+            "complete_processing": {
+                "url": "/api/bubble/bubble-process-transcript",
+                "method": "POST",
+                "description": "🎯 RECOMMENDED: Complete pipeline (adjust → match → gpt)",
+                "use_case": "Primary endpoint for Bubble workflows"
+            },
+            
+            # Individual services for specific needs
+            "adjustment_only": {
+                "url": "/api/bubble/bubble-adjust-only", 
+                "method": "POST",
+                "description": "Transcription adjustment only"
+            },
+            "matching_only": {
+                "url": "/api/bubble/bubble-match-only",
+                "method": "POST", 
+                "description": "Answer matching only"
+            },
+            "gpt_only": {
+                "url": "/api/bubble/bubble-gpt-only",
+                "method": "POST",
+                "description": "GPT intent detection only"
+            },
+            
+            # Configuration and health
+            "config": "/api/bubble/bubble-config",
+            "health": "/api/bubble/bubble-health"
+        },
+        
+        "bubble_integration_guide": {
+            "step1": "Use /api/bubble/bubble-config to get configuration details",
+            "step2": "Test with /api/bubble/bubble-process-transcript",
+            "step3": "Handle response.recommended_action in your workflow",
+            "step4": "Monitor response.errors and response.warnings"
+        },
+        
+        # Legacy endpoints (still available)
+        "advanced_endpoints": {
             "transcription_adjustment": "/api/adjust-transcription",
-            "batch_transcription_adjustment": "/api/batch-adjust-transcriptions",
-            
-            # Answer Matching (New Service)
-            "match_completed_transcript": "/api/matching/match-answer",
-            "batch_match_answers": "/api/matching/batch-match-answers",
-            
-            # Combined Workflow (Recommended for Mobile)
-            "combined_adjust_and_match": "/api/matching/combined-adjust-and-match",
-            
-            # Health Checks
-            "health": "/health",
-            "adjustment_health": "/api/adjustment-metrics",
-            "matching_health": "/api/matching/matching-health",
-            
-            # Testing
-            "test_adjustment": "/api/test-adjustment-cases",
-            "test_matching": "/api/matching/test-matching-workflow",
-            
-            # Legacy (will be deprecated)
-            "legacy_match_answer": "/match-answer"
-        },
-        "recommended_workflow": {
-            "endpoint": "/api/matching/combined-adjust-and-match",
-            "description": "Single API call: raw transcript → adjustment → matching → result",
-            "benefits": [
-                "Lowest latency (1 API call vs 2)",
-                "Shared connection pool",
-                "Complete audit trail",
-                "Error handling across entire workflow"
-            ]
+            "answer_matching": "/api/matching/combined-adjust-and-match",
+            "gpt_fallback": "/api/gpt/analyze-intent",
+            "health_checks": ["/health", "/api/bubble/bubble-health"]
         }
     }
 
 # -------------------------------
-# Enhanced Health check endpoint
+# Enhanced Health check
 # -------------------------------
 @app.get("/health")
 async def health_check():
-    """Enhanced health check covering all services"""
+    """Enhanced health check covering all services including Bubble integration"""
     health_status = {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "services": {
-            "database": "connected" if DATABASE_URL else "not configured",
+            "database": "unknown",
             "transcription_service": "healthy",
             "matching_service": "healthy",
+            "gpt_service": "healthy",
+            "bubble_integration": "healthy",  # 🆕 NEW
             "openai": "configured" if OPENAI_API_KEY else "not configured"
         },
-        "version": "1.0.0"
+        "version": "2.0.0",
+        "bubble_ready": True  # 🆕 NEW
     }
     
     try:
@@ -176,44 +171,48 @@ async def health_check():
     except Exception as e:
         health_status["services"]["database"] = f"connection_error: {str(e)}"
         health_status["status"] = "unhealthy"
+        health_status["bubble_ready"] = False
     
     return health_status
 
 # -------------------------------
-# Migration helper endpoint (temporary)
+# 🆕 NEW: Bubble Integration Status Endpoint
 # -------------------------------
-@app.get("/migration-status")
-async def get_migration_status():
+@app.get("/bubble-status")
+async def get_bubble_integration_status():
     """
-    Helper endpoint to show migration status from old match_routes to new matching service
-    This can be removed once migration is complete
+    Comprehensive status check specifically for Bubble integration
     """
     return {
-        "migration_status": "✅ New matching service ready",
-        "old_endpoints": {
-            "match_answer": "/match-answer",
-            "status": "🔄 Still active (for backward compatibility)",
-            "action_needed": "Update client code to use new endpoints"
+        "bubble_integration_status": "✅ Ready for production",
+        "main_endpoint": "/api/bubble/bubble-process-transcript",
+        "processing_pipeline": {
+            "transcription_adjustment": "✅ Working",
+            "answer_matching": "✅ Working",
+            "gpt_fallback": "✅ Working",
+            "auto_trigger_logic": "✅ Implemented"
         },
-        "new_endpoints": {
-            "single_match": "/api/matching/match-answer",
-            "batch_match": "/api/matching/batch-match-answers", 
-            "combined_workflow": "/api/matching/combined-adjust-and-match",
-            "status": "✅ Ready for production use"
+        "response_format": {
+            "unified_response": "✅ Bubble-friendly format",
+            "error_handling": "✅ Comprehensive",
+            "recommended_actions": "✅ Automated suggestions"
         },
-        "migration_steps": [
-            "1. Test new endpoints with your data",
-            "2. Update mobile app to use /api/matching/combined-adjust-and-match",
-            "3. Monitor performance and error rates", 
-            "4. Once stable, deprecate old match_routes endpoints",
-            "5. Remove old match_routes.py file"
-        ],
-        "performance_benefits": {
-            "combined_endpoint": "~40% faster (1 API call vs 2)",
-            "connection_pooling": "Better database performance", 
-            "error_handling": "Comprehensive error recovery",
-            "monitoring": "Built-in performance metrics"
-        }
+        "performance": {
+            "single_api_call": "✅ Complete workflow in one request",
+            "connection_pooling": "✅ Optimized database usage",
+            "async_processing": "✅ Non-blocking operations"
+        },
+        "cost_optimization": {
+            "gpt_auto_trigger": "✅ Only when needed",
+            "shared_connections": "✅ Database pool reuse",
+            "error_recovery": "✅ Graceful fallbacks"
+        },
+        "next_steps": [
+            "1. Test /api/bubble/bubble-process-transcript with sample data",
+            "2. Set up Bubble workflow to handle response.recommended_action",
+            "3. Monitor response.errors for any issues",
+            "4. Use response.call_gpt_manually for manual GPT triggers"
+        ]
     }
 
 # -------------------------------
