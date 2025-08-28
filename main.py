@@ -86,31 +86,26 @@ async def root():
             "bubble_optimized": "✅ Available"
         },
         
-        # 🆕 NEW: Bubble-specific endpoints
+        # 🆕 NEW: Bubble-specific endpoints (3 separate calls)
         "bubble_endpoints": {
-            # Main endpoint for Bubble workflows
-            "complete_processing": {
-                "url": "/api/bubble/bubble-process-transcript",
+            # Three independent endpoints for maximum flexibility
+            "1_adjustment": {
+                "url": "/api/bubble/bubble-adjust-transcript",
                 "method": "POST",
-                "description": "🎯 RECOMMENDED: Complete pipeline (adjust → match → gpt)",
-                "use_case": "Primary endpoint for Bubble workflows"
+                "description": "🔧 Step 1: Process raw transcript",
+                "use_case": "Always call first after speech recognition"
             },
-            
-            # Individual services for specific needs
-            "adjustment_only": {
-                "url": "/api/bubble/bubble-adjust-only", 
-                "method": "POST",
-                "description": "Transcription adjustment only"
-            },
-            "matching_only": {
-                "url": "/api/bubble/bubble-match-only",
+            "2_matching": {
+                "url": "/api/bubble/bubble-match-answer",
                 "method": "POST", 
-                "description": "Answer matching only"
+                "description": "🔍 Step 2: Match against expected answers",
+                "use_case": "Call after adjustment with completed_transcript"
             },
-            "gpt_only": {
-                "url": "/api/bubble/bubble-gpt-only",
+            "3_gpt_fallback": {
+                "url": "/api/bubble/bubble-gpt-fallback",
                 "method": "POST",
-                "description": "GPT intent detection only"
+                "description": "🧠 Step 3: GPT intent detection (when needed)",
+                "use_case": "Call when adjustment/matching suggests it"
             },
             
             # Configuration and health
