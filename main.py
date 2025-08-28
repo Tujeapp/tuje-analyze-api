@@ -4,6 +4,7 @@ from fastapi import FastAPI, HTTPException, Header
 from match_routes import router as match_router
 from airtable_routes import router as airtable_router
 from data_access_routes import router as data_access_router
+from gpt_fallback_router import router as gpt_fallback_router
 from adjustement_main_router import router as transcription_router
 # ADD THIS LINE - Import the new matching router
 from matching_answer_router import router as matching_router
@@ -88,8 +89,9 @@ app.include_router(match_router)
 app.include_router(airtable_router)
 app.include_router(data_access_router)
 app.include_router(transcription_router, prefix="/api", tags=["transcription"])
-# ADD THIS LINE - Include the new matching router
 app.include_router(matching_router, prefix="/api/matching", tags=["answer_matching"])
+app.include_router(gpt_fallback_router, prefix="/api/gpt", tags=["gpt_fallback"])
+
 
 # -------------------------------
 # Root endpoint for testing
