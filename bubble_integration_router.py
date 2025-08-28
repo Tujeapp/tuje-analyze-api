@@ -1,7 +1,7 @@
-# bubble_integration_router.py
+# bubble_integration_router.py - 3 SEPARATE ENDPOINTS
 """
-Bubble.io-optimized endpoints for the TuJe French learning API
-Designed for easy integration with Bubble workflows
+Bubble.io-optimized endpoints for TuJe French learning API
+3 independent endpoints for maximum flexibility in Bubble workflows
 """
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, validator
@@ -12,48 +12,36 @@ from datetime import datetime
 
 # Import your existing services
 from adjustement_models import adjust_transcription_endpoint
-from matching_answer_router import combined_adjust_and_match
+from matching_answer_router import match_completed_transcript
 from gpt_fallback_router import analyze_original_transcript_intent
 
 # Import types
 from adjustement_types import TranscriptionAdjustRequest
-from matching_answer_types import CombinedAdjustmentAndMatchRequest
+from matching_answer_types import MatchAnswerRequest
 from gpt_fallback_types import GPTFallbackRequest
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # -------------------------
-# Bubble-Optimized Models
+# 1. TRANSCRIPTION ADJUSTMENT ENDPOINT
 # -------------------------
-class BubbleProcessTranscriptRequest(BaseModel):
-    """Simplified request model for Bubble workflows"""
+class BubbleAdjustmentRequest(BaseModel):
+    """Bubble-optimized transcription adjustment request"""
     interaction_id: str
-    user_transcript: str  # Raw user speech transcript
+    original_transcript: str
     user_id: Optional[str] = None
-    threshold: int = 85  # For answer matching
-    gpt_threshold: int = 70  # For intent detection
     
-    # Processing controls
-    enable_adjustment: bool = True
-    enable_matching: bool = True  
-    enable_gpt_fallback: bool = True
-    
-    # Auto-trigger settings for GPT
-    auto_gpt_vocabnotfound_threshold: int = 3
-    auto_gpt_no_match_threshold: int = 50
-    
-    @validator('user_transcript')
+    @validator('original_transcript')
     def validate_transcript(cls, v):
         if not v or not v.strip():
-            raise ValueError("User transcript cannot be empty")
+            raise ValueError("Original transcript cannot be empty")
         if len(v) > 1000:
             raise ValueError("Transcript too long (max 1000 characters)")
         return v.strip()
 
-class BubbleProcessResponse(BaseModel):
-    """Unified response for Bubble workflows"""
-    # Overall status
+class BubbleAdjustmentResponse(BaseModel):
+    """Bubble-friendly adjustment response"""
     success: bool
     processing_time_ms: float
     timestamp: str
@@ -63,353 +51,456 @@ class BubbleProcessResponse(BaseModel):
     original_transcript: str
     
     # Adjustment results
-    adjustment_applied: bool = False
-    adjusted_transcript: Optional[str] = None
-    completed_transcript: Optional[str] = None
-    vocabulary_found: List[Dict] = []
-    entities_found: List[Dict] = []
-    vocabnotfound_count: int = 0
+    pre_adjusted_transcript: str
+    adjusted_transcript: str
+    completed_transcript: str
+    
+    # Vocabulary and entities found
+    vocabulary_found: List[Dict]
+    entities_found: List[Dict]
+    
+    # Analysis metrics
+    vocabnotfound_count: int
+    vocabulary_count: int
+    entities_count: int
+    
+    # Triggers for next steps
+    suggest_gpt_fallback: bool = False  # True if many vocabnotfound
+    quality_score: str = "good"  # "excellent", "good", "poor"
+    
+    # Error handling
+    error: Optional[str] = None
+
+@router.post("/bubble-adjust-transcript", response_model=BubbleAdjustmentResponse)
+async def bubble_transcription_adjustment(request: BubbleAdjustmentRequest):
+    """
+    🔧 ENDPOINT 1: TRANSCRIPTION ADJUSTMENT
+    
+    Takes raw user transcript and applies:
+    - Number detection and replacement
+    - French contractions handling
+    - Vocabulary extraction
+    - Entity detection
+    
+    Perfect for: Initial processing of user speech recognition
+    """
+    start_time = time.time()
+    
+    try:
+        logger.info(f"🔧 Bubble adjustment: {request.interaction_id} - '{request.original_transcript}'")
+        
+        # Call your existing adjustment service
+        adj_request = TranscriptionAdjustRequest(
+            original_transcript=request.original_transcript,
+            user_id=request.user_id,
+            interaction_id=request.interaction_id
+        )
+        
+        adj_result = await adjust_transcription_endpoint(adj_request)
+        
+        # Process results for Bubble
+        vocabulary_found = [v.dict() for v in adj_result.list_of_vocabulary]
+        entities_found = [e.dict() for e in adj_result.list_of_entities]
+        
+        # Count vocabnotfound entries
+        vocabnotfound_count = sum(
+            1 for vocab in vocabulary_found 
+            if vocab.get('transcription_adjusted') == 'vocabnotfound'
+        )
+        
+        # Determine quality and suggestions
+        total_words = len(request.original_transcript.split())
+        suggest_gpt = vocabnotfound_count >= 3 or (vocabnotfound_count / max(total_words, 1)) > 0.4
+        
+        if vocabnotfound_count == 0:
+            quality_score = "excellent"
+        elif vocabnotfound_count <= 2:
+            quality_score = "good"
+        else:
+            quality_score = "poor"
+        
+        processing_time = round((time.time() - start_time) * 1000, 2)
+        
+        logger.info(f"✅ Adjustment complete: quality={quality_score}, "
+                   f"vocabnotfound={vocabnotfound_count}, suggest_gpt={suggest_gpt}")
+        
+        return BubbleAdjustmentResponse(
+            success=True,
+            processing_time_ms=processing_time,
+            timestamp=datetime.now().isoformat(),
+            interaction_id=request.interaction_id,
+            original_transcript=request.original_transcript,
+            pre_adjusted_transcript=adj_result.pre_adjusted_transcript,
+            adjusted_transcript=adj_result.adjusted_transcript,
+            completed_transcript=adj_result.completed_transcript,
+            vocabulary_found=vocabulary_found,
+            entities_found=entities_found,
+            vocabnotfound_count=vocabnotfound_count,
+            vocabulary_count=len(vocabulary_found),
+            entities_count=len(entities_found),
+            suggest_gpt_fallback=suggest_gpt,
+            quality_score=quality_score
+        )
+        
+    except Exception as e:
+        processing_time = round((time.time() - start_time) * 1000, 2)
+        logger.error(f"❌ Bubble adjustment failed: {e}")
+        
+        return BubbleAdjustmentResponse(
+            success=False,
+            processing_time_ms=processing_time,
+            timestamp=datetime.now().isoformat(),
+            interaction_id=request.interaction_id,
+            original_transcript=request.original_transcript,
+            pre_adjusted_transcript=request.original_transcript,
+            adjusted_transcript=request.original_transcript.lower(),
+            completed_transcript=request.original_transcript.lower(),
+            vocabulary_found=[],
+            entities_found=[],
+            vocabnotfound_count=0,
+            vocabulary_count=0,
+            entities_count=0,
+            error=str(e)
+        )
+
+# -------------------------
+# 2. ANSWER MATCHING ENDPOINT
+# -------------------------
+class BubbleMatchingRequest(BaseModel):
+    """Bubble-optimized answer matching request"""
+    interaction_id: str
+    completed_transcript: str  # From adjustment endpoint
+    threshold: int = 85
+    user_id: Optional[str] = None
+    
+    @validator('completed_transcript')
+    def validate_transcript(cls, v):
+        if not v or not v.strip():
+            raise ValueError("Completed transcript cannot be empty")
+        if len(v) > 500:
+            raise ValueError("Completed transcript too long (max 500 characters)")
+        return v.strip()
+    
+    @validator('threshold')
+    def validate_threshold(cls, v):
+        if v < 0 or v > 100:
+            raise ValueError("Threshold must be between 0 and 100")
+        return v
+
+class BubbleMatchingResponse(BaseModel):
+    """Bubble-friendly matching response"""
+    success: bool
+    processing_time_ms: float
+    timestamp: str
+    
+    # Input echo
+    interaction_id: str
+    completed_transcript: str
+    threshold: int
     
     # Matching results
-    answer_match_found: bool = False
+    match_found: bool
     matched_answer_id: Optional[str] = None
     similarity_score: Optional[float] = None
     expected_answer: Optional[str] = None
     
-    # GPT results
-    gpt_triggered: bool = False
-    gpt_intent_found: bool = False
-    detected_intent_id: Optional[str] = None
-    detected_intent_name: Optional[str] = None
-    gpt_confidence: Optional[int] = None
-    gpt_reasoning: Optional[str] = None
+    # Answer details (if match found)
+    answer_french: Optional[str] = None
+    answer_english: Optional[str] = None
+    
+    # Analysis for next steps
+    suggest_gpt_fallback: bool = False  # True if no match or low score
+    match_quality: str = "none"  # "excellent", "good", "fair", "none"
     
     # Error handling
-    errors: List[str] = []
-    warnings: List[str] = []
-    
-    # Next steps for Bubble
-    recommended_action: str = "continue"  # "continue" | "retry" | "escalate"
-    call_gpt_manually: bool = False
+    reason: Optional[str] = None
+    error: Optional[str] = None
 
-# -------------------------
-# Main Bubble Endpoint
-# -------------------------
-@router.post("/bubble-process-transcript", response_model=BubbleProcessResponse)
-async def bubble_process_complete_transcript(request: BubbleProcessTranscriptRequest):
+@router.post("/bubble-match-answer", response_model=BubbleMatchingResponse)
+async def bubble_answer_matching(request: BubbleMatchingRequest):
     """
-    🎯 MAIN ENDPOINT FOR BUBBLE INTEGRATION
+    🔍 ENDPOINT 2: ANSWER MATCHING
     
-    Complete transcript processing pipeline:
-    1. Transcription Adjustment (if enabled)
-    2. Answer Matching (if enabled)
-    3. GPT Intent Detection (if conditions met and enabled)
+    Takes completed transcript (from adjustment) and matches against expected answers:
+    - Fuzzy string matching
+    - Returns best match above threshold
+    - Provides match quality assessment
     
-    Returns unified response perfect for Bubble workflows
+    Perfect for: Checking if user response matches expected answers
     """
     start_time = time.time()
     
-    response = BubbleProcessResponse(
-        success=False,
-        processing_time_ms=0,
-        timestamp=datetime.now().isoformat(),
-        interaction_id=request.interaction_id,
-        original_transcript=request.user_transcript
-    )
+    try:
+        logger.info(f"🔍 Bubble matching: {request.interaction_id} - '{request.completed_transcript}' (threshold: {request.threshold}%)")
+        
+        # Call your existing matching service
+        match_request = MatchAnswerRequest(
+            interaction_id=request.interaction_id,
+            completed_transcript=request.completed_transcript,
+            threshold=request.threshold,
+            user_id=request.user_id
+        )
+        
+        match_result = await match_completed_transcript(match_request)
+        
+        # Determine match quality and suggestions
+        match_quality = "none"
+        suggest_gpt = True
+        
+        if match_result.match_found and match_result.similarity_score:
+            score = match_result.similarity_score
+            suggest_gpt = False
+            
+            if score >= 90:
+                match_quality = "excellent"
+            elif score >= 80:
+                match_quality = "good"
+            elif score >= request.threshold:
+                match_quality = "fair"
+                suggest_gpt = True  # Fair matches might need GPT confirmation
+        else:
+            suggest_gpt = True
+        
+        processing_time = round((time.time() - start_time) * 1000, 2)
+        
+        logger.info(f"🎯 Matching result: found={match_result.match_found}, "
+                   f"score={match_result.similarity_score}, quality={match_quality}")
+        
+        return BubbleMatchingResponse(
+            success=True,
+            processing_time_ms=processing_time,
+            timestamp=datetime.now().isoformat(),
+            interaction_id=request.interaction_id,
+            completed_transcript=request.completed_transcript,
+            threshold=request.threshold,
+            match_found=match_result.match_found,
+            matched_answer_id=match_result.answer_id,
+            similarity_score=match_result.similarity_score,
+            expected_answer=match_result.expected_transcript,
+            answer_french=match_result.answer_details.transcription_fr if match_result.answer_details else None,
+            answer_english=match_result.answer_details.transcription_en if match_result.answer_details else None,
+            suggest_gpt_fallback=suggest_gpt,
+            match_quality=match_quality,
+            reason=match_result.reason
+        )
+        
+    except Exception as e:
+        processing_time = round((time.time() - start_time) * 1000, 2)
+        logger.error(f"❌ Bubble matching failed: {e}")
+        
+        return BubbleMatchingResponse(
+            success=False,
+            processing_time_ms=processing_time,
+            timestamp=datetime.now().isoformat(),
+            interaction_id=request.interaction_id,
+            completed_transcript=request.completed_transcript,
+            threshold=request.threshold,
+            match_found=False,
+            suggest_gpt_fallback=True,
+            match_quality="none",
+            error=str(e)
+        )
+
+# -------------------------
+# 3. GPT FALLBACK ENDPOINT
+# -------------------------
+class BubbleGPTRequest(BaseModel):
+    """Bubble-optimized GPT fallback request"""
+    interaction_id: str
+    original_transcript: str  # Use original, not adjusted, for intent detection
+    threshold: int = 70
+    user_id: Optional[str] = None
+    custom_intent_ids: Optional[List[str]] = None  # Override interaction intents
+    
+    @validator('original_transcript')
+    def validate_transcript(cls, v):
+        if not v or not v.strip():
+            raise ValueError("Original transcript cannot be empty")
+        if len(v) > 1000:
+            raise ValueError("Original transcript too long (max 1000 characters)")
+        return v.strip()
+    
+    @validator('threshold')
+    def validate_threshold(cls, v):
+        if v < 0 or v > 100:
+            raise ValueError("Threshold must be between 0 and 100")
+        return v
+
+class BubbleGPTResponse(BaseModel):
+    """Bubble-friendly GPT response"""
+    success: bool
+    processing_time_ms: float
+    timestamp: str
+    cost_estimate_usd: Optional[float] = None
+    
+    # Input echo
+    interaction_id: str
+    original_transcript: str
+    threshold: int
+    
+    # GPT results
+    intent_found: bool
+    intent_id: Optional[str] = None
+    intent_name: Optional[str] = None
+    confidence: Optional[int] = None
+    
+    # GPT analysis
+    gpt_reasoning: Optional[str] = None
+    gpt_interpretation: Optional[str] = None
+    candidates_analyzed: int = 0
+    
+    # Next steps
+    recommended_action: str = "continue"  # "continue", "retry", "escalate"
+    
+    # Error handling
+    error: Optional[str] = None
+
+@router.post("/bubble-gpt-fallback", response_model=BubbleGPTResponse)
+async def bubble_gpt_fallback(request: BubbleGPTRequest):
+    """
+    🧠 ENDPOINT 3: GPT INTENT DETECTION
+    
+    Uses GPT to analyze original transcript for intent when:
+    - Adjustment found too many unknown words
+    - Answer matching found no good matches
+    - Manual trigger for intent detection
+    
+    Perfect for: Understanding user intent when other methods fail
+    """
+    start_time = time.time()
     
     try:
-        logger.info(f"🎯 Bubble processing: {request.interaction_id} - '{request.user_transcript}'")
+        logger.info(f"🧠 Bubble GPT: {request.interaction_id} - '{request.original_transcript}' (threshold: {request.threshold}%)")
         
-        # STEP 1: Transcription Adjustment
-        completed_transcript = request.user_transcript
-        if request.enable_adjustment:
-            try:
-                logger.info("🔧 Running transcription adjustment...")
-                
-                adj_request = TranscriptionAdjustRequest(
-                    original_transcript=request.user_transcript,
-                    user_id=request.user_id,
-                    interaction_id=request.interaction_id
-                )
-                
-                adj_result = await adjust_transcription_endpoint(adj_request)
-                
-                response.adjustment_applied = True
-                response.adjusted_transcript = adj_result.adjusted_transcript
-                response.completed_transcript = adj_result.completed_transcript
-                response.vocabulary_found = [v.dict() for v in adj_result.list_of_vocabulary]
-                response.entities_found = [e.dict() for e in adj_result.list_of_entities]
-                
-                # Count vocabnotfound for GPT triggering
-                response.vocabnotfound_count = sum(
-                    1 for vocab in response.vocabulary_found 
-                    if vocab.get('transcription_adjusted') == 'vocabnotfound'
-                )
-                
-                completed_transcript = adj_result.completed_transcript
-                logger.info(f"✅ Adjustment complete: '{request.user_transcript}' → '{completed_transcript}'")
-                
-            except Exception as e:
-                logger.warning(f"⚠️ Adjustment failed: {e}")
-                response.errors.append(f"Adjustment failed: {str(e)}")
-                response.warnings.append("Continuing with original transcript")
+        # Call your existing GPT service
+        gpt_request = GPTFallbackRequest(
+            interaction_id=request.interaction_id,
+            original_transcript=request.original_transcript,
+            threshold=request.threshold,
+            user_id=request.user_id,
+            custom_intent_ids=request.custom_intent_ids
+        )
         
-        # STEP 2: Answer Matching
-        best_match_score = 0
-        if request.enable_matching:
-            try:
-                logger.info(f"🔍 Running answer matching for: '{completed_transcript}'")
-                
-                # Use the combined endpoint internally but extract just matching results
-                combined_request = CombinedAdjustmentAndMatchRequest(
-                    interaction_id=request.interaction_id,
-                    original_transcript=completed_transcript,  # Use processed transcript
-                    threshold=request.threshold,
-                    user_id=request.user_id,
-                    auto_adjust=False  # We already adjusted
-                )
-                
-                combined_result = await combined_adjust_and_match(combined_request)
-                
-                response.answer_match_found = combined_result.match_found
-                if combined_result.match_found:
-                    response.matched_answer_id = combined_result.answer_id
-                    response.similarity_score = combined_result.similarity_score
-                    response.expected_answer = combined_result.expected_transcript
-                    best_match_score = combined_result.similarity_score or 0
-                
-                logger.info(f"🎯 Matching result: found={response.answer_match_found}, score={best_match_score}")
-                
-            except Exception as e:
-                logger.warning(f"⚠️ Answer matching failed: {e}")
-                response.errors.append(f"Answer matching failed: {str(e)}")
+        gpt_result = await analyze_original_transcript_intent(gpt_request)
         
-        # STEP 3: GPT Intent Detection (Auto-trigger logic)
-        should_trigger_gpt = False
-        gpt_trigger_reason = None
-        
-        if request.enable_gpt_fallback:
-            # Auto-trigger condition 1: Too many vocabnotfound
-            if response.vocabnotfound_count >= request.auto_gpt_vocabnotfound_threshold:
-                should_trigger_gpt = True
-                gpt_trigger_reason = f"vocabnotfound_count ({response.vocabnotfound_count}) >= threshold ({request.auto_gpt_vocabnotfound_threshold})"
-            
-            # Auto-trigger condition 2: No good answer match
-            elif not response.answer_match_found or best_match_score < request.auto_gpt_no_match_threshold:
-                should_trigger_gpt = True
-                gpt_trigger_reason = f"no_good_match (best_score={best_match_score} < threshold={request.auto_gpt_no_match_threshold})"
-            
-            if should_trigger_gpt:
-                try:
-                    logger.info(f"🧠 Triggering GPT fallback: {gpt_trigger_reason}")
-                    
-                    gpt_request = GPTFallbackRequest(
-                        interaction_id=request.interaction_id,
-                        original_transcript=request.user_transcript,  # Use original for intent detection
-                        threshold=request.gpt_threshold,
-                        user_id=request.user_id
-                    )
-                    
-                    gpt_result = await analyze_original_transcript_intent(gpt_request)
-                    
-                    response.gpt_triggered = True
-                    response.gpt_intent_found = gpt_result.intent_matched
-                    response.detected_intent_id = gpt_result.intent_id
-                    response.detected_intent_name = gpt_result.intent_name
-                    response.gpt_confidence = gpt_result.similarity_score
-                    response.gpt_reasoning = gpt_result.gpt_reasoning
-                    
-                    logger.info(f"🧠 GPT result: intent_found={response.gpt_intent_found}, intent={response.detected_intent_name}")
-                    
-                except Exception as e:
-                    logger.warning(f"⚠️ GPT fallback failed: {e}")
-                    response.errors.append(f"GPT fallback failed: {str(e)}")
-                    response.call_gpt_manually = True
-            else:
-                logger.info("🧠 GPT fallback not triggered - conditions not met")
-        
-        # STEP 4: Determine recommended action for Bubble
-        if response.answer_match_found:
-            response.recommended_action = "continue"
-            response.success = True
-        elif response.gpt_intent_found:
-            response.recommended_action = "continue"  # Bubble can handle intent
-            response.success = True
-        elif response.errors:
-            response.recommended_action = "retry"
-            response.success = False
+        # Determine recommended action
+        recommended_action = "continue"
+        if gpt_result.intent_matched:
+            recommended_action = "continue"
+        elif gpt_result.error:
+            recommended_action = "retry"
         else:
-            response.recommended_action = "escalate"  # Need human intervention
-            response.success = len(response.errors) == 0  # Success if no hard errors
-            response.call_gpt_manually = not response.gpt_triggered  # Suggest manual GPT
+            recommended_action = "escalate"  # No intent found, may need human help
         
-        response.processing_time_ms = round((time.time() - start_time) * 1000, 2)
+        processing_time = round((time.time() - start_time) * 1000, 2)
         
-        logger.info(f"🎯 Bubble processing complete: success={response.success}, "
-                   f"action={response.recommended_action}, time={response.processing_time_ms}ms")
+        logger.info(f"🧠 GPT result: intent_found={gpt_result.intent_matched}, "
+                   f"intent={gpt_result.intent_name}, confidence={gpt_result.similarity_score}")
         
-        return response
-        
-    except Exception as e:
-        response.processing_time_ms = round((time.time() - start_time) * 1000, 2)
-        response.errors.append(f"Critical error: {str(e)}")
-        response.recommended_action = "retry"
-        response.success = False
-        
-        logger.error(f"❌ Bubble processing failed: {e}")
-        return response
-
-# -------------------------
-# Individual Service Endpoints (for debugging)
-# -------------------------
-@router.post("/bubble-adjust-only")
-async def bubble_transcription_adjustment_only(
-    interaction_id: str,
-    user_transcript: str,
-    user_id: Optional[str] = None
-):
-    """Bubble endpoint for adjustment only"""
-    try:
-        request = TranscriptionAdjustRequest(
-            original_transcript=user_transcript,
-            user_id=user_id,
-            interaction_id=interaction_id
+        return BubbleGPTResponse(
+            success=True,
+            processing_time_ms=processing_time,
+            timestamp=datetime.now().isoformat(),
+            cost_estimate_usd=gpt_result.cost_estimate_usd,
+            interaction_id=request.interaction_id,
+            original_transcript=request.original_transcript,
+            threshold=request.threshold,
+            intent_found=gpt_result.intent_matched,
+            intent_id=gpt_result.intent_id,
+            intent_name=gpt_result.intent_name,
+            confidence=gpt_result.similarity_score,
+            gpt_reasoning=gpt_result.gpt_reasoning,
+            gpt_interpretation=gpt_result.gpt_alternative_interpretation,
+            candidates_analyzed=gpt_result.candidates_analyzed,
+            recommended_action=recommended_action
         )
         
-        result = await adjust_transcription_endpoint(request)
-        
-        return {
-            "success": True,
-            "original_transcript": user_transcript,
-            "adjusted_transcript": result.adjusted_transcript,
-            "completed_transcript": result.completed_transcript,
-            "vocabulary_found": [v.dict() for v in result.list_of_vocabulary],
-            "entities_found": [e.dict() for e in result.list_of_entities],
-            "processing_time_ms": result.processing_time_ms,
-            "vocabnotfound_count": sum(
-                1 for v in result.list_of_vocabulary 
-                if v.transcription_adjusted == 'vocabnotfound'
-            )
-        }
-        
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.post("/bubble-match-only")
-async def bubble_answer_matching_only(
-    interaction_id: str,
-    completed_transcript: str,
-    threshold: int = 85
-):
-    """Bubble endpoint for answer matching only"""
-    try:
-        from matching_answer_types import MatchAnswerRequest
-        from matching_answer_router import match_completed_transcript
+        processing_time = round((time.time() - start_time) * 1000, 2)
+        logger.error(f"❌ Bubble GPT failed: {e}")
         
-        request = MatchAnswerRequest(
-            interaction_id=interaction_id,
-            completed_transcript=completed_transcript,
-            threshold=threshold
+        return BubbleGPTResponse(
+            success=False,
+            processing_time_ms=processing_time,
+            timestamp=datetime.now().isoformat(),
+            interaction_id=request.interaction_id,
+            original_transcript=request.original_transcript,
+            threshold=request.threshold,
+            intent_found=False,
+            candidates_analyzed=0,
+            recommended_action="retry",
+            error=str(e)
         )
-        
-        result = await match_completed_transcript(request)
-        
-        return {
-            "success": result.match_found,
-            "match_found": result.match_found,
-            "matched_answer_id": result.answer_id,
-            "similarity_score": result.similarity_score,
-            "expected_answer": result.expected_transcript,
-            "processing_time_ms": result.processing_time_ms,
-            "reason": result.reason
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.post("/bubble-gpt-only")
-async def bubble_gpt_intent_only(
-    interaction_id: str,
-    original_transcript: str,
-    threshold: int = 70
-):
-    """Bubble endpoint for GPT intent detection only"""
-    try:
-        request = GPTFallbackRequest(
-            interaction_id=interaction_id,
-            original_transcript=original_transcript,
-            threshold=threshold
-        )
-        
-        result = await analyze_original_transcript_intent(request)
-        
-        return {
-            "success": result.intent_matched,
-            "intent_found": result.intent_matched,
-            "intent_id": result.intent_id,
-            "intent_name": result.intent_name,
-            "confidence": result.similarity_score,
-            "reasoning": result.gpt_reasoning,
-            "processing_time_ms": result.processing_time_ms,
-            "cost_estimate": result.cost_estimate_usd
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 # -------------------------
-# Bubble Configuration Endpoint
+# CONFIGURATION AND HEALTH ENDPOINTS
 # -------------------------
 @router.get("/bubble-config")
 async def get_bubble_integration_config():
     """Configuration info for Bubble setup"""
     return {
-        "main_endpoint": {
-            "url": "/api/bubble/bubble-process-transcript",
-            "method": "POST",
-            "description": "Complete transcript processing pipeline",
-            "recommended": True
+        "integration_type": "3_separate_endpoints",
+        "endpoints": {
+            "1_adjustment": {
+                "url": "/api/bubble/bubble-adjust-transcript",
+                "method": "POST",
+                "description": "Process raw transcript - detect entities, vocabulary",
+                "input": "original_transcript",
+                "output": "completed_transcript + analysis",
+                "use_when": "Always first step after speech recognition"
+            },
+            "2_matching": {
+                "url": "/api/bubble/bubble-match-answer",
+                "method": "POST", 
+                "description": "Match processed transcript against expected answers",
+                "input": "completed_transcript (from adjustment)",
+                "output": "match_found + similarity_score",
+                "use_when": "After adjustment, for correctness checking"
+            },
+            "3_gpt_fallback": {
+                "url": "/api/bubble/bubble-gpt-fallback",
+                "method": "POST",
+                "description": "GPT intent detection when other methods fail",
+                "input": "original_transcript (not adjusted)",
+                "output": "detected_intent + confidence",
+                "use_when": "Poor adjustment quality OR no answer match found"
+            }
         },
-        "individual_endpoints": {
-            "adjustment_only": "/api/bubble/bubble-adjust-only",
-            "matching_only": "/api/bubble/bubble-match-only", 
-            "gpt_only": "/api/bubble/bubble-gpt-only"
+        "workflow_patterns": {
+            "happy_path": [
+                "1. Call bubble-adjust-transcript",
+                "2. If quality_score = 'good/excellent', call bubble-match-answer", 
+                "3. If match_found = true, show success feedback",
+                "4. If match_found = false, optionally call bubble-gpt-fallback"
+            ],
+            "poor_quality_path": [
+                "1. Call bubble-adjust-transcript",
+                "2. If suggest_gpt_fallback = true, call bubble-gpt-fallback",
+                "3. Handle based on detected intent"
+            ]
         },
-        "request_format": {
-            "required_fields": ["interaction_id", "user_transcript"],
-            "optional_fields": ["user_id", "threshold", "gpt_threshold"],
-            "control_flags": ["enable_adjustment", "enable_matching", "enable_gpt_fallback"]
-        },
-        "response_format": {
-            "status_fields": ["success", "recommended_action"],
-            "adjustment_fields": ["adjustment_applied", "completed_transcript", "vocabnotfound_count"],
-            "matching_fields": ["answer_match_found", "matched_answer_id", "similarity_score"],
-            "gpt_fields": ["gpt_triggered", "detected_intent_id", "gpt_confidence"]
-        },
-        "bubble_workflow_tips": [
-            "Use recommended_action to determine next steps",
-            "Check errors array for any processing issues",
-            "call_gpt_manually flag indicates manual GPT trigger needed",
-            "vocabnotfound_count helps evaluate transcript quality"
-        ]
+        "bubble_conditions": {
+            "trigger_gpt_when": [
+                "adjustment suggest_gpt_fallback = yes",
+                "matching suggest_gpt_fallback = yes", 
+                "matching match_found = no",
+                "manual trigger by user"
+            ]
+        }
     }
 
-# -------------------------
-# Health Check
-# -------------------------
 @router.get("/bubble-health")
 async def bubble_integration_health():
     """Health check for Bubble integration"""
     return {
         "status": "healthy",
-        "service": "bubble_integration",
-        "endpoints_available": 5,
-        "main_endpoint": "/api/bubble/bubble-process-transcript",
-        "processing_pipeline": [
-            "transcription_adjustment",
-            "answer_matching", 
-            "gpt_intent_detection"
-        ],
-        "auto_trigger_logic": "✅ Enabled",
-        "error_handling": "✅ Comprehensive"
+        "service": "bubble_integration_3_endpoints",
+        "endpoints": {
+            "adjustment": "✅ Ready",
+            "matching": "✅ Ready",
+            "gpt_fallback": "✅ Ready"
+        },
+        "integration_pattern": "3 independent API calls",
+        "cost_optimization": "✅ GPT only when needed",
+        "error_handling": "✅ Graceful fallbacks"
     }
