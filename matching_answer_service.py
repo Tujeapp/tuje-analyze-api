@@ -69,7 +69,7 @@ class AnswerMatchingService:
                     )
                 
                 # Step 2: Match transcript against all possible answers
-                match_results = await self._match_against_answers(
+                match_results, best_score, best_expected = await self._match_against_answers(
                     completed_transcript, possible_answers, threshold
                 )
                 
@@ -85,7 +85,9 @@ class AnswerMatchingService:
                 else:
                     return self._create_no_match_result(
                         interaction_id, completed_transcript, threshold,
-                        processing_time, "below_threshold"
+                        processing_time, "below_threshold",
+                        best_similarity_score=best_score,
+                        best_expected_transcript=best_expected
                     )
                     
             finally:
@@ -155,12 +157,13 @@ class AnswerMatchingService:
         completed_transcript: str, 
         possible_answers: List[Dict],
         threshold: int
-    ) -> List[Dict]:
+    ) -> Tuple[List[Dict], float, str]:
         """
         Match the completed transcript against all possible answers using fuzzy matching
-        Returns sorted list of matches above threshold
+        Returns: (matches_above_threshold, best_score_overall, best_expected_transcript)
         """
-        matches = []
+        matches_above_threshold = []
+        all_scores = []
         completed_transcript_clean = completed_transcript.strip().lower()
         
         logger.info(f"Matching '{completed_transcript_clean}' against {len(possible_answers)} answers")
@@ -174,20 +177,35 @@ class AnswerMatchingService:
             
             logger.debug(f"  Answer {answer_data['answer_id']}: '{expected_transcript}' -> {similarity_score:.1f}%")
             
+            # Keep track of all scores for debugging
+            all_scores.append({
+                'score': similarity_score,
+                'expected': expected_transcript,
+                'answer_data': answer_data
+            })
+            
+            # Only include in results if above threshold
             if similarity_score >= threshold:
                 match_data = answer_data.copy()
                 match_data['similarity_score'] = round(similarity_score, 1)
                 match_data['expected_transcript'] = expected_transcript
-                matches.append(match_data)
+                matches_above_threshold.append(match_data)
         
-        # Sort by similarity score (highest first)
-        matches.sort(key=lambda x: x['similarity_score'], reverse=True)
+        # Sort matches above threshold by similarity score (highest first)
+        matches_above_threshold.sort(key=lambda x: x['similarity_score'], reverse=True)
         
-        logger.info(f"Found {len(matches)} matches above threshold {threshold}%")
-        if matches:
-            logger.info(f"Best match: {matches[0]['similarity_score']:.1f}% for answer {matches[0]['answer_id']}")
+        # Find the overall best score (even if below threshold) for debugging
+        best_overall = max(all_scores, key=lambda x: x['score']) if all_scores else None
+        best_score_overall = best_overall['score'] if best_overall else 0
+        best_expected_overall = best_overall['expected'] if best_overall else None
         
-        return matches
+        logger.info(f"Found {len(matches_above_threshold)} matches above threshold {threshold}%")
+        logger.info(f"Best overall score: {best_score_overall:.1f}% for '{best_expected_overall}'")
+        
+        if matches_above_threshold:
+            logger.info(f"Best qualifying match: {matches_above_threshold[0]['similarity_score']:.1f}% for answer {matches_above_threshold[0]['answer_id']}")
+        
+        return matches_above_threshold, best_score_overall, best_expected_overall
     
     def _create_match_result(
         self, 
@@ -222,9 +240,11 @@ class AnswerMatchingService:
         completed_transcript: str,
         threshold: int, 
         processing_time: float, 
-        reason: str
+        reason: str,
+        best_similarity_score: float = None,
+        best_expected_transcript: str = None
     ) -> Dict:
-        """Create no match result"""
+        """Create no match result with best attempt info"""
         return {
             "match_found": False,
             "interaction_id": interaction_id,
@@ -232,6 +252,8 @@ class AnswerMatchingService:
             "interaction_answer_id": None,
             "answer_id": None,
             "threshold": threshold,
+            "similarity_score": best_similarity_score,  # Show best score even if below threshold
+            "expected_transcript": best_expected_transcript,  # Show what was closest
             "reason": reason,
             "processing_time_ms": round(processing_time * 1000, 2),
             "timestamp": datetime.now().isoformat()
