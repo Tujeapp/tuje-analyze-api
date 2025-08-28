@@ -1,3 +1,4 @@
+# Updated match_routes.py - Enhanced with new matching service integration
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from typing import List, Optional, Dict
@@ -12,6 +13,10 @@ import os
 # Import from your transcription service
 from adjustement_types import TranscriptionAdjustRequest, AdjustmentResult
 from adjustement_models import adjust_transcription_endpoint
+
+# NEW: Import from the new matching service
+from matching_answer_service import answer_matching_service
+from matching_answer_types import MatchAnswerRequest, CombinedAdjustmentAndMatchRequest
 
 # Use the same pattern as your other files
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -28,7 +33,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 # -------------------------
-# NEW: Models for Answer Matching
+# NEW: Models for Answer Matching (Enhanced)
 # -------------------------
 class MatchAnswerRequest(BaseModel):
     """Request for matching user answer against expected answers"""
@@ -52,6 +57,34 @@ class MatchAnswerResponse(BaseModel):
     vocabulary_found: List[Dict] = []
     entities_found: List[Dict] = []
     processing_time_ms: Optional[float] = None
+
+# -------------------------
+# Helper function to get expected entities from database
+# -------------------------
+async def get_interaction_expected_entities(interaction_id: str) -> Optional[List[str]]:
+    """Get expected entities for an interaction from database"""
+    try:
+        conn = await asyncpg.connect(DATABASE_URL)
+        try:
+            result = await conn.fetchrow("""
+                SELECT expected_entities_id 
+                FROM brain_interaction 
+                WHERE id = $1 AND live = TRUE
+            """, interaction_id)
+            
+            if result and result["expected_entities_id"]:
+                entities = result["expected_entities_id"]
+                if isinstance(entities, list):
+                    return [str(e).strip() for e in entities if e and str(e).strip()]
+                elif isinstance(entities, str):
+                    return [e.strip() for e in entities.split(',') if e.strip()]
+            
+            return None
+        finally:
+            await conn.close()
+    except Exception as e:
+        logger.warning(f"Failed to get expected entities: {e}")
+        return None
 
 # -------------------------
 # NEW: Enhanced Match Answer Endpoint
@@ -111,80 +144,137 @@ async def match_answer_with_adjustment(request: MatchAnswerRequest, background_t
                 logger.info("Falling back to original transcript")
                 # Continue with original transcript if adjustment fails
         
-        # STEP 2: Get expected answers for this interaction
-        conn = await asyncpg.connect(DATABASE_URL)
+        # STEP 2: Use new matching service for better performance
+        logger.info(f"🔄 Using new matching service for: '{adjusted_transcript}'")
+        
         try:
-            # Get answers linked to this interaction
-            rows = await conn.fetch("""
-                SELECT a.id, a.transcription_fr, a.transcription_en, a.transcription_adjusted
-                FROM brain_interaction_answer ia
-                JOIN brain_answer a ON ia.answer_id = a.id
-                WHERE ia.interaction_id = $1 AND a.live = TRUE
-                ORDER BY a.created_at ASC
-            """, request.interaction_id)
-        finally:
-            await conn.close()
-
-        if not rows:
-            raise HTTPException(
-                status_code=404, 
-                detail=f"No answers found for interaction_id: {request.interaction_id}"
+            # Use the new matching service
+            match_request = MatchAnswerRequest(
+                interaction_id=request.interaction_id,
+                completed_transcript=adjusted_transcript,
+                threshold=request.threshold,
+                user_id=request.user_id
             )
-
-        # STEP 3: Compare user input against expected answers
-        user_input = adjusted_transcript.strip().lower()
-        best_score = 0
-        best_match = None
-        all_attempts = []
-
-        for row in rows:
-            expected = row["transcription_adjusted"].strip().lower()
-            score = difflib.SequenceMatcher(None, user_input, expected).ratio() * 100
             
-            attempt = {
-                "id": row["id"],
-                "transcriptionFr": row["transcription_fr"],
-                "transcriptionEn": row["transcription_en"],
-                "transcriptionAdjusted": row["transcription_adjusted"],
-                "score": round(score, 1)
-            }
-            all_attempts.append(attempt)
-
-            if score > best_score:
-                best_score = score
-                best_match = attempt
-
-        # Calculate total processing time
-        total_time = (time.time() - start_time) * 1000
-        
-        logger.info(f"Match attempt: user='{user_input}', best_score={best_score:.1f}, threshold={request.threshold}")
-        
-        # STEP 4: Return results
-        if best_match and best_score >= request.threshold:
-            return MatchAnswerResponse(
-                match_found=True,
-                call_gpt=False,
-                best_answer=best_match,
-                adjustment_applied=adjustment_applied,
-                original_transcript=original_transcript if adjustment_applied else None,
-                adjusted_transcript=adjusted_transcript if adjustment_applied else None,
-                vocabulary_found=vocabulary_found,
-                entities_found=entities_found,
-                processing_time_ms=total_time
+            match_result = await answer_matching_service.match_completed_transcript(
+                interaction_id=request.interaction_id,
+                completed_transcript=adjusted_transcript,
+                threshold=request.threshold
             )
-        else:
-            return MatchAnswerResponse(
-                match_found=False,
-                call_gpt=True,
-                reason=f"No match above threshold {request.threshold}%. Best score: {best_score:.1f}%",
-                best_attempt=best_match,
-                adjustment_applied=adjustment_applied,
-                original_transcript=original_transcript if adjustment_applied else None,
-                adjusted_transcript=adjusted_transcript if adjustment_applied else None,
-                vocabulary_found=vocabulary_found,
-                entities_found=entities_found,
-                processing_time_ms=total_time
-            )
+            
+            # Calculate total processing time
+            total_time = (time.time() - start_time) * 1000
+            
+            logger.info(f"New matching service result: match_found={match_result.get('match_found', False)}, "
+                       f"score={match_result.get('similarity_score', 0)}")
+            
+            # Convert new service result to legacy response format
+            if match_result.get('match_found'):
+                best_answer = {
+                    "id": match_result['answer_id'],
+                    "transcriptionFr": match_result['answer_details']['transcription_fr'],
+                    "transcriptionEn": match_result['answer_details']['transcription_en'], 
+                    "transcriptionAdjusted": match_result['answer_details']['transcription_adjusted'],
+                    "score": match_result['similarity_score'],
+                    "interaction_answer_id": match_result['interaction_answer_id']
+                }
+                
+                return MatchAnswerResponse(
+                    match_found=True,
+                    call_gpt=False,
+                    best_answer=best_answer,
+                    adjustment_applied=adjustment_applied,
+                    original_transcript=original_transcript if adjustment_applied else None,
+                    adjusted_transcript=adjusted_transcript if adjustment_applied else None,
+                    vocabulary_found=vocabulary_found,
+                    entities_found=entities_found,
+                    processing_time_ms=total_time
+                )
+            else:
+                return MatchAnswerResponse(
+                    match_found=False,
+                    call_gpt=True,
+                    reason=match_result.get('reason', 'No match found'),
+                    adjustment_applied=adjustment_applied,
+                    original_transcript=original_transcript if adjustment_applied else None,
+                    adjusted_transcript=adjusted_transcript if adjustment_applied else None,
+                    vocabulary_found=vocabulary_found,
+                    entities_found=entities_found,
+                    processing_time_ms=total_time
+                )
+                
+        except Exception as e:
+            logger.warning(f"New matching service failed, falling back to legacy: {e}")
+            
+            # FALLBACK: Use legacy matching logic
+            conn = await asyncpg.connect(DATABASE_URL)
+            try:
+                # Get answers linked to this interaction
+                rows = await conn.fetch("""
+                    SELECT a.id, a.transcription_fr, a.transcription_en, a.transcription_adjusted
+                    FROM brain_interaction_answer ia
+                    JOIN brain_answer a ON ia.answer_id = a.id
+                    WHERE ia.interaction_id = $1 AND a.live = TRUE
+                    ORDER BY a.created_at ASC
+                """, request.interaction_id)
+            finally:
+                await conn.close()
+
+            if not rows:
+                raise HTTPException(
+                    status_code=404, 
+                    detail=f"No answers found for interaction_id: {request.interaction_id}"
+                )
+
+            # Compare user input against expected answers
+            user_input = adjusted_transcript.strip().lower()
+            best_score = 0
+            best_match = None
+
+            for row in rows:
+                expected = row["transcription_adjusted"].strip().lower()
+                score = difflib.SequenceMatcher(None, user_input, expected).ratio() * 100
+                
+                attempt = {
+                    "id": row["id"],
+                    "transcriptionFr": row["transcription_fr"],
+                    "transcriptionEn": row["transcription_en"],
+                    "transcriptionAdjusted": row["transcription_adjusted"],
+                    "score": round(score, 1)
+                }
+
+                if score > best_score:
+                    best_score = score
+                    best_match = attempt
+
+            # Calculate total processing time
+            total_time = (time.time() - start_time) * 1000
+            
+            if best_match and best_score >= request.threshold:
+                return MatchAnswerResponse(
+                    match_found=True,
+                    call_gpt=False,
+                    best_answer=best_match,
+                    adjustment_applied=adjustment_applied,
+                    original_transcript=original_transcript if adjustment_applied else None,
+                    adjusted_transcript=adjusted_transcript if adjustment_applied else None,
+                    vocabulary_found=vocabulary_found,
+                    entities_found=entities_found,
+                    processing_time_ms=total_time
+                )
+            else:
+                return MatchAnswerResponse(
+                    match_found=False,
+                    call_gpt=True,
+                    reason=f"No match above threshold {request.threshold}%. Best score: {best_score:.1f}%",
+                    best_attempt=best_match,
+                    adjustment_applied=adjustment_applied,
+                    original_transcript=original_transcript if adjustment_applied else None,
+                    adjusted_transcript=adjusted_transcript if adjustment_applied else None,
+                    vocabulary_found=vocabulary_found,
+                    entities_found=entities_found,
+                    processing_time_ms=total_time
+                )
 
     except Exception as e:
         logger.error(f"Match answer with adjustment failed: {e}")
@@ -238,6 +328,10 @@ async def test_match_with_adjustment(
             "should_call_gpt": result.call_gpt,
             "processing_time": f"{result.processing_time_ms:.2f}ms",
             "improvement": "Check if adjusted_transcript differs from original_transcript"
+        },
+        "migration_note": {
+            "recommendation": "Migrate to /api/matching/combined-adjust-and-match for better performance",
+            "benefits": "Single API call, better error handling, comprehensive monitoring"
         }
     }
 
@@ -455,93 +549,3 @@ Réponds UNIQUEMENT avec le JSON, pas d'explication supplémentaire."""
                     "content": prompt
                 }
             ],
-            temperature=0.1,  # Low for consistent analysis
-            max_tokens=200    # Sufficient for structured response
-        )
-        
-        content = response.choices[0].message["content"].strip()
-        
-        # Clean JSON response
-        if content.startswith("```json"):
-            content = content.replace("```json", "").replace("```", "").strip()
-        elif content.startswith("```"):
-            content = content.replace("```", "").strip()
-        
-        return json.loads(content)
-        
-    except json.JSONDecodeError as e:
-        logger.error(f"GPT returned invalid JSON: {content}")
-        # Fallback response structure
-        return {
-            "matched_intent_name": "other",
-            "matched_intent_id": None,
-            "confidence_score": 0,
-            "reasoning": "Erreur de parsing GPT",
-            "gpt_own_interpretation": "Réponse non analysable"
-        }
-    except Exception as e:
-        logger.error(f"OpenAI API error: {str(e)}")
-        raise
-
-def process_filtered_intent_response(
-    gpt_response: Dict, 
-    filtered_intents: List[BubbleFilteredIntent],
-    threshold: int
-) -> GPTIntentAnalysisResponse:
-    """
-    Process GPT response and create structured result for Bubble
-    """
-    
-    matched_intent_name = gpt_response.get("matched_intent_name")
-    matched_intent_id = gpt_response.get("matched_intent_id")
-    confidence = gpt_response.get("confidence_score", 0)
-    
-    # Validate that the matched intent actually exists in the filtered list
-    if matched_intent_name != "other" and matched_intent_id:
-        intent_found = False
-        for intent in filtered_intents:
-            if intent.id == matched_intent_id and intent.name == matched_intent_name:
-                intent_found = True
-                break
-        
-        # If GPT returned an invalid intent, treat as "other"
-        if not intent_found:
-            logger.warning(f"GPT returned invalid intent: {matched_intent_id}/{matched_intent_name}")
-            matched_intent_name = "other"
-            matched_intent_id = None
-    
-    # Handle "other" case - extract GPT's own interpretation
-    gpt_suggested_intent = None
-    if matched_intent_name == "other":
-        gpt_suggested_intent = gpt_response.get("gpt_own_interpretation")
-        matched_intent_id = None
-        matched_intent_name = None
-    
-    # Calculate cost estimate
-    cost_estimate = estimate_mini_cost(gpt_response, len(filtered_intents))
-    
-    return GPTIntentAnalysisResponse(
-        matched_intent_id=matched_intent_id,
-        matched_intent_name=matched_intent_name,
-        confidence_score=confidence,
-        gpt_suggested_intent=gpt_suggested_intent,
-        reasoning=gpt_response.get("reasoning", "Aucune raison fournie"),
-        cost_estimate=cost_estimate
-    )
-
-def estimate_mini_cost(response_data: Dict, num_intents: int) -> float:
-    """
-    Estimate GPT-4o-mini cost based on actual usage
-    """
-    # Token estimation for your use case
-    base_prompt_tokens = 180 + (num_intents * 12)  # Base prompt + intent list
-    user_input_tokens = len(str(response_data.get("user_input", ""))) / 4
-    response_tokens = len(str(response_data)) / 4
-    
-    total_input_tokens = base_prompt_tokens + user_input_tokens
-    
-    # GPT-4o-mini pricing (input: $0.000150/1K, output: $0.000600/1K)
-    input_cost = total_input_tokens * (0.000150 / 1000)
-    output_cost = response_tokens * (0.000600 / 1000)
-    
-    return round(input_cost + output_cost, 6)
