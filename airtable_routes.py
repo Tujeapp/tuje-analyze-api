@@ -87,7 +87,8 @@ class InteractionEntry(BaseEntry):
     transcriptionEn: str
     intents: List[str] = []
     subtopicId: Optional[str] = None
-    expectedEntitiesIds: Optional[List[str]] = []  # NEW: Add expected entities
+    expectedEntitiesIds: Optional[List[str]] = []
+    expectedVocabIds: Optional[List[str]] = []  # NEW: Add expected vocab IDs
     
     @validator('expectedEntitiesIds')
     def clean_expected_entities_ids(cls, v):
@@ -96,8 +97,17 @@ class InteractionEntry(BaseEntry):
             return []
         if not isinstance(v, list):
             return []
-        # Filter out empty strings and None values
         cleaned = [str(entity_id).strip() for entity_id in v if entity_id and str(entity_id).strip()]
+        return cleaned
+    
+    @validator('expectedVocabIds')
+    def clean_expected_vocab_ids(cls, v):
+        """Clean expected vocab IDs list"""
+        if v is None:
+            return []
+        if not isinstance(v, list):
+            return []
+        cleaned = [str(vocab_id).strip() for vocab_id in v if vocab_id and str(vocab_id).strip()]
         return cleaned
 
 class VocabEntry(BaseEntry):
@@ -163,7 +173,7 @@ SYNC_CONFIGS = {
         "airtable_table": "Interaction",
         "columns": ["id", "transcription_fr", "transcription_en", "airtable_record_id",
                    "last_modified_time_ref", "created_at", "update_at", "live", 
-                   "intents", "subtopic_id", "expected_entities_id"]  # NEW: Add expected_entities_id
+                   "intents", "subtopic_id", "expected_entities_id", "expected_vocab_id"]  # NEW: Add expected_vocab_id
     },
     "vocab": {
         "table_name": "brain_vocab",
@@ -233,7 +243,8 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "transcriptionEn": "transcription_en", 
         "transcriptionAdjusted": "transcription_adjusted",
         "entityTypeId": "entity_type_id",
-        "expectedEntitiesIds": "expected_entities_id",  # NEW: Add expected entities mapping
+        "expectedEntitiesIds": "expected_entities_id",
+        "expectedVocabIds": "expected_vocab_id",  # NEW: Add expected vocab mapping
         "airtableRecordId": "airtable_record_id",
         "nameFr": "name_fr",
         "nameEn": "name_en",
@@ -294,17 +305,18 @@ async def sync_entity_to_database(entry_data: Dict, config: Dict) -> None:
             values = []
             for col in columns:
                 value = entry_data.get(col)
-                if col in ['intents', 'expected_entities_id'] and isinstance(value, list):
+                if col in ['intents', 'expected_entities_id', 'expected_vocab_id'] and isinstance(value, list):
                     values.append(value)  # PostgreSQL will handle the array
                 else:
                     values.append(value)
             
             await conn.execute(query, *values)
             
-            # Log expected entities sync for debugging
+            # Enhanced logging for interaction syncing
             if config["table_name"] == "brain_interaction":
                 logger.info(f"Interaction synced: id={entry_data.get('id')}, "
-                           f"expected_entities_id={entry_data.get('expected_entities_id')}")
+                           f"expected_entities_id={entry_data.get('expected_entities_id')}, "
+                           f"expected_vocab_id={entry_data.get('expected_vocab_id')}")
 
 # Background task for Airtable updates
 async def background_airtable_update(record_id: str, timestamp: int, table_name: str):
