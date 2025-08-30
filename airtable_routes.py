@@ -163,7 +163,8 @@ class VocabEntry(BaseEntry):
     transcriptionFr: str
     transcriptionEn: str
     transcriptionAdjusted: str
-    entityTypeId: Optional[str] = None  # ← ADD THIS LINE
+    entityTypeId: Optional[str] = None
+    expectedNotionIds: Optional[List[str]] = []  # NEW: Add expected notion IDs
     
     @validator('entityTypeId')
     def clean_entity_type_id(cls, v):
@@ -173,6 +174,16 @@ class VocabEntry(BaseEntry):
             if len(v) == 0:
                 return None
         return v
+    
+    @validator('expectedNotionIds')
+    def clean_expected_notion_ids(cls, v):
+        """Clean expected notion IDs list"""
+        if v is None:
+            return []
+        if not isinstance(v, list):
+            return []
+        cleaned = [str(notion_id).strip() for notion_id in v if notion_id and str(notion_id).strip()]
+        return cleaned
 
 class IntentEntry(BaseEntry):
     name: str
@@ -229,7 +240,7 @@ SYNC_CONFIGS = {
         "table_name": "brain_vocab",
         "airtable_table": "Vocab",
         "columns": ["id", "transcription_fr", "transcription_en", "transcription_adjusted",
-                   "entity_type_id",  # ← ADD THIS LINE
+                   "entity_type_id", "expected_notion_id",  # NEW: Add expected_notion_id
                    "airtable_record_id", "last_modified_time_ref", 
                    "created_at", "update_at", "live"]
     },
@@ -300,15 +311,15 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "transcriptionEn": "transcription_en", 
         "transcriptionAdjusted": "transcription_adjusted",
         "entityTypeId": "entity_type_id",
+        "expectedNotionIds": "expected_notion_id",  # NEW: Add expected notion mapping for vocab
         "expectedEntitiesIds": "expected_entities_id",
         "expectedVocabIds": "expected_vocab_id",
-        "expectedNotionIds": "expected_notion_id",
         "interactionVocabIds": "interaction_vocab_id",
+        "airtableRecordId": "airtable_record_id",
         "nameFr": "name_fr",
         "nameEn": "name_en",
-        "levelFrom": "level_from",    # NEW: Add notion field mappings
-        "levelOwned": "level_owned",  # NEW: Add notion field mappings
-        "airtableRecordId": "airtable_record_id",
+        "levelFrom": "level_from",
+        "levelOwned": "level_owned",
         "subtopicId": "subtopic_id"
     }
     
@@ -373,8 +384,12 @@ async def sync_entity_to_database(entry_data: Dict, config: Dict) -> None:
             
             await conn.execute(query, *values)
             
-            # Enhanced logging for interaction syncing
-            if config["table_name"] == "brain_interaction":
+            # Enhanced logging for vocab syncing
+            if config["table_name"] == "brain_vocab":
+                logger.info(f"Vocab synced: id={entry_data.get('id')}, "
+                           f"entity_type_id={entry_data.get('entity_type_id')}, "
+                           f"expected_notion_id={entry_data.get('expected_notion_id')}")
+            elif config["table_name"] == "brain_interaction":
                 logger.info(f"Interaction synced: id={entry_data.get('id')}, "
                            f"expected_entities_id={entry_data.get('expected_entities_id')}, "
                            f"expected_vocab_id={entry_data.get('expected_vocab_id')}, "
