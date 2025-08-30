@@ -132,6 +132,33 @@ class InteractionEntry(BaseEntry):
         cleaned = [str(vocab_id).strip() for vocab_id in v if vocab_id and str(vocab_id).strip()]
         return cleaned
 
+class NotionEntry(BaseEntry):
+    nameFr: str
+    nameEn: str
+    description: str
+    rank: int
+    score: float
+    levelFrom: int
+    levelOwned: int
+    
+    @validator('nameFr', 'nameEn', 'description')
+    def validate_text_fields(cls, v):
+        if not v or len(v.strip()) == 0:
+            raise ValueError('Text fields cannot be empty')
+        return v.strip()
+    
+    @validator('rank', 'levelFrom', 'levelOwned')
+    def validate_numeric_fields(cls, v):
+        if v < 0:
+            raise ValueError('Numeric fields must be non-negative')
+        return v
+    
+    @validator('score')
+    def validate_score(cls, v):
+        if v < 0:
+            raise ValueError('Score must be non-negative')
+        return v
+
 class VocabEntry(BaseEntry):
     transcriptionFr: str
     transcriptionEn: str
@@ -212,6 +239,13 @@ SYNC_CONFIGS = {
         "columns": ["id", "name", "description", "airtable_record_id",
                    "last_modified_time_ref", "created_at", "update_at", "live"]
     },
+        "notion": {
+        "table_name": "brain_notion",
+        "airtable_table": "Notion",
+        "columns": ["id", "name_fr", "name_en", "description", "rank", "live", 
+                   "score", "level_from", "level_owned", "airtable_record_id", 
+                   "last_modified_time_ref", "created_at", "update_at"]
+    },
     "subtopic": {
         "table_name": "brain_subtopic",
         "airtable_table": "Subtopic",
@@ -269,10 +303,12 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "expectedEntitiesIds": "expected_entities_id",
         "expectedVocabIds": "expected_vocab_id",
         "expectedNotionIds": "expected_notion_id",
-        "interactionVocabIds": "interaction_vocab_id",  # NEW: Add interaction vocab mapping
-        "airtableRecordId": "airtable_record_id",
+        "interactionVocabIds": "interaction_vocab_id",
         "nameFr": "name_fr",
         "nameEn": "name_en",
+        "levelFrom": "level_from",    # NEW: Add notion field mappings
+        "levelOwned": "level_owned",  # NEW: Add notion field mappings
+        "airtableRecordId": "airtable_record_id",
         "subtopicId": "subtopic_id"
     }
     
@@ -423,6 +459,11 @@ async def webhook_sync_interaction_answer(entry: InteractionAnswerEntry, backgro
 @router.post("/webhook-sync-entity")
 async def webhook_sync_entity(entry: EntityEntry, background_tasks: BackgroundTasks):
     return await generic_sync_webhook(entry, "entity", background_tasks)
+
+@router.post("/webhook-sync-notion")
+async def webhook_sync_notion(entry: NotionEntry, background_tasks: BackgroundTasks):
+    """Webhook endpoint to sync notion data from Airtable"""
+    return await generic_sync_webhook(entry, "notion", background_tasks)
 
 # Health check endpoint
 @router.get("/sync-health")
