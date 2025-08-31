@@ -41,7 +41,7 @@ class NotionMatcher:
             logger.info(f"🎯 Interaction expects notions: {interaction_expected_notions}")
             
             # Step 2: Get vocabulary expected notions for all found vocabulary
-            vocabulary_notion_sets = await self._get_vocabulary_notion_sets(
+            vocabulary_notion_sets = self._get_vocabulary_notion_sets(
                 vocabulary_matches, cache_manager
             )
             
@@ -64,30 +64,27 @@ class NotionMatcher:
     ) -> Set[str]:
         """Get expected notion IDs for the interaction"""
         try:
-            # Use the existing database connection through cache manager
-            pool = await cache_manager._get_database_pool()
+            # Use the cache manager's safe query method
+            result = await cache_manager.execute_query_for_notion_matcher("""
+                SELECT expected_notion_id
+                FROM brain_interaction
+                WHERE id = $1 AND live = TRUE
+            """, interaction_id)
             
-            async with pool.acquire() as conn:
-                result = await conn.fetchrow("""
-                    SELECT expected_notion_id
-                    FROM brain_interaction
-                    WHERE id = $1 AND live = TRUE
-                """, interaction_id)
-                
-                if result and result['expected_notion_id']:
-                    notion_ids = result['expected_notion_id']
-                    if isinstance(notion_ids, list):
-                        return set(str(nid).strip() for nid in notion_ids if nid and str(nid).strip())
-                    elif isinstance(notion_ids, str):
-                        return set(nid.strip() for nid in notion_ids.split(',') if nid.strip())
-                
-                return set()
+            if result and result['expected_notion_id']:
+                notion_ids = result['expected_notion_id']
+                if isinstance(notion_ids, list):
+                    return set(str(nid).strip() for nid in notion_ids if nid and str(nid).strip())
+                elif isinstance(notion_ids, str):
+                    return set(nid.strip() for nid in notion_ids.split(',') if nid.strip())
+            
+            return set()
                 
         except Exception as e:
             logger.error(f"Failed to get interaction expected notions: {e}")
             return set()
     
-    async def _get_vocabulary_notion_sets(
+    def _get_vocabulary_notion_sets(
         self, 
         vocabulary_matches: List[VocabularyMatch],
         cache_manager: VocabularyCacheManager
@@ -96,7 +93,7 @@ class NotionMatcher:
         vocab_notion_map = {}
         
         try:
-            # Get all vocabulary from cache (already loaded)
+            # Get all vocabulary from cache (now includes expected_notion_id)
             all_vocab = cache_manager.get_all_vocab()
             
             # Create a lookup map for efficiency
