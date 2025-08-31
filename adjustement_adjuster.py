@@ -1,12 +1,10 @@
-# 2. Fix adjustement_adjuster.py - Remove ALL relative imports
-
-# adjustement_adjuster.py (FIXED VERSION)
+# adjustement_adjuster.py - COMPLETELY FIXED VERSION
 import asyncpg
 import logging
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 
-# FIXED: All absolute imports - no dots!
+# All absolute imports - no dots!
 from adjustement_cache_manager import VocabularyCacheManager
 from adjustement_validators import validate_input
 from adjustement_performance_tracker import PerformanceTracker
@@ -103,7 +101,7 @@ class TranscriptionAdjuster:
                 vocab_matches = self.vocab_finder.find_matches(
                     normalized, 
                     self.cache_manager, 
-                    expected_entities_ids=request.expected_entities_ids  # NEW: Pass context
+                    expected_entities_ids=request.expected_entities_ids  # Pass context
                 )
                 
                 # Build transcript
@@ -119,7 +117,7 @@ class TranscriptionAdjuster:
                 vocabulary_matches = []
                 matched_entries = []
             
-            # Phase 3: Entity completion (THE KEY FIX!)
+            # Phase 3: Entity completion
             try:
                 completed_transcript, entity_matches = self.entity_mapper.map_entities(
                     final_transcript, vocab_matches, self.cache_manager
@@ -128,6 +126,24 @@ class TranscriptionAdjuster:
                 logger.error(f"Completion failed: {e}")
                 completed_transcript = final_transcript
                 entity_matches = []
+            
+            # Phase 4: Notion Matching (NEW)
+            notion_matched_ids = []
+            try:
+                if request.interaction_id:  # Only run if we have interaction context
+                    notion_matcher = NotionMatcher()
+                    notion_matched_ids = await notion_matcher.find_notion_matches(
+                        interaction_id=request.interaction_id,
+                        vocabulary_matches=vocabulary_matches,
+                        cache_manager=self.cache_manager
+                    )
+                    logger.info(f"🎯 Phase 4: Found {len(notion_matched_ids)} notion matches")
+                else:
+                    logger.info("⚠️ No interaction_id provided, skipping notion matching")
+            except Exception as e:
+                logger.error(f"Phase 4 notion matching failed: {e}")
+                # Don't let notion matching failure break the whole process
+                notion_matched_ids = []
             
             # Calculate total processing time
             processing_time = round((datetime.now() - start_time).total_seconds() * 1000, 2)
@@ -148,75 +164,25 @@ class TranscriptionAdjuster:
                 completed_transcript=completed_transcript,
                 list_of_vocabulary=vocabulary_matches,
                 list_of_entities=entity_matches,
+                list_of_notion_matches=notion_matched_ids,  # NEW
                 processing_time_ms=processing_time
             )
             
-    except Exception as e:
-        logger.error(f"Complete transcription adjustment failed: {e}")
-        
-        # Return minimal valid result for reliability
-        processing_time = round((datetime.now() - start_time).total_seconds() * 1000, 2)
-        return AdjustmentResult(
-            original_transcript=request.original_transcript,
-            pre_adjusted_transcript=request.original_transcript,
-            adjusted_transcript=request.original_transcript.lower(),
-            completed_transcript=request.original_transcript.lower(),
-            list_of_vocabulary=[],
-            list_of_entities=[],
-            list_of_notion_matches=[],  # ✅ ADD THIS LINE
-            processing_time_ms=processing_time
-        )
-
-        # Phase 3: Entity completion (THE KEY FIX!) - EXISTING CODE
-        try:
-            completed_transcript, entity_matches = self.entity_mapper.map_entities(
-                final_transcript, vocab_matches, self.cache_manager
+        except Exception as e:
+            logger.error(f"Complete transcription adjustment failed: {e}")
+            
+            # Return minimal valid result for reliability
+            processing_time = round((datetime.now() - start_time).total_seconds() * 1000, 2)
+            return AdjustmentResult(
+                original_transcript=request.original_transcript,
+                pre_adjusted_transcript=request.original_transcript,
+                adjusted_transcript=request.original_transcript.lower(),
+                completed_transcript=request.original_transcript.lower(),
+                list_of_vocabulary=[],
+                list_of_entities=[],
+                list_of_notion_matches=[],  # NEW
+                processing_time_ms=processing_time
             )
-        except Exception as e:
-            logger.error(f"Completion failed: {e}")
-            completed_transcript = final_transcript
-            entity_matches = []
-        
-        # Phase 4: Notion Matching
-        notion_matched_ids = []
-        try:
-            if request.interaction_id:  # Only run if we have interaction context
-                notion_matcher = NotionMatcher()
-                notion_matched_ids = await notion_matcher.find_notion_matches(
-                    interaction_id=request.interaction_id,
-                    vocabulary_matches=vocabulary_matches,
-                    cache_manager=self.cache_manager
-                )
-                logger.info(f"🎯 Phase 4: Found {len(notion_matched_ids)} notion matches")
-            else:
-                logger.info("⚠️ No interaction_id provided, skipping notion matching")
-        except Exception as e:
-            logger.error(f"Phase 4 notion matching failed: {e}")
-            # Don't let notion matching failure break the whole process
-            notion_matched_ids = []
-        
-        # Calculate total processing time - EXISTING CODE
-        processing_time = round((datetime.now() - start_time).total_seconds() * 1000, 2)
-        
-        # Validation: Ensure we don't return worse results than input - EXISTING CODE
-        if not final_transcript:
-            final_transcript = original.lower()
-        if not completed_transcript:
-            completed_transcript = final_transcript
-        
-        logger.info(f"Adjustment completed in {processing_time:.2f}ms")
-        logger.info(f"Result: '{original}' → '{completed_transcript}'")
-        
-        return AdjustmentResult(
-            original_transcript=original,
-            pre_adjusted_transcript=pre_adjusted,
-            adjusted_transcript=final_transcript,
-            completed_transcript=completed_transcript,
-            list_of_vocabulary=vocabulary_matches,
-            list_of_entities=entity_matches,
-            list_of_notion_matches=notion_matched_ids,  # ✅ ADD THIS LINE
-            processing_time_ms=processing_time
-        )
     
     def get_cache_status(self) -> Dict[str, Any]:
         """Get current cache status for monitoring"""
