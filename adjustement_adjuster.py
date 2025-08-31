@@ -19,6 +19,7 @@ from adjustement_vocabulary_finder import VocabularyFinder
 from adjustement_transcript_assembler import TranscriptAssembler
 from adjustement_entity_mapper import EntityMapper
 from adjustement_un_une_analyzer import UnUneAnalyzer
+from adjustement_notion_matcher import NotionMatcher
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +165,57 @@ class TranscriptionAdjuster:
                 list_of_entities=[],
                 processing_time_ms=processing_time
             )
+
+        # Phase 3: Entity completion (THE KEY FIX!) - EXISTING CODE
+        try:
+            completed_transcript, entity_matches = self.entity_mapper.map_entities(
+                final_transcript, vocab_matches, self.cache_manager
+            )
+        except Exception as e:
+            logger.error(f"Completion failed: {e}")
+            completed_transcript = final_transcript
+            entity_matches = []
+        
+        # Phase 4: Notion Matching
+        notion_matched_ids = []
+        try:
+            if request.interaction_id:  # Only run if we have interaction context
+                notion_matcher = NotionMatcher()
+                notion_matched_ids = await notion_matcher.find_notion_matches(
+                    interaction_id=request.interaction_id,
+                    vocabulary_matches=vocabulary_matches,
+                    cache_manager=self.cache_manager
+                )
+                logger.info(f"🎯 Phase 4: Found {len(notion_matched_ids)} notion matches")
+            else:
+                logger.info("⚠️ No interaction_id provided, skipping notion matching")
+        except Exception as e:
+            logger.error(f"Phase 4 notion matching failed: {e}")
+            # Don't let notion matching failure break the whole process
+            notion_matched_ids = []
+        
+        # Calculate total processing time - EXISTING CODE
+        processing_time = round((datetime.now() - start_time).total_seconds() * 1000, 2)
+        
+        # Validation: Ensure we don't return worse results than input - EXISTING CODE
+        if not final_transcript:
+            final_transcript = original.lower()
+        if not completed_transcript:
+            completed_transcript = final_transcript
+        
+        logger.info(f"Adjustment completed in {processing_time:.2f}ms")
+        logger.info(f"Result: '{original}' → '{completed_transcript}'")
+        
+        return AdjustmentResult(
+            original_transcript=original,
+            pre_adjusted_transcript=pre_adjusted,
+            adjusted_transcript=final_transcript,
+            completed_transcript=completed_transcript,
+            list_of_vocabulary=vocabulary_matches,
+            list_of_entities=entity_matches,
+            list_of_notion_matches=notion_matched_ids,  # ✅ ADD THIS LINE
+            processing_time_ms=processing_time
+        )
     
     def get_cache_status(self) -> Dict[str, Any]:
         """Get current cache status for monitoring"""
