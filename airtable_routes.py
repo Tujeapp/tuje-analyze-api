@@ -164,7 +164,8 @@ class VocabEntry(BaseEntry):
     transcriptionEn: str
     transcriptionAdjusted: str
     entityTypeId: Optional[str] = None
-    expectedNotionIds: Optional[List[str]] = []  # NEW: Add expected notion IDs
+    expectedNotionIds: Optional[List[str]] = []
+    expectedIntentIds: Optional[List[str]] = []  # NEW: Add expected intent IDs
     
     @validator('entityTypeId')
     def clean_entity_type_id(cls, v):
@@ -183,6 +184,16 @@ class VocabEntry(BaseEntry):
         if not isinstance(v, list):
             return []
         cleaned = [str(notion_id).strip() for notion_id in v if notion_id and str(notion_id).strip()]
+        return cleaned
+    
+    @validator('expectedIntentIds')  # NEW: Add validator for intent IDs
+    def clean_expected_intent_ids(cls, v):
+        """Clean expected intent IDs list"""
+        if v is None:
+            return []
+        if not isinstance(v, list):
+            return []
+        cleaned = [str(intent_id).strip() for intent_id in v if intent_id and str(intent_id).strip()]
         return cleaned
 
 class IntentEntry(BaseEntry):
@@ -240,7 +251,7 @@ SYNC_CONFIGS = {
         "table_name": "brain_vocab",
         "airtable_table": "Vocab",
         "columns": ["id", "transcription_fr", "transcription_en", "transcription_adjusted",
-                   "entity_type_id", "expected_notion_id",  # NEW: Add expected_notion_id
+                   "entity_type_id", "expected_notion_id", "expected_intent_id",  # NEW: Add expected_intent_id
                    "airtable_record_id", "last_modified_time_ref", 
                    "created_at", "update_at", "live"]
     },
@@ -311,7 +322,8 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "transcriptionEn": "transcription_en", 
         "transcriptionAdjusted": "transcription_adjusted",
         "entityTypeId": "entity_type_id",
-        "expectedNotionIds": "expected_notion_id",  # NEW: Add expected notion mapping for vocab
+        "expectedNotionIds": "expected_notion_id",
+        "expectedIntentIds": "expected_intent_id",  # NEW: Add intent mapping
         "expectedEntitiesIds": "expected_entities_id",
         "expectedVocabIds": "expected_vocab_id",
         "interactionVocabIds": "interaction_vocab_id",
@@ -377,7 +389,8 @@ async def sync_entity_to_database(entry_data: Dict, config: Dict) -> None:
             values = []
             for col in columns:
                 value = entry_data.get(col)
-                if col in ['intents', 'expected_entities_id', 'expected_vocab_id', 'expected_notion_id', 'interaction_vocab_id'] and isinstance(value, list):
+                # CHANGE 1: Add 'expected_intent_id' to this list (just add it to the existing list)
+                if col in ['intents', 'expected_entities_id', 'expected_vocab_id', 'expected_notion_id', 'expected_intent_id', 'interaction_vocab_id'] and isinstance(value, list):
                     values.append(value)  # PostgreSQL will handle the array
                 else:
                     values.append(value)
@@ -386,9 +399,11 @@ async def sync_entity_to_database(entry_data: Dict, config: Dict) -> None:
             
             # Enhanced logging for vocab syncing
             if config["table_name"] == "brain_vocab":
+                # CHANGE 2: Add expected_intent_id to the logging (just add it to the existing log)
                 logger.info(f"Vocab synced: id={entry_data.get('id')}, "
                            f"entity_type_id={entry_data.get('entity_type_id')}, "
-                           f"expected_notion_id={entry_data.get('expected_notion_id')}")
+                           f"expected_notion_id={entry_data.get('expected_notion_id')}, "
+                           f"expected_intent_id={entry_data.get('expected_intent_id')}")
             elif config["table_name"] == "brain_interaction":
                 logger.info(f"Interaction synced: id={entry_data.get('id')}, "
                            f"expected_entities_id={entry_data.get('expected_entities_id')}, "
