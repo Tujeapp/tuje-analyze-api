@@ -151,20 +151,21 @@ class TranscriptionAdjuster:
                 processing_time_ms=processing_time
             )
             
-        except Exception as e:
-            logger.error(f"Complete transcription adjustment failed: {e}")
-            
-            # Return minimal valid result for reliability
-            processing_time = round((datetime.now() - start_time).total_seconds() * 1000, 2)
-            return AdjustmentResult(
-                original_transcript=request.original_transcript,
-                pre_adjusted_transcript=request.original_transcript,
-                adjusted_transcript=request.original_transcript.lower(),
-                completed_transcript=request.original_transcript.lower(),
-                list_of_vocabulary=[],
-                list_of_entities=[],
-                processing_time_ms=processing_time
-            )
+    except Exception as e:
+        logger.error(f"Complete transcription adjustment failed: {e}")
+        
+        # Return minimal valid result for reliability
+        processing_time = round((datetime.now() - start_time).total_seconds() * 1000, 2)
+        return AdjustmentResult(
+            original_transcript=request.original_transcript,
+            pre_adjusted_transcript=request.original_transcript,
+            adjusted_transcript=request.original_transcript.lower(),
+            completed_transcript=request.original_transcript.lower(),
+            list_of_vocabulary=[],
+            list_of_entities=[],
+            list_of_notion_matches=[],  # ✅ ADD THIS LINE
+            processing_time_ms=processing_time
+        )
 
         # Phase 3: Entity completion (THE KEY FIX!) - EXISTING CODE
         try:
