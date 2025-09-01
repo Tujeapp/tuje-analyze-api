@@ -38,7 +38,7 @@ class AdjustmentResult(BaseModel):
     completed_transcript: str
     list_of_vocabulary: List[VocabularyMatch]
     list_of_entities: List[EntityMatch]
-    list_of_notion_matches: List[str]
+    list_of_notion_matches: List[str]  # ✅ ADD THIS LINE
     processing_time_ms: float
 
 class BatchAdjustRequest(BaseModel):
