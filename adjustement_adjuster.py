@@ -106,8 +106,31 @@ class TranscriptionAdjuster:
                 # Build transcript
                 final_transcript = self.transcript_assembler.assemble_transcript(normalized, vocab_matches)
                 
-                # Extract data for next phase
-                vocabulary_matches = [match.vocab_match for match in vocab_matches]
+                # Extract data for next phase WITH NOTION DEBUG INFO
+                vocabulary_matches = []
+                for match in vocab_matches:
+                    # Get notion info for this vocabulary entry
+                    vocab_entry = match.vocab_entry
+                    expected_notion_ids = vocab_entry.get('expected_notion_id', [])
+                    
+                    # Handle different formats of expected_notion_id
+                    if expected_notion_ids:
+                        if isinstance(expected_notion_ids, list):
+                            notion_ids = [str(nid).strip() for nid in expected_notion_ids if nid and str(nid).strip()]
+                        elif isinstance(expected_notion_ids, str):
+                            notion_ids = [nid.strip() for nid in expected_notion_ids.split(',') if nid.strip()]
+                        else:
+                            notion_ids = []
+                    else:
+                        notion_ids = []
+                    
+                    vocabulary_matches.append(VocabularyMatch(
+                        id=match.vocab_match.id,
+                        transcription_fr=match.vocab_match.transcription_fr,
+                        transcription_adjusted=match.vocab_match.transcription_adjusted,
+                        expected_notion_ids=notion_ids  # NEW: Include notion expectations
+                    ))
+                
                 matched_entries = [match.vocab_entry for match in vocab_matches]
                 
             except Exception as e:
@@ -128,29 +151,59 @@ class TranscriptionAdjuster:
             
             # NEW: Phase 4: Notion Matching (SAFE INTEGRATION)
             notion_matched_ids = []
+            debug_interaction_id = None
+            debug_interaction_expected_notions = []
+            debug_notion_matching_attempted = False
+            
             try:
                 if hasattr(request, 'interaction_id') and request.interaction_id:
+                    debug_interaction_id = request.interaction_id
+                    debug_notion_matching_attempted = True
+                    
                     logger.info(f"🎯 Starting Phase 4: Notion matching for interaction {request.interaction_id}")
+                    
                     # Import here to avoid any import issues
                     from adjustement_notion_matcher import NotionMatcher
                     
                     notion_matcher = NotionMatcher()
+                    
+                    # First get interaction expected notions for debugging
+                    try:
+                        result = await self.cache_manager.execute_query_for_notion_matcher("""
+                            SELECT expected_notion_id
+                            FROM brain_interaction
+                            WHERE id = $1 AND live = TRUE
+                        """, request.interaction_id)
+                        
+                        if result and result['expected_notion_id']:
+                            notion_ids = result['expected_notion_id']
+                            if isinstance(notion_ids, list):
+                                debug_interaction_expected_notions = [str(nid).strip() for nid in notion_ids if nid and str(nid).strip()]
+                            elif isinstance(notion_ids, str):
+                                debug_interaction_expected_notions = [nid.strip() for nid in notion_ids.split(',') if nid.strip()]
+                        
+                        logger.info(f"🎯 Debug: Interaction {request.interaction_id} expects notions: {debug_interaction_expected_notions}")
+                        
+                    except Exception as e:
+                        logger.error(f"Failed to get interaction notions for debug: {e}")
+                    
+                    # Now do the actual notion matching
                     notion_matched_ids = await notion_matcher.find_notion_matches(
                         interaction_id=request.interaction_id,
-                        vocabulary_matches=vocabulary_matches,
+                        vocabulary_matches=[match.vocab_match for match in vocab_matches],  # Pass original vocab_match objects
                         cache_manager=self.cache_manager
                     )
-                    logger.info(f"✅ Phase 4 complete: Found {len(notion_matched_ids)} notion matches")
+                    logger.info(f"✅ Phase 4 complete: Found {len(notion_matched_ids)} notion matches: {notion_matched_ids}")
                 else:
                     logger.debug("⚠️ No interaction_id provided, skipping Phase 4 (notion matching)")
             except Exception as e:
                 logger.error(f"❌ Phase 4 (notion matching) failed - continuing with empty list: {e}")
                 notion_matched_ids = []  # Safe fallback - doesn't break the adjustment
             
-            # Calculate total processing time
+            # Calculate total processing time (KEEP THE SAME)
             processing_time = round((datetime.now() - start_time).total_seconds() * 1000, 2)
             
-            # Validation: Ensure we don't return worse results than input
+            # Validation: Ensure we don't return worse results than input (KEEP THE SAME)
             if not final_transcript:
                 final_transcript = original.lower()
             if not completed_transcript:
@@ -166,8 +219,12 @@ class TranscriptionAdjuster:
                 completed_transcript=completed_transcript,
                 list_of_vocabulary=vocabulary_matches,
                 list_of_entities=entity_matches,
-                list_of_notion_matches=notion_matched_ids,  # NEW: Add the notion matches
-                processing_time_ms=processing_time
+                list_of_notion_matches=notion_matched_ids,
+                processing_time_ms=processing_time,
+                # NEW: Debug information
+                debug_interaction_id=debug_interaction_id,
+                debug_interaction_expected_notions=debug_interaction_expected_notions,
+                debug_notion_matching_attempted=debug_notion_matching_attempted
             )
             
         except Exception as e:
