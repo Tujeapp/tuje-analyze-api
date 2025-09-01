@@ -94,7 +94,7 @@ class TranscriptionAdjuster:
                 logger.error(f"Normalization failed: {e}")
                 normalized = pre_adjusted.lower()
             
-            # Phase 2: Vocabulary extraction (ENHANCED WITH NOTION DEBUG INFO)
+            # Phase 2: Vocabulary extraction (ENHANCED WITH NOTION AND INTENT DEBUG INFO)
             try:
                 # Find vocabulary matches with entity context
                 vocab_matches = self.vocab_finder.find_matches(
@@ -106,14 +106,14 @@ class TranscriptionAdjuster:
                 # Build transcript
                 final_transcript = self.transcript_assembler.assemble_transcript(normalized, vocab_matches)
                 
-                # Extract data for next phase (RESTORE ORIGINAL LOGIC + ADD NOTION DEBUG)
+                # Extract data for next phases (ENHANCED WITH BOTH NOTION AND INTENT DEBUG)
                 vocabulary_matches = []
                 for match in vocab_matches:
-                    # Get notion info for this vocabulary entry for debugging
+                    # Get notion AND intent info for this vocabulary entry for debugging
                     vocab_entry = match.vocab_entry
-                    expected_notion_ids = vocab_entry.get('expected_notion_id', [])
                     
-                    # Handle different formats of expected_notion_id
+                    # Handle notion IDs (existing code)
+                    expected_notion_ids = vocab_entry.get('expected_notion_id', [])
                     notion_ids = []
                     if expected_notion_ids:
                         if isinstance(expected_notion_ids, list):
@@ -121,12 +121,22 @@ class TranscriptionAdjuster:
                         elif isinstance(expected_notion_ids, str):
                             notion_ids = [nid.strip() for nid in expected_notion_ids.split(',') if nid.strip()]
                     
-                    # Create enhanced VocabularyMatch with notion debug info
+                    # NEW: Handle intent IDs
+                    expected_intent_ids = vocab_entry.get('expected_intent_id', [])
+                    intent_ids = []
+                    if expected_intent_ids:
+                        if isinstance(expected_intent_ids, list):
+                            intent_ids = [str(iid).strip() for iid in expected_intent_ids if iid and str(iid).strip()]
+                        elif isinstance(expected_intent_ids, str):
+                            intent_ids = [iid.strip() for iid in expected_intent_ids.split(',') if iid.strip()]
+                    
+                    # Create enhanced VocabularyMatch with both notion and intent debug info
                     vocabulary_matches.append(VocabularyMatch(
                         id=match.vocab_match.id,
                         transcription_fr=match.vocab_match.transcription_fr,
                         transcription_adjusted=match.vocab_match.transcription_adjusted,
-                        expected_notion_ids=notion_ids  # NEW: Debug info
+                        expected_notion_ids=notion_ids,  # Existing debug info
+                        expected_intent_ids=intent_ids   # NEW: Intent debug info
                     ))
                 
                 # IMPORTANT: Keep the original vocab_matches for entity mapping
@@ -149,7 +159,7 @@ class TranscriptionAdjuster:
                 completed_transcript = final_transcript
                 entity_matches = []
             
-            # NEW: Phase 4: Notion Matching (SAFE INTEGRATION)
+            # Phase 4: Notion Matching (EXISTING - KEEP AS IS)
             notion_matched_ids = []
             debug_interaction_id = None
             debug_interaction_expected_notions = []
@@ -199,11 +209,60 @@ class TranscriptionAdjuster:
             except Exception as e:
                 logger.error(f"❌ Phase 4 (notion matching) failed - continuing with empty list: {e}")
                 notion_matched_ids = []  # Safe fallback - doesn't break the adjustment
-            
-            # Calculate total processing time (KEEP THE SAME)
+
+            # NEW: Phase 5: Intent Matching
+            intent_matched_ids = []
+            debug_interaction_expected_intents = []
+            debug_intent_matching_attempted = False
+
+            try:
+                if hasattr(request, 'interaction_id') and request.interaction_id:
+                    debug_intent_matching_attempted = True
+                    
+                    logger.info(f"🎯 Starting Phase 5: Intent matching for interaction {request.interaction_id}")
+                    
+                    # Import here to avoid any import issues
+                    from adjustement_intent_matcher import IntentMatcher
+                    
+                    intent_matcher = IntentMatcher()
+                    
+                    # Get interaction expected intents for debugging
+                    try:
+                        result = await self.cache_manager.execute_query_for_notion_matcher("""
+                            SELECT intents
+                            FROM brain_interaction
+                            WHERE id = $1 AND live = TRUE
+                        """, request.interaction_id)
+                        
+                        if result and result['intents']:
+                            intent_ids = result['intents']
+                            if isinstance(intent_ids, list):
+                                debug_interaction_expected_intents = [str(iid).strip() for iid in intent_ids if iid and str(iid).strip()]
+                            elif isinstance(intent_ids, str):
+                                debug_interaction_expected_intents = [iid.strip() for iid in intent_ids.split(',') if iid.strip()]
+                        
+                        logger.info(f"🎯 Debug: Interaction {request.interaction_id} expects intents: {debug_interaction_expected_intents}")
+                        
+                    except Exception as e:
+                        logger.error(f"Failed to get interaction intents for debug: {e}")
+                    
+                    # Do the actual intent matching
+                    intent_matched_ids = await intent_matcher.find_intent_matches(
+                        interaction_id=request.interaction_id,
+                        vocabulary_matches=[match.vocab_match for match in vocab_matches],
+                        cache_manager=self.cache_manager
+                    )
+                    logger.info(f"✅ Phase 5 complete: Found {len(intent_matched_ids)} intent matches: {intent_matched_ids}")
+                else:
+                    logger.debug("⚠️ No interaction_id provided, skipping Phase 5 (intent matching)")
+            except Exception as e:
+                logger.error(f"❌ Phase 5 (intent matching) failed - continuing with empty list: {e}")
+                intent_matched_ids = []  # Safe fallback - doesn't break the adjustment
+
+            # Calculate total processing time
             processing_time = round((datetime.now() - start_time).total_seconds() * 1000, 2)
             
-            # Validation: Ensure we don't return worse results than input (KEEP THE SAME)
+            # Validation: Ensure we don't return worse results than input
             if not final_transcript:
                 final_transcript = original.lower()
             if not completed_transcript:
@@ -220,11 +279,14 @@ class TranscriptionAdjuster:
                 list_of_vocabulary=vocabulary_matches,
                 list_of_entities=entity_matches,
                 list_of_notion_matches=notion_matched_ids,
+                list_of_intent_matches=intent_matched_ids,  # NEW
                 processing_time_ms=processing_time,
-                # NEW: Debug information
+                # Debug information
                 debug_interaction_id=debug_interaction_id,
                 debug_interaction_expected_notions=debug_interaction_expected_notions,
-                debug_notion_matching_attempted=debug_notion_matching_attempted
+                debug_interaction_expected_intents=debug_interaction_expected_intents,  # NEW
+                debug_notion_matching_attempted=debug_notion_matching_attempted,
+                debug_intent_matching_attempted=debug_intent_matching_attempted  # NEW
             )
             
         except Exception as e:
@@ -240,11 +302,14 @@ class TranscriptionAdjuster:
                 list_of_vocabulary=[],
                 list_of_entities=[],
                 list_of_notion_matches=[],
+                list_of_intent_matches=[],  # NEW
                 processing_time_ms=processing_time,
-                # NEW: Debug information (empty in error case)
+                # Debug information (empty in error case)
                 debug_interaction_id=getattr(request, 'interaction_id', None),
                 debug_interaction_expected_notions=[],
-                debug_notion_matching_attempted=False
+                debug_interaction_expected_intents=[],  # NEW
+                debug_notion_matching_attempted=False,
+                debug_intent_matching_attempted=False  # NEW
             )
     
     def get_cache_status(self) -> Dict[str, Any]:
