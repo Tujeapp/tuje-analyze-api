@@ -239,8 +239,12 @@ class TranscriptionAdjuster:
                 completed_transcript=request.original_transcript.lower(),
                 list_of_vocabulary=[],
                 list_of_entities=[],
-                list_of_notion_matches=[],  # NEW: Include in error case too
-                processing_time_ms=processing_time
+                list_of_notion_matches=[],
+                processing_time_ms=processing_time,
+                # NEW: Debug information (empty in error case)
+                debug_interaction_id=getattr(request, 'interaction_id', None),
+                debug_interaction_expected_notions=[],
+                debug_notion_matching_attempted=False
             )
     
     def get_cache_status(self) -> Dict[str, Any]:
