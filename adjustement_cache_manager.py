@@ -1,4 +1,4 @@
-# adjustement_cache_manager.py - ORIGINAL WORKING VERSION
+# adjustement_cache_manager.py - STEP 2: MINIMAL CHANGES ONLY
 import asyncpg
 import logging
 import time
@@ -30,7 +30,7 @@ class VocabularyCacheManager:
         """Load vocabulary and entities from database"""
         try:
             async with pool.acquire() as conn:
-                # UPDATED: Single optimized query with JOIN and live entity filter
+                # CHANGE 1: Add v.expected_notion_id to the SELECT (ONLY CHANGE THE QUERY)
                 query = """
                     SELECT 
                         v.id, 
@@ -38,6 +38,7 @@ class VocabularyCacheManager:
                         v.transcription_en, 
                         v.transcription_adjusted, 
                         v.entity_type_id,
+                        v.expected_notion_id,
                         e.name as entity_name,
                         e.live as entity_live
                     FROM brain_vocab v
@@ -48,7 +49,7 @@ class VocabularyCacheManager:
                 
                 rows = await conn.fetch(query)
                 
-                # Process results
+                # Process results - ALL EXISTING CODE STAYS THE SAME
                 self.cache = {
                     'all_vocab': [],
                     'entitynumber_patterns': [],
@@ -62,12 +63,13 @@ class VocabularyCacheManager:
                         'transcription_fr': row['transcription_fr'] or '',
                         'transcription_en': row['transcription_en'] or '',
                         'transcription_adjusted': row['transcription_adjusted'] or '',
-                        'entity_type_id': row['entity_type_id']
+                        'entity_type_id': row['entity_type_id'],
+                        'expected_notion_id': row['expected_notion_id']  # CHANGE 2: Add this field
                     }
                     
                     self.cache['all_vocab'].append(vocab_entry)
                     
-                    # UPDATED: Only cache live entities
+                    # ALL EXISTING CODE BELOW STAYS EXACTLY THE SAME
                     if row['entity_type_id'] and row['entity_name']:
                         if row['entity_live']:  # Only add live entities
                             self.cache['entities'][row['entity_type_id']] = row['entity_name']
@@ -82,13 +84,12 @@ class VocabularyCacheManager:
                 self.cache_loaded = True
                 self.cache_timestamp = time.time()
                 
-                # UPDATED: Enhanced logging for entity filtering
+                # ALL EXISTING LOGGING STAYS THE SAME
                 logger.info(f"Cache refreshed: {len(self.cache['all_vocab'])} vocab entries, "
                           f"{len(self.cache['entities'])} live entities, "
                           f"{len(self.cache['inactive_entities'])} inactive entities, "
                           f"{len(self.cache['entitynumber_patterns'])} number patterns")
                 
-                # Log inactive entities for monitoring
                 if self.cache['inactive_entities']:
                     logger.info(f"Inactive entities (will be skipped): {list(self.cache['inactive_entities'].keys())}")
                 
@@ -97,6 +98,19 @@ class VocabularyCacheManager:
             if not self.cache_loaded:
                 raise  # Only raise if we have no cache at all
     
+    # CHANGE 3: Add this ONE new helper method for notion matching
+    async def execute_query_for_notion_matcher(self, query: str, *params):
+        """Execute database query for notion matching"""
+        import os
+        DATABASE_URL = os.getenv("DATABASE_URL")
+        
+        conn = await asyncpg.connect(DATABASE_URL)
+        try:
+            return await conn.fetchrow(query, *params)
+        finally:
+            await conn.close()
+    
+    # ALL EXISTING METHODS STAY EXACTLY THE SAME
     def get_all_vocab(self) -> List[Dict[str, Any]]:
         """Get all vocabulary entries"""
         return self.cache.get('all_vocab', [])
