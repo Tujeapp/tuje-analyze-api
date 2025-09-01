@@ -1,4 +1,10 @@
-# adjustement_cache_manager.py - FIX THE METHOD NAME ISSUE
+# adjustement_cache_manager.py - FIXED WITH IMPORTS
+import asyncpg  # ✅ MISSING IMPORT
+import logging
+import time
+from typing import Dict, List, Any, Optional
+
+logger = logging.getLogger(__name__)
 
 class VocabularyCacheManager:
     """Manages vocabulary and entity caching with TTL"""
@@ -18,9 +24,9 @@ class VocabularyCacheManager:
             (current_time - self.cache_timestamp) < self.ttl_seconds):
             return  # Cache is still valid
         
-        await self._load_cache(pool)  # ← This method must exist!
+        await self._load_cache(pool)
     
-    async def _load_cache(self, pool: asyncpg.Pool):  # ← MAKE SURE THIS METHOD EXISTS
+    async def _load_cache(self, pool: asyncpg.Pool):
         """Load vocabulary and entities from database"""
         try:
             async with pool.acquire() as conn:
@@ -92,7 +98,6 @@ class VocabularyCacheManager:
             if not self.cache_loaded:
                 raise  # Only raise if we have no cache at all
 
-    # ADD this helper method for notion matcher
     async def execute_query_for_notion_matcher(self, query: str, *params):
         """Execute database query for notion matching (reuses same connection pattern)"""
         import os
@@ -107,7 +112,6 @@ class VocabularyCacheManager:
         finally:
             await conn.close()
     
-    # ALL YOUR OTHER EXISTING METHODS (get_all_vocab, get_status, etc.)
     def get_all_vocab(self) -> List[Dict[str, Any]]:
         """Get all vocabulary entries"""
         return self.cache.get('all_vocab', [])
