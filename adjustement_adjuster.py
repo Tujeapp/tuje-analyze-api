@@ -1,4 +1,4 @@
-# adjustement_adjuster.py - ORIGINAL WORKING VERSION (from project knowledge)
+# adjustement_adjuster.py - ORIGINAL WORKING VERSION (Before Notion Matching)
 import asyncpg
 import logging
 from datetime import datetime
