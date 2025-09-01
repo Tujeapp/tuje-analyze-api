@@ -1,4 +1,4 @@
-# adjustement_adjuster.py - COMPLETELY FIXED VERSION
+# adjustement_adjuster.py - ORIGINAL WORKING VERSION (from project knowledge)
 import asyncpg
 import logging
 from datetime import datetime
@@ -17,7 +17,6 @@ from adjustement_vocabulary_finder import VocabularyFinder
 from adjustement_transcript_assembler import TranscriptAssembler
 from adjustement_entity_mapper import EntityMapper
 from adjustement_un_une_analyzer import UnUneAnalyzer
-from adjustement_notion_matcher import NotionMatcher
 
 logger = logging.getLogger(__name__)
 
@@ -127,24 +126,6 @@ class TranscriptionAdjuster:
                 completed_transcript = final_transcript
                 entity_matches = []
             
-            # Phase 4: Notion Matching (NEW)
-            notion_matched_ids = []
-            try:
-                if request.interaction_id:  # Only run if we have interaction context
-                    notion_matcher = NotionMatcher()
-                    notion_matched_ids = await notion_matcher.find_notion_matches(
-                        interaction_id=request.interaction_id,
-                        vocabulary_matches=vocabulary_matches,
-                        cache_manager=self.cache_manager
-                    )
-                    logger.info(f"🎯 Phase 4: Found {len(notion_matched_ids)} notion matches")
-                else:
-                    logger.info("⚠️ No interaction_id provided, skipping notion matching")
-            except Exception as e:
-                logger.error(f"Phase 4 notion matching failed: {e}")
-                # Don't let notion matching failure break the whole process
-                notion_matched_ids = []
-            
             # Calculate total processing time
             processing_time = round((datetime.now() - start_time).total_seconds() * 1000, 2)
             
@@ -164,7 +145,6 @@ class TranscriptionAdjuster:
                 completed_transcript=completed_transcript,
                 list_of_vocabulary=vocabulary_matches,
                 list_of_entities=entity_matches,
-                list_of_notion_matches=notion_matched_ids,  # NEW
                 processing_time_ms=processing_time
             )
             
@@ -180,7 +160,6 @@ class TranscriptionAdjuster:
                 completed_transcript=request.original_transcript.lower(),
                 list_of_vocabulary=[],
                 list_of_entities=[],
-                list_of_notion_matches=[],  # NEW
                 processing_time_ms=processing_time
             )
     
