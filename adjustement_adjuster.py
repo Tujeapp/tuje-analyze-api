@@ -94,7 +94,7 @@ class TranscriptionAdjuster:
                 logger.error(f"Normalization failed: {e}")
                 normalized = pre_adjusted.lower()
             
-            # Phase 2: Vocabulary extraction
+            # Phase 2: Vocabulary extraction (FIXED)
             try:
                 # Find vocabulary matches with entity context
                 vocab_matches = self.vocab_finder.find_matches(
@@ -106,31 +106,30 @@ class TranscriptionAdjuster:
                 # Build transcript
                 final_transcript = self.transcript_assembler.assemble_transcript(normalized, vocab_matches)
                 
-                # Extract data for next phase WITH NOTION DEBUG INFO
+                # Extract data for next phase (RESTORE ORIGINAL LOGIC + ADD NOTION DEBUG)
                 vocabulary_matches = []
                 for match in vocab_matches:
-                    # Get notion info for this vocabulary entry
+                    # Get notion info for this vocabulary entry for debugging
                     vocab_entry = match.vocab_entry
                     expected_notion_ids = vocab_entry.get('expected_notion_id', [])
                     
                     # Handle different formats of expected_notion_id
+                    notion_ids = []
                     if expected_notion_ids:
                         if isinstance(expected_notion_ids, list):
                             notion_ids = [str(nid).strip() for nid in expected_notion_ids if nid and str(nid).strip()]
                         elif isinstance(expected_notion_ids, str):
                             notion_ids = [nid.strip() for nid in expected_notion_ids.split(',') if nid.strip()]
-                        else:
-                            notion_ids = []
-                    else:
-                        notion_ids = []
                     
+                    # Create enhanced VocabularyMatch with notion debug info
                     vocabulary_matches.append(VocabularyMatch(
                         id=match.vocab_match.id,
                         transcription_fr=match.vocab_match.transcription_fr,
                         transcription_adjusted=match.vocab_match.transcription_adjusted,
-                        expected_notion_ids=notion_ids  # NEW: Include notion expectations
+                        expected_notion_ids=notion_ids  # NEW: Debug info
                     ))
                 
+                # IMPORTANT: Keep the original vocab_matches for entity mapping
                 matched_entries = [match.vocab_entry for match in vocab_matches]
                 
             except Exception as e:
@@ -138,6 +137,7 @@ class TranscriptionAdjuster:
                 final_transcript = normalized
                 vocabulary_matches = []
                 matched_entries = []
+                vocab_matches = []  # Make sure this is also empty
             
             # Phase 3: Entity completion
             try:
@@ -190,7 +190,7 @@ class TranscriptionAdjuster:
                     # Now do the actual notion matching
                     notion_matched_ids = await notion_matcher.find_notion_matches(
                         interaction_id=request.interaction_id,
-                        vocabulary_matches=[match.vocab_match for match in vocab_matches],  # Pass original vocab_match objects
+                        vocabulary_matches=[match.vocab_match for match in vocab_matches],  # ✅ Use original vocab_matches
                         cache_manager=self.cache_manager
                     )
                     logger.info(f"✅ Phase 4 complete: Found {len(notion_matched_ids)} notion matches: {notion_matched_ids}")
