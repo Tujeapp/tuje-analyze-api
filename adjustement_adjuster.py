@@ -1,4 +1,4 @@
-# adjustement_adjuster.py - STEP 3: ADD PHASE 4 SAFELY
+# adjustement_adjuster.py - FIXED INDENTATION AND IMPORTS
 import asyncpg
 import logging
 from datetime import datetime
@@ -17,7 +17,6 @@ from adjustement_vocabulary_finder import VocabularyFinder
 from adjustement_transcript_assembler import TranscriptAssembler
 from adjustement_entity_mapper import EntityMapper
 from adjustement_un_une_analyzer import UnUneAnalyzer
-from adjustement_types import VocabularyMatch
 
 logger = logging.getLogger(__name__)
 
@@ -41,10 +40,10 @@ class TranscriptionAdjuster:
         # Performance tracking
         self.performance = PerformanceTracker()
     
-async def adjust_transcription(self, request, pool: asyncpg.Pool):
-    """Main adjustment function orchestrating all phases"""
-    # Import here to avoid circular import
-    from adjustement_types import AdjustmentResult, VocabularyMatch
+    async def adjust_transcription(self, request, pool: asyncpg.Pool):
+        """Main adjustment function orchestrating all phases"""
+        # Import here to avoid circular import
+        from adjustement_types import AdjustmentResult, VocabularyMatch
         
         start_time = datetime.now()
         
@@ -95,7 +94,7 @@ async def adjust_transcription(self, request, pool: asyncpg.Pool):
                 logger.error(f"Normalization failed: {e}")
                 normalized = pre_adjusted.lower()
             
-            # Phase 2: Vocabulary extraction (FIXED)
+            # Phase 2: Vocabulary extraction (ENHANCED WITH NOTION DEBUG INFO)
             try:
                 # Find vocabulary matches with entity context
                 vocab_matches = self.vocab_finder.find_matches(
@@ -191,7 +190,7 @@ async def adjust_transcription(self, request, pool: asyncpg.Pool):
                     # Now do the actual notion matching
                     notion_matched_ids = await notion_matcher.find_notion_matches(
                         interaction_id=request.interaction_id,
-                        vocabulary_matches=[match.vocab_match for match in vocab_matches],  # ✅ Use original vocab_matches
+                        vocabulary_matches=[match.vocab_match for match in vocab_matches],  # Use original vocab_matches
                         cache_manager=self.cache_manager
                     )
                     logger.info(f"✅ Phase 4 complete: Found {len(notion_matched_ids)} notion matches: {notion_matched_ids}")
