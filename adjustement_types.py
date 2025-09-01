@@ -21,6 +21,7 @@ class VocabularyMatch(BaseModel):
     id: str
     transcription_fr: str
     transcription_adjusted: str
+    expected_notion_ids: Optional[List[str]] = []
 
 class EntityMatch(BaseModel):
     id: str
@@ -36,6 +37,9 @@ class AdjustmentResult(BaseModel):
     list_of_entities: List[EntityMatch]
     list_of_notion_matches: List[str] = []
     processing_time_ms: float
+    debug_interaction_id: Optional[str] = None  # NEW: Show which interaction was used
+    debug_interaction_expected_notions: Optional[List[str]] = []  # NEW: Show interaction's expected notions
+    debug_notion_matching_attempted: bool = False  # NEW: Show if notion matching was tried
 
 class BatchAdjustRequest(BaseModel):
     requests: List[TranscriptionAdjustRequest]
