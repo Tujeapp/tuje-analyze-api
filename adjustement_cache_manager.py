@@ -1,10 +1,4 @@
-# adjustement_cache_manager.py
-import asyncpg
-import logging
-import time
-from typing import Dict, List, Any, Optional
-
-logger = logging.getLogger(__name__)
+# adjustement_cache_manager.py - FIX THE METHOD NAME ISSUE
 
 class VocabularyCacheManager:
     """Manages vocabulary and entity caching with TTL"""
@@ -24,92 +18,96 @@ class VocabularyCacheManager:
             (current_time - self.cache_timestamp) < self.ttl_seconds):
             return  # Cache is still valid
         
-        await self._load_cache(pool)
+        await self._load_cache(pool)  # ← This method must exist!
     
-async def _load_cache(self, pool: asyncpg.Pool):
-    """Load vocabulary and entities from database"""
-    try:
-        async with pool.acquire() as conn:
-            # CHANGE 1: Add v.expected_notion_id to your existing query
-            query = """
-                SELECT 
-                    v.id, 
-                    v.transcription_fr, 
-                    v.transcription_en, 
-                    v.transcription_adjusted, 
-                    v.entity_type_id,
-                    v.expected_notion_id,  -- ✅ ADD THIS LINE
-                    e.name as entity_name,
-                    e.live as entity_live
-                FROM brain_vocab v
-                LEFT JOIN brain_entity e ON v.entity_type_id = e.id
-                WHERE v.live = TRUE
-                ORDER BY LENGTH(v.transcription_adjusted) DESC
-            """
-            
-            rows = await conn.fetch(query)
-            
-            # Your existing cache initialization code stays exactly the same
-            self.cache = {
-                'all_vocab': [],
-                'entitynumber_patterns': [],
-                'entities': {},  
-                'inactive_entities': {}
-            }
-            
-            for row in rows:
-                vocab_entry = {
-                    'id': row['id'],
-                    'transcription_fr': row['transcription_fr'] or '',
-                    'transcription_en': row['transcription_en'] or '',
-                    'transcription_adjusted': row['transcription_adjusted'] or '',
-                    'entity_type_id': row['entity_type_id'],
-                    'expected_notion_id': row['expected_notion_id']  # ✅ ADD THIS LINE
+    async def _load_cache(self, pool: asyncpg.Pool):  # ← MAKE SURE THIS METHOD EXISTS
+        """Load vocabulary and entities from database"""
+        try:
+            async with pool.acquire() as conn:
+                # CHANGE 1: Add v.expected_notion_id to your existing query
+                query = """
+                    SELECT 
+                        v.id, 
+                        v.transcription_fr, 
+                        v.transcription_en, 
+                        v.transcription_adjusted, 
+                        v.entity_type_id,
+                        v.expected_notion_id,  -- ✅ ADD THIS LINE
+                        e.name as entity_name,
+                        e.live as entity_live
+                    FROM brain_vocab v
+                    LEFT JOIN brain_entity e ON v.entity_type_id = e.id
+                    WHERE v.live = TRUE
+                    ORDER BY LENGTH(v.transcription_adjusted) DESC
+                """
+                
+                rows = await conn.fetch(query)
+                
+                # Process results (existing code stays the same)
+                self.cache = {
+                    'all_vocab': [],
+                    'entitynumber_patterns': [],
+                    'entities': {},  # Only live entities
+                    'inactive_entities': {}  # Track inactive entities for logging
                 }
                 
-                # ALL YOUR EXISTING CODE BELOW STAYS EXACTLY THE SAME
-                self.cache['all_vocab'].append(vocab_entry)
+                for row in rows:
+                    vocab_entry = {
+                        'id': row['id'],
+                        'transcription_fr': row['transcription_fr'] or '',
+                        'transcription_en': row['transcription_en'] or '',
+                        'transcription_adjusted': row['transcription_adjusted'] or '',
+                        'entity_type_id': row['entity_type_id'],
+                        'expected_notion_id': row['expected_notion_id']  # ✅ ADD THIS LINE
+                    }
+                    
+                    self.cache['all_vocab'].append(vocab_entry)
+                    
+                    # EXISTING CODE - unchanged
+                    if row['entity_type_id'] and row['entity_name']:
+                        if row['entity_live']:  # Only add live entities
+                            self.cache['entities'][row['entity_type_id']] = row['entity_name']
+                        else:
+                            # Track inactive entities for debugging
+                            self.cache['inactive_entities'][row['entity_type_id']] = row['entity_name']
+                    
+                    # EntityNumber patterns for subprocess - EXISTING CODE
+                    if 'entitynumber' in str(row['transcription_fr'] or '').lower():
+                        self.cache['entitynumber_patterns'].append(vocab_entry)
                 
-                if row['entity_type_id'] and row['entity_name']:
-                    if row['entity_live']:
-                        self.cache['entities'][row['entity_type_id']] = row['entity_name']
-                    else:
-                        self.cache['inactive_entities'][row['entity_type_id']] = row['entity_name']
+                self.cache_loaded = True
+                self.cache_timestamp = time.time()
                 
-                if 'entitynumber' in str(row['transcription_fr'] or '').lower():
-                    self.cache['entitynumber_patterns'].append(vocab_entry)
-            
-            # ALL YOUR EXISTING LOGGING CODE STAYS THE SAME
-            self.cache_loaded = True
-            self.cache_timestamp = time.time()
-            
-            logger.info(f"Cache refreshed: {len(self.cache['all_vocab'])} vocab entries, "
-                      f"{len(self.cache['entities'])} live entities, "
-                      f"{len(self.cache['inactive_entities'])} inactive entities, "
-                      f"{len(self.cache['entitynumber_patterns'])} number patterns")
-            
-            if self.cache['inactive_entities']:
-                logger.info(f"Inactive entities (will be skipped): {list(self.cache['inactive_entities'].keys())}")
-            
-    except Exception as e:
-        logger.error(f"Cache loading failed: {e}")
-        if not self.cache_loaded:
-            raise
+                # EXISTING LOGGING - unchanged
+                logger.info(f"Cache refreshed: {len(self.cache['all_vocab'])} vocab entries, "
+                          f"{len(self.cache['entities'])} live entities, "
+                          f"{len(self.cache['inactive_entities'])} inactive entities, "
+                          f"{len(self.cache['entitynumber_patterns'])} number patterns")
+                
+                if self.cache['inactive_entities']:
+                    logger.info(f"Inactive entities (will be skipped): {list(self.cache['inactive_entities'].keys())}")
+                
+        except Exception as e:
+            logger.error(f"Cache loading failed: {e}")
+            if not self.cache_loaded:
+                raise  # Only raise if we have no cache at all
 
-async def execute_query_for_notion_matcher(self, query: str, *params):
-    """Execute database query for notion matching (reuses same connection pattern)"""
-    import os
-    DATABASE_URL = os.getenv("DATABASE_URL")
+    # ADD this helper method for notion matcher
+    async def execute_query_for_notion_matcher(self, query: str, *params):
+        """Execute database query for notion matching (reuses same connection pattern)"""
+        import os
+        DATABASE_URL = os.getenv("DATABASE_URL")
+        
+        conn = await asyncpg.connect(DATABASE_URL)
+        try:
+            if query.strip().upper().startswith('SELECT'):
+                return await conn.fetchrow(query, *params)  # Single row for interaction queries
+            else:
+                return await conn.fetch(query, *params)
+        finally:
+            await conn.close()
     
-    conn = await asyncpg.connect(DATABASE_URL)
-    try:
-        if query.strip().upper().startswith('SELECT'):
-            return await conn.fetchrow(query, *params)  # Single row for interaction queries
-        else:
-            return await conn.fetch(query, *params)
-    finally:
-        await conn.close()
-    
+    # ALL YOUR OTHER EXISTING METHODS (get_all_vocab, get_status, etc.)
     def get_all_vocab(self) -> List[Dict[str, Any]]:
         """Get all vocabulary entries"""
         return self.cache.get('all_vocab', [])
