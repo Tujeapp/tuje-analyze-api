@@ -17,6 +17,7 @@ from adjustement_vocabulary_finder import VocabularyFinder
 from adjustement_transcript_assembler import TranscriptAssembler
 from adjustement_entity_mapper import EntityMapper
 from adjustement_un_une_analyzer import UnUneAnalyzer
+from adjustement_types import VocabularyMatch
 
 logger = logging.getLogger(__name__)
 
@@ -40,10 +41,10 @@ class TranscriptionAdjuster:
         # Performance tracking
         self.performance = PerformanceTracker()
     
-    async def adjust_transcription(self, request, pool: asyncpg.Pool):
-        """Main adjustment function orchestrating all phases"""
-        # Import here to avoid circular import
-        from adjustement_types import AdjustmentResult
+async def adjust_transcription(self, request, pool: asyncpg.Pool):
+    """Main adjustment function orchestrating all phases"""
+    # Import here to avoid circular import
+    from adjustement_types import AdjustmentResult, VocabularyMatch
         
         start_time = datetime.now()
         
