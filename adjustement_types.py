@@ -1,4 +1,5 @@
 # 1. CREATE NEW FILE: adjustement_types.py (Pydantic models ONLY)
+# adjustement_types.py (Pydantic models ONLY - NO NOTION PHASE)
 from pydantic import BaseModel, validator
 from typing import List, Optional
 
@@ -26,11 +27,6 @@ class EntityMatch(BaseModel):
     name: str
     value: str
 
-class NotionMatch(BaseModel):
-    notion_id: str
-    vocabulary_id: str
-    vocabulary_transcription: str
-
 class AdjustmentResult(BaseModel):
     original_transcript: str
     pre_adjusted_transcript: str
@@ -38,7 +34,6 @@ class AdjustmentResult(BaseModel):
     completed_transcript: str
     list_of_vocabulary: List[VocabularyMatch]
     list_of_entities: List[EntityMatch]
-    list_of_notion_matches: List[str]  # ✅ ADD THIS LINE
     processing_time_ms: float
 
 class BatchAdjustRequest(BaseModel):
