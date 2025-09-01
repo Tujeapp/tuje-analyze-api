@@ -39,6 +39,7 @@ class VocabularyCacheManager:
                         v.transcription_adjusted, 
                         v.entity_type_id,
                         v.expected_notion_id,
+                        v.expected_intent_id,
                         e.name as entity_name,
                         e.live as entity_live
                     FROM brain_vocab v
@@ -64,7 +65,8 @@ class VocabularyCacheManager:
                         'transcription_en': row['transcription_en'] or '',
                         'transcription_adjusted': row['transcription_adjusted'] or '',
                         'entity_type_id': row['entity_type_id'],
-                        'expected_notion_id': row['expected_notion_id']  # CHANGE 2: Add this field
+                        'expected_notion_id': row['expected_notion_id'],
+                        'expected_intent_id': row['expected_intent_id']
                     }
                     
                     self.cache['all_vocab'].append(vocab_entry)
@@ -132,13 +134,17 @@ class VocabularyCacheManager:
         return self.cache.get('inactive_entities', {}).get(entity_id)
     
     def get_status(self) -> Dict[str, Any]:
-        """Get cache status for monitoring"""
+        vocab_with_intents = sum(1 for vocab in self.cache.get('all_vocab', []) if vocab.get('expected_intent_id'))
+        vocab_with_notions = sum(1 for vocab in self.cache.get('all_vocab', []) if vocab.get('expected_notion_id'))
+    
         return {
             "loaded": self.cache_loaded,
             "timestamp": self.cache_timestamp,
             "age_seconds": time.time() - self.cache_timestamp if self.cache_timestamp else None,
             "ttl_seconds": self.ttl_seconds,
             "vocab_count": len(self.cache.get('all_vocab', [])),
+            "vocab_with_intent_expectations": vocab_with_intents,  # ADD THIS
+            "vocab_with_notion_expectations": vocab_with_notions,
             "live_entity_count": len(self.cache.get('entities', {})),
             "inactive_entity_count": len(self.cache.get('inactive_entities', {})),
             "pattern_count": len(self.cache.get('entitynumber_patterns', []))
