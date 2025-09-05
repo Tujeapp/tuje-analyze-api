@@ -64,7 +64,7 @@ app.add_middleware(
 # =====================================
 app.include_router(match_router)
 app.include_router(airtable_router)
-app.include_router(data_access_routes)
+app.include_router(data_access_router)
 app.include_router(transcription_router, prefix="/api", tags=["transcription"])
 app.include_router(matching_router, prefix="/api/matching", tags=["answer_matching"])
 app.include_router(gpt_fallback_router, prefix="/api/gpt", tags=["gpt_fallback"])
