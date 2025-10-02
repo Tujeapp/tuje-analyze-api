@@ -81,6 +81,7 @@ class AnswerEntry(BaseEntry):
     transcriptionFr: str
     transcriptionEn: str
     transcriptionAdjusted: str
+    answerOptimumLevel: Optional[int] = None
 
 class InteractionEntry(BaseEntry):
     transcriptionFr: str
@@ -236,7 +237,8 @@ SYNC_CONFIGS = {
     "answer": {
         "table_name": "brain_answer",
         "airtable_table": "Answer",
-        "columns": ["id", "transcription_fr", "transcription_en", "transcription_adjusted", 
+        "columns": ["id", "transcription_fr", "transcription_en", "transcription_adjusted",
+                   "answer_optimum_level",  # NEW: Add this line
                    "airtable_record_id", "last_modified_time_ref", "created_at", "update_at", "live"]
     },
     "interaction": {
@@ -321,6 +323,7 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "transcriptionFr": "transcription_fr",
         "transcriptionEn": "transcription_en", 
         "transcriptionAdjusted": "transcription_adjusted",
+        "answerOptimumLevel": "answer_optimum_level",
         "entityTypeId": "entity_type_id",
         "expectedNotionIds": "expected_notion_id",
         "expectedIntentIds": "expected_intent_id",  # NEW: Add intent mapping
