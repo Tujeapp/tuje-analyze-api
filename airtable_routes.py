@@ -83,6 +83,31 @@ class AnswerEntry(BaseEntry):
     transcriptionAdjusted: str
     answerOptimumLevel: Optional[int] = None
 
+class BonusMalusEntry(BaseEntry):
+    nameFr: str
+    nameEn: str
+    description: str
+    levelFrom: int
+    levelTo: int
+    
+    @validator('nameFr', 'nameEn', 'description')
+    def validate_text_fields(cls, v):
+        if not v or len(v.strip()) == 0:
+            raise ValueError('Text fields cannot be empty')
+        return v.strip()
+    
+    @validator('levelFrom', 'levelTo')
+    def validate_level_fields(cls, v):
+        if v < 0 or v > 100:  # Adjust range as needed
+            raise ValueError('Level must be between 0 and 100')
+        return v
+    
+    @validator('levelTo')
+    def validate_level_range(cls, v, values):
+        if 'levelFrom' in values and v < values['levelFrom']:
+            raise ValueError('levelTo must be greater than or equal to levelFrom')
+        return v
+
 class InteractionEntry(BaseEntry):
     transcriptionFr: str
     transcriptionEn: str
@@ -288,6 +313,13 @@ SYNC_CONFIGS = {
         "columns": ["id", "name", "description", "priority", 
                    "created_at", "update_at", "airtable_record_id", 
                    "last_modified_time_ref", "live"]
+    },
+    "bonus_malus": {
+        "table_name": "brain_bonus_malus",
+        "airtable_table": "Bonus-Malus",
+        "columns": ["id", "name_fr", "name_en", "description", "level_from", "level_to",
+                   "airtable_record_id", "last_modified_time_ref", 
+                   "created_at", "update_at", "live"]
     }
 }
 
@@ -335,6 +367,7 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "nameEn": "name_en",
         "levelFrom": "level_from",
         "levelOwned": "level_owned",
+        "levelTo": "level_to",
         "subtopicId": "subtopic_id"
     }
     
@@ -497,6 +530,11 @@ async def webhook_sync_entity(entry: EntityEntry, background_tasks: BackgroundTa
 async def webhook_sync_notion(entry: NotionEntry, background_tasks: BackgroundTasks):
     """Webhook endpoint to sync notion data from Airtable"""
     return await generic_sync_webhook(entry, "notion", background_tasks)
+
+@router.post("/webhook-sync-bonus-malus")
+async def webhook_sync_bonus_malus(entry: BonusMalusEntry, background_tasks: BackgroundTasks):
+    """Webhook endpoint to sync bonus-malus data from Airtable"""
+    return await generic_sync_webhook(entry, "bonus_malus", background_tasks)
 
 # Health check endpoint
 @router.get("/sync-health")
