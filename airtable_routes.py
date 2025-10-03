@@ -115,16 +115,24 @@ class HintEntry(BaseEntry):
     levelFrom: int
     levelTo: int
     
-    @validator('name', 'value', 'description')
+    @validator('name', 'description')
     def validate_text_fields(cls, v):
         if not v or len(v.strip()) == 0:
             raise ValueError('Text fields cannot be empty')
         return v.strip()
     
+    @validator('value')
+    def validate_value(cls, v):
+        if v is None:
+            raise ValueError('Value cannot be None')
+        if v < 0:
+            raise ValueError('Value must be non-negative')
+        return v
+    
     @validator('levelFrom', 'levelTo')
     def validate_level_fields(cls, v):
-        if v < 0 or v > 500:  # Adjust range as needed
-            raise ValueError('Level must be between 0 and 100')
+        if v < 0 or v > 500:
+            raise ValueError('Level must be between 0 and 500')
         return v
     
     @validator('levelTo')
