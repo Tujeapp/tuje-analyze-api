@@ -177,9 +177,10 @@ class InteractionTypeEntry(BaseEntry):
 
 class CombinationEntry(BaseEntry):
     name: str
-    subtopic: str      # Single select: "seen" or "new"
-    transcription: str # Single select: "seen" or "new"
-    intent: str        # Single select: "seen" or "new"
+    boredom: float      # ✅ Added - decimal number 0.00 to 1.00
+    subtopic: str       # Single select: "seen" or "new"
+    transcription: str  # Single select: "seen" or "new"
+    intent: str         # Single select: "seen" or "new"
     
     @validator('name')
     def validate_name(cls, v):
@@ -187,19 +188,26 @@ class CombinationEntry(BaseEntry):
             raise ValueError('Name cannot be empty')
         return v.strip()
     
+    @validator('boredom')  # ✅ Added validator
+    def validate_boredom(cls, v):
+        if v is None:
+            raise ValueError('Boredom cannot be None')
+        if v < 0.0 or v > 1.0:
+            raise ValueError('Boredom must be between 0.0 and 1.0')
+        return round(v, 2)  # Round to 2 decimal places
+    
     @validator('subtopic', 'transcription', 'intent')
     def validate_status_fields(cls, v):
         if not v or len(v.strip()) == 0:
             raise ValueError('Status field cannot be empty')
         
-        # Validate against allowed values (seen or new)
         allowed_values = ['seen', 'new']
         value_lower = v.strip().lower()
         
         if value_lower not in allowed_values:
             raise ValueError(f'Status must be one of: {", ".join(allowed_values)}')
         
-        return value_lower  # Store as lowercase for consistency
+        return value_lower
 
 class InteractionEntry(BaseEntry):
     transcriptionFr: str
@@ -431,7 +439,7 @@ SYNC_CONFIGS = {
     "combination": {
         "table_name": "brain_combination",
         "airtable_table": "Combination",
-        "columns": ["id", "name", "subtopic", "transcription", "intent",
+        "columns": ["id", "name", "boredom", "subtopic", "transcription", "intent",
                    "airtable_record_id", "last_modified_time_ref", 
                    "created_at", "update_at", "live"]
     }
