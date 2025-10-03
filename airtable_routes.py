@@ -123,7 +123,7 @@ class HintEntry(BaseEntry):
     
     @validator('levelFrom', 'levelTo')
     def validate_level_fields(cls, v):
-        if v < 0 or v > 100:  # Adjust range as needed
+        if v < 0 or v > 500:  # Adjust range as needed
             raise ValueError('Level must be between 0 and 100')
         return v
     
