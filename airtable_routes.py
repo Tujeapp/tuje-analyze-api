@@ -267,6 +267,7 @@ class NotionEntry(BaseEntry):
     score: float
     levelFrom: int
     levelOwned: int
+    weightiness: float
     
     @validator('nameFr', 'nameEn', 'description')
     def validate_text_fields(cls, v):
@@ -285,6 +286,14 @@ class NotionEntry(BaseEntry):
         if v < 0:
             raise ValueError('Score must be non-negative')
         return v
+    
+    @validator('weightiness')
+    def validate_weightiness(cls, v):
+        if v is None:
+            raise ValueError('Weightiness cannot be None')
+        if v < 0.0 or v > 1.0:
+            raise ValueError('Weightiness must be between 0.0 and 1.0')
+        return round(v, 2)
 
 class VocabEntry(BaseEntry):
     transcriptionFr: str
@@ -389,12 +398,13 @@ SYNC_CONFIGS = {
         "columns": ["id", "name", "description", "airtable_record_id",
                    "last_modified_time_ref", "created_at", "update_at", "live"]
     },
-        "notion": {
+    "notion": {
         "table_name": "brain_notion",
         "airtable_table": "Notion",
         "columns": ["id", "name_fr", "name_en", "description", "rank", "live", 
-                   "score", "level_from", "level_owned", "airtable_record_id", 
-                   "last_modified_time_ref", "created_at", "update_at"]
+                   "score", "level_from", "level_owned", "weightiness",
+                   "airtable_record_id", "last_modified_time_ref", 
+                   "created_at", "update_at"]
     },
     "subtopic": {
         "table_name": "brain_subtopic",
