@@ -175,6 +175,32 @@ class InteractionTypeEntry(BaseEntry):
         
         return mood_lower  # Store as lowercase for consistency
 
+class CombinationEntry(BaseEntry):
+    name: str
+    subtopic: str      # Single select: "seen" or "new"
+    transcription: str # Single select: "seen" or "new"
+    intent: str        # Single select: "seen" or "new"
+    
+    @validator('name')
+    def validate_name(cls, v):
+        if not v or len(v.strip()) == 0:
+            raise ValueError('Name cannot be empty')
+        return v.strip()
+    
+    @validator('subtopic', 'transcription', 'intent')
+    def validate_status_fields(cls, v):
+        if not v or len(v.strip()) == 0:
+            raise ValueError('Status field cannot be empty')
+        
+        # Validate against allowed values (seen or new)
+        allowed_values = ['seen', 'new']
+        value_lower = v.strip().lower()
+        
+        if value_lower not in allowed_values:
+            raise ValueError(f'Status must be one of: {", ".join(allowed_values)}')
+        
+        return value_lower  # Store as lowercase for consistency
+
 class InteractionEntry(BaseEntry):
     transcriptionFr: str
     transcriptionEn: str
@@ -399,6 +425,13 @@ SYNC_CONFIGS = {
         "table_name": "brain_interaction_type",
         "airtable_table": "Type",
         "columns": ["id", "name", "boredom", "description", "session_mood",
+                   "airtable_record_id", "last_modified_time_ref", 
+                   "created_at", "update_at", "live"]
+    },
+    "combination": {
+        "table_name": "brain_combination",
+        "airtable_table": "Combination",
+        "columns": ["id", "name", "subtopic", "transcription", "intent",
                    "airtable_record_id", "last_modified_time_ref", 
                    "created_at", "update_at", "live"]
     }
@@ -627,6 +660,11 @@ async def webhook_sync_hint(entry: HintEntry, background_tasks: BackgroundTasks)
 async def webhook_sync_interaction_type(entry: InteractionTypeEntry, background_tasks: BackgroundTasks):
     """Webhook endpoint to sync interaction type data from Airtable"""
     return await generic_sync_webhook(entry, "interaction_type", background_tasks)
+
+@router.post("/webhook-sync-combination")
+async def webhook_sync_combination(entry: CombinationEntry, background_tasks: BackgroundTasks):
+    """Webhook endpoint to sync combination data from Airtable"""
+    return await generic_sync_webhook(entry, "combination", background_tasks)
 
 # Health check endpoint
 @router.get("/sync-health")
