@@ -110,7 +110,7 @@ class BonusMalusEntry(BaseEntry):
 
 class HintEntry(BaseEntry):
     name: str
-    value: str
+    value: int
     description: str
     levelFrom: int
     levelTo: int
