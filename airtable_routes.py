@@ -108,6 +108,31 @@ class BonusMalusEntry(BaseEntry):
             raise ValueError('levelTo must be greater than or equal to levelFrom')
         return v
 
+class HintEntry(BaseEntry):
+    name: str
+    value: str
+    description: str
+    levelFrom: int
+    levelTo: int
+    
+    @validator('name', 'value', 'description')
+    def validate_text_fields(cls, v):
+        if not v or len(v.strip()) == 0:
+            raise ValueError('Text fields cannot be empty')
+        return v.strip()
+    
+    @validator('levelFrom', 'levelTo')
+    def validate_level_fields(cls, v):
+        if v < 0 or v > 100:  # Adjust range as needed
+            raise ValueError('Level must be between 0 and 100')
+        return v
+    
+    @validator('levelTo')
+    def validate_level_range(cls, v, values):
+        if 'levelFrom' in values and v < values['levelFrom']:
+            raise ValueError('levelTo must be greater than or equal to levelFrom')
+        return v
+
 class InteractionEntry(BaseEntry):
     transcriptionFr: str
     transcriptionEn: str
@@ -318,6 +343,13 @@ SYNC_CONFIGS = {
         "table_name": "brain_bonus_malus",
         "airtable_table": "Bonus-Malus",
         "columns": ["id", "name_fr", "name_en", "description", "level_from", "level_to",
+                   "airtable_record_id", "last_modified_time_ref", 
+                   "created_at", "update_at", "live"]
+    },
+    "hint": {
+        "table_name": "brain_hint",
+        "airtable_table": "Hint",
+        "columns": ["id", "name", "value", "description", "level_from", "level_to",
                    "airtable_record_id", "last_modified_time_ref", 
                    "created_at", "update_at", "live"]
     }
@@ -535,6 +567,11 @@ async def webhook_sync_notion(entry: NotionEntry, background_tasks: BackgroundTa
 async def webhook_sync_bonus_malus(entry: BonusMalusEntry, background_tasks: BackgroundTasks):
     """Webhook endpoint to sync bonus-malus data from Airtable"""
     return await generic_sync_webhook(entry, "bonus_malus", background_tasks)
+
+@router.post("/webhook-sync-hint")
+async def webhook_sync_hint(entry: HintEntry, background_tasks: BackgroundTasks):
+    """Webhook endpoint to sync hint data from Airtable"""
+    return await generic_sync_webhook(entry, "hint", background_tasks)
 
 # Health check endpoint
 @router.get("/sync-health")
