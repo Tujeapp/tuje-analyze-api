@@ -141,6 +141,40 @@ class HintEntry(BaseEntry):
             raise ValueError('levelTo must be greater than or equal to levelFrom')
         return v
 
+class InteractionTypeEntry(BaseEntry):
+    name: str
+    boredom: float  # Decimal number 0.00 to 1.00
+    description: str
+    sessionMood: str  # Single select: effective, playful, cultural, relax, listening
+    
+    @validator('name', 'description')
+    def validate_text_fields(cls, v):
+        if not v or len(v.strip()) == 0:
+            raise ValueError('Text fields cannot be empty')
+        return v.strip()
+    
+    @validator('boredom')
+    def validate_boredom(cls, v):
+        if v is None:
+            raise ValueError('Boredom cannot be None')
+        if v < 0.0 or v > 1.0:
+            raise ValueError('Boredom must be between 0.0 and 1.0')
+        return v
+    
+    @validator('sessionMood')
+    def validate_session_mood(cls, v):
+        if not v or len(v.strip()) == 0:
+            raise ValueError('Session mood cannot be empty')
+        
+        # Validate against allowed values
+        allowed_moods = ['effective', 'playful', 'cultural', 'relax', 'listening']
+        mood_lower = v.strip().lower()
+        
+        if mood_lower not in allowed_moods:
+            raise ValueError(f'Session mood must be one of: {", ".join(allowed_moods)}')
+        
+        return mood_lower  # Store as lowercase for consistency
+
 class InteractionEntry(BaseEntry):
     transcriptionFr: str
     transcriptionEn: str
@@ -360,6 +394,13 @@ SYNC_CONFIGS = {
         "columns": ["id", "name", "value", "description", "level_from", "level_to",
                    "airtable_record_id", "last_modified_time_ref", 
                    "created_at", "update_at", "live"]
+    },
+    "interaction_type": {
+        "table_name": "brain_interaction_type",
+        "airtable_table": "Type",
+        "columns": ["id", "name", "boredom", "description", "session_mood",
+                   "airtable_record_id", "last_modified_time_ref", 
+                   "created_at", "update_at", "live"]
     }
 }
 
@@ -408,6 +449,7 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "levelFrom": "level_from",
         "levelOwned": "level_owned",
         "levelTo": "level_to",
+        "sessionMood": "session_mood",
         "subtopicId": "subtopic_id"
     }
     
@@ -580,6 +622,11 @@ async def webhook_sync_bonus_malus(entry: BonusMalusEntry, background_tasks: Bac
 async def webhook_sync_hint(entry: HintEntry, background_tasks: BackgroundTasks):
     """Webhook endpoint to sync hint data from Airtable"""
     return await generic_sync_webhook(entry, "hint", background_tasks)
+
+@router.post("/webhook-sync-type")
+async def webhook_sync_interaction_type(entry: InteractionTypeEntry, background_tasks: BackgroundTasks):
+    """Webhook endpoint to sync interaction type data from Airtable"""
+    return await generic_sync_webhook(entry, "interaction_type", background_tasks)
 
 # Health check endpoint
 @router.get("/sync-health")
