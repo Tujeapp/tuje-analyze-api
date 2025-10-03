@@ -209,6 +209,16 @@ class CombinationEntry(BaseEntry):
         
         return value_lower
 
+class SessionMoodEntry(BaseEntry):
+    name: str
+    description: str
+    
+    @validator('name', 'description')
+    def validate_text_fields(cls, v):
+        if not v or len(v.strip()) == 0:
+            raise ValueError('Text fields cannot be empty')
+        return v.strip()
+
 class InteractionEntry(BaseEntry):
     transcriptionFr: str
     transcriptionEn: str
@@ -452,6 +462,13 @@ SYNC_CONFIGS = {
         "columns": ["id", "name", "boredom", "subtopic", "transcription", "intent",
                    "airtable_record_id", "last_modified_time_ref", 
                    "created_at", "update_at", "live"]
+    },
+    "session_mood": {
+        "table_name": "brain_session_mood",
+        "airtable_table": "SessionMood",
+        "columns": ["id", "name", "description",
+                   "airtable_record_id", "last_modified_time_ref", 
+                   "created_at", "update_at", "live"]
     }
 }
 
@@ -683,6 +700,11 @@ async def webhook_sync_interaction_type(entry: InteractionTypeEntry, background_
 async def webhook_sync_combination(entry: CombinationEntry, background_tasks: BackgroundTasks):
     """Webhook endpoint to sync combination data from Airtable"""
     return await generic_sync_webhook(entry, "combination", background_tasks)
+
+@router.post("/webhook-sync-session-mood")
+async def webhook_sync_session_mood(entry: SessionMoodEntry, background_tasks: BackgroundTasks):
+    """Webhook endpoint to sync session mood data from Airtable"""
+    return await generic_sync_webhook(entry, "session_mood", background_tasks)
 
 # Health check endpoint
 @router.get("/sync-health")
