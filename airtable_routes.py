@@ -141,11 +141,13 @@ class HintEntry(BaseEntry):
             raise ValueError('levelTo must be greater than or equal to levelFrom')
         return v
 
+from typing import List
+
 class InteractionTypeEntry(BaseEntry):
     name: str
     boredom: float
     description: str
-    sessionMoodId: str
+    sessionMoodIds: List[str]  # ✅ Array of session mood IDs
     
     @validator('name', 'description')
     def validate_text_fields(cls, v):
@@ -161,11 +163,18 @@ class InteractionTypeEntry(BaseEntry):
             raise ValueError('Boredom must be between 0.0 and 1.0')
         return round(v, 2)
     
-    @validator('sessionMoodId')
-    def validate_session_mood_id(cls, v):
-        if not v or len(v.strip()) == 0:
-            raise ValueError('Session mood ID cannot be empty')
-        return v.strip()
+    @validator('sessionMoodIds')
+    def validate_session_mood_ids(cls, v):
+        if not v or not isinstance(v, list):
+            raise ValueError('Session mood IDs must be a list')
+        
+        # Clean and validate
+        cleaned = [str(mood_id).strip() for mood_id in v if mood_id and str(mood_id).strip()]
+        
+        if len(cleaned) == 0:
+            raise ValueError('At least one session mood ID is required')
+        
+        return cleaned
 
 class CombinationEntry(BaseEntry):
     name: str
@@ -444,9 +453,9 @@ SYNC_CONFIGS = {
     "interaction_type": {
         "table_name": "brain_interaction_type",
         "airtable_table": "Type",
-        "columns": ["id", "name", "boredom", "description", "session_mood_id",
-               "airtable_record_id", "last_modified_time_ref", 
-               "created_at", "update_at", "live"]
+        "columns": ["id", "name", "boredom", "description", "session_mood_ids",
+                   "airtable_record_id", "last_modified_time_ref", 
+                   "created_at", "update_at", "live"]
     },
     "combination": {
         "table_name": "brain_combination",
@@ -510,7 +519,7 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "levelOwned": "level_owned",
         "levelTo": "level_to",
         "sessionMood": "session_mood",
-        "sessionMoodId": "session_mood_id",
+        "sessionMoodIds": "session_mood_ids",
         "subtopicId": "subtopic_id"
     }
     
@@ -569,7 +578,7 @@ async def sync_entity_to_database(entry_data: Dict, config: Dict) -> None:
             for col in columns:
                 value = entry_data.get(col)
                 # CHANGE 1: Add 'expected_intent_id' to this list (just add it to the existing list)
-                if col in ['intents', 'expected_entities_id', 'expected_vocab_id', 'expected_notion_id', 'expected_intent_id', 'interaction_vocab_id'] and isinstance(value, list):
+                if col in ['intents', 'expected_entities_id', 'expected_vocab_id', 'expected_notion_id', 'expected_intent_id', 'interaction_vocab_id', 'session_mood_ids''] and isinstance(value, list):
                     values.append(value)  # PostgreSQL will handle the array
                 else:
                     values.append(value)
