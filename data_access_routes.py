@@ -358,12 +358,22 @@ async def get_interaction_types_by_mood(mood: str):
             )
         
         conn = await asyncpg.connect(DATABASE_URL)
+        
+        # ✅ Updated query to JOIN with brain_session_mood
         rows = await conn.fetch("""
-            SELECT id, name, boredom, description, session_mood
-            FROM brain_interaction_type
-            WHERE live = TRUE 
-              AND session_mood = $1
-            ORDER BY boredom ASC
+            SELECT 
+                it.id, 
+                it.name, 
+                it.boredom, 
+                it.description,
+                sm.id as session_mood_id,
+                sm.name as session_mood_name
+            FROM brain_interaction_type it
+            JOIN brain_session_mood sm ON it.session_mood_id = sm.id
+            WHERE it.live = TRUE 
+              AND sm.live = TRUE
+              AND LOWER(sm.name) = LOWER($1)
+            ORDER BY it.boredom ASC
         """, mood.lower())
         await conn.close()
 
@@ -375,7 +385,11 @@ async def get_interaction_types_by_mood(mood: str):
                     "id": row["id"],
                     "name": row["name"],
                     "boredom": float(row["boredom"]),
-                    "description": row["description"]
+                    "description": row["description"],
+                    "session_mood": {
+                        "id": row["session_mood_id"],
+                        "name": row["session_mood_name"]
+                    }
                 }
                 for row in rows
             ]
@@ -396,12 +410,22 @@ async def get_low_boredom_types(max_boredom: float = 0.5):
             )
         
         conn = await asyncpg.connect(DATABASE_URL)
+        
+        # ✅ Updated query to JOIN with brain_session_mood
         rows = await conn.fetch("""
-            SELECT id, name, boredom, description, session_mood
-            FROM brain_interaction_type
-            WHERE live = TRUE 
-              AND boredom <= $1
-            ORDER BY boredom ASC
+            SELECT 
+                it.id, 
+                it.name, 
+                it.boredom, 
+                it.description,
+                sm.id as session_mood_id,
+                sm.name as session_mood_name
+            FROM brain_interaction_type it
+            JOIN brain_session_mood sm ON it.session_mood_id = sm.id
+            WHERE it.live = TRUE 
+              AND sm.live = TRUE
+              AND it.boredom <= $1
+            ORDER BY it.boredom ASC
         """, max_boredom)
         await conn.close()
 
@@ -413,8 +437,11 @@ async def get_low_boredom_types(max_boredom: float = 0.5):
                     "id": row["id"],
                     "name": row["name"],
                     "boredom": float(row["boredom"]),
-                    "session_mood": row["session_mood"],
-                    "description": row["description"]
+                    "description": row["description"],
+                    "session_mood": {
+                        "id": row["session_mood_id"],
+                        "name": row["session_mood_name"]
+                    }
                 }
                 for row in rows
             ]
@@ -430,17 +457,18 @@ async def get_interaction_type_statistics():
     try:
         conn = await asyncpg.connect(DATABASE_URL)
         
-        # Mood distribution
+        # ✅ Updated query to JOIN with brain_session_mood
         mood_stats = await conn.fetch("""
             SELECT 
-                session_mood,
+                sm.name as session_mood_name,
                 COUNT(*) as count,
-                ROUND(AVG(boredom)::numeric, 2) as avg_boredom,
-                MIN(boredom) as min_boredom,
-                MAX(boredom) as max_boredom
-            FROM brain_interaction_type
-            WHERE live = TRUE
-            GROUP BY session_mood
+                ROUND(AVG(it.boredom)::numeric, 2) as avg_boredom,
+                MIN(it.boredom) as min_boredom,
+                MAX(it.boredom) as max_boredom
+            FROM brain_interaction_type it
+            JOIN brain_session_mood sm ON it.session_mood_id = sm.id
+            WHERE it.live = TRUE AND sm.live = TRUE
+            GROUP BY sm.name
             ORDER BY count DESC
         """)
         
@@ -468,7 +496,7 @@ async def get_interaction_type_statistics():
             },
             "by_mood": [
                 {
-                    "mood": row["session_mood"],
+                    "mood": row["session_mood_name"],
                     "count": row["count"],
                     "avg_boredom": float(row["avg_boredom"]),
                     "boredom_range": {
