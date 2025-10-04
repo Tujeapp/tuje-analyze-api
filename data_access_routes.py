@@ -347,7 +347,7 @@ async def search_hints(keyword: str, user_level: Optional[int] = None):
 
 @router.get("/interaction-types-by-mood/{mood}")
 async def get_interaction_types_by_mood(mood: str):
-    """Get interaction types filtered by session mood"""
+    """Get interaction types that are compatible with a specific session mood"""
     try:
         # Validate mood
         allowed_moods = ['effective', 'playful', 'cultural', 'relax', 'listening']
@@ -359,20 +359,25 @@ async def get_interaction_types_by_mood(mood: str):
         
         conn = await asyncpg.connect(DATABASE_URL)
         
-        # ✅ Updated query to JOIN with brain_session_mood
+        # ✅ Query using array containment operator
         rows = await conn.fetch("""
             SELECT 
                 it.id, 
                 it.name, 
                 it.boredom, 
                 it.description,
-                sm.id as session_mood_id,
-                sm.name as session_mood_name
+                it.session_mood_ids,
+                array_agg(sm.name) as mood_names
             FROM brain_interaction_type it
-            JOIN brain_session_mood sm ON it.session_mood_id = sm.id
+            JOIN brain_session_mood sm ON sm.id = ANY(it.session_mood_ids)
             WHERE it.live = TRUE 
               AND sm.live = TRUE
-              AND LOWER(sm.name) = LOWER($1)
+              AND EXISTS (
+                  SELECT 1 FROM brain_session_mood sm2
+                  WHERE sm2.id = ANY(it.session_mood_ids)
+                  AND LOWER(sm2.name) = LOWER($1)
+              )
+            GROUP BY it.id, it.name, it.boredom, it.description, it.session_mood_ids
             ORDER BY it.boredom ASC
         """, mood.lower())
         await conn.close()
@@ -386,10 +391,7 @@ async def get_interaction_types_by_mood(mood: str):
                     "name": row["name"],
                     "boredom": float(row["boredom"]),
                     "description": row["description"],
-                    "session_mood": {
-                        "id": row["session_mood_id"],
-                        "name": row["session_mood_name"]
-                    }
+                    "compatible_moods": row["mood_names"]  # Shows all moods this type works with
                 }
                 for row in rows
             ]
@@ -400,8 +402,8 @@ async def get_interaction_types_by_mood(mood: str):
 
 
 @router.get("/interaction-types-low-boredom")
-async def get_low_boredom_types(max_boredom: float = 0.5):
-    """Get interaction types with low boredom score"""
+async def get_low_boredom_types(max_boredom: float = 0.5, session_mood: str = None):
+    """Get interaction types with low boredom, optionally filtered by session mood"""
     try:
         if max_boredom < 0 or max_boredom > 1:
             raise HTTPException(
@@ -411,26 +413,51 @@ async def get_low_boredom_types(max_boredom: float = 0.5):
         
         conn = await asyncpg.connect(DATABASE_URL)
         
-        # ✅ Updated query to JOIN with brain_session_mood
-        rows = await conn.fetch("""
-            SELECT 
-                it.id, 
-                it.name, 
-                it.boredom, 
-                it.description,
-                sm.id as session_mood_id,
-                sm.name as session_mood_name
-            FROM brain_interaction_type it
-            JOIN brain_session_mood sm ON it.session_mood_id = sm.id
-            WHERE it.live = TRUE 
-              AND sm.live = TRUE
-              AND it.boredom <= $1
-            ORDER BY it.boredom ASC
-        """, max_boredom)
+        if session_mood:
+            # Filter by specific mood
+            rows = await conn.fetch("""
+                SELECT 
+                    it.id, 
+                    it.name, 
+                    it.boredom, 
+                    it.description,
+                    array_agg(sm.name) as mood_names
+                FROM brain_interaction_type it
+                JOIN brain_session_mood sm ON sm.id = ANY(it.session_mood_ids)
+                WHERE it.live = TRUE 
+                  AND sm.live = TRUE
+                  AND it.boredom <= $1
+                  AND EXISTS (
+                      SELECT 1 FROM brain_session_mood sm2
+                      WHERE sm2.id = ANY(it.session_mood_ids)
+                      AND LOWER(sm2.name) = LOWER($2)
+                  )
+                GROUP BY it.id, it.name, it.boredom, it.description
+                ORDER BY it.boredom ASC
+            """, max_boredom, session_mood.lower())
+        else:
+            # No mood filter
+            rows = await conn.fetch("""
+                SELECT 
+                    it.id, 
+                    it.name, 
+                    it.boredom, 
+                    it.description,
+                    array_agg(sm.name) as mood_names
+                FROM brain_interaction_type it
+                JOIN brain_session_mood sm ON sm.id = ANY(it.session_mood_ids)
+                WHERE it.live = TRUE 
+                  AND sm.live = TRUE
+                  AND it.boredom <= $1
+                GROUP BY it.id, it.name, it.boredom, it.description
+                ORDER BY it.boredom ASC
+            """, max_boredom)
+        
         await conn.close()
 
         return {
             "max_boredom": max_boredom,
+            "session_mood_filter": session_mood,
             "count": len(rows),
             "types": [
                 {
@@ -438,10 +465,7 @@ async def get_low_boredom_types(max_boredom: float = 0.5):
                     "name": row["name"],
                     "boredom": float(row["boredom"]),
                     "description": row["description"],
-                    "session_mood": {
-                        "id": row["session_mood_id"],
-                        "name": row["session_mood_name"]
-                    }
+                    "compatible_moods": row["mood_names"]
                 }
                 for row in rows
             ]
@@ -453,23 +477,23 @@ async def get_low_boredom_types(max_boredom: float = 0.5):
 
 @router.get("/interaction-type-stats")
 async def get_interaction_type_statistics():
-    """Get statistics about interaction types"""
+    """Get statistics about interaction types and their mood compatibility"""
     try:
         conn = await asyncpg.connect(DATABASE_URL)
         
-        # ✅ Updated query to JOIN with brain_session_mood
+        # Count types by mood (types can appear in multiple moods)
         mood_stats = await conn.fetch("""
             SELECT 
                 sm.name as session_mood_name,
-                COUNT(*) as count,
+                COUNT(DISTINCT it.id) as type_count,
                 ROUND(AVG(it.boredom)::numeric, 2) as avg_boredom,
                 MIN(it.boredom) as min_boredom,
                 MAX(it.boredom) as max_boredom
             FROM brain_interaction_type it
-            JOIN brain_session_mood sm ON it.session_mood_id = sm.id
+            JOIN brain_session_mood sm ON sm.id = ANY(it.session_mood_ids)
             WHERE it.live = TRUE AND sm.live = TRUE
             GROUP BY sm.name
-            ORDER BY count DESC
+            ORDER BY type_count DESC
         """)
         
         # Overall stats
@@ -478,7 +502,8 @@ async def get_interaction_type_statistics():
                 COUNT(*) as total_types,
                 ROUND(AVG(boredom)::numeric, 2) as avg_boredom,
                 MIN(boredom) as min_boredom,
-                MAX(boredom) as max_boredom
+                MAX(boredom) as max_boredom,
+                ROUND(AVG(array_length(session_mood_ids, 1))::numeric, 1) as avg_moods_per_type
             FROM brain_interaction_type
             WHERE live = TRUE
         """)
@@ -489,6 +514,7 @@ async def get_interaction_type_statistics():
             "overall": {
                 "total_types": overall["total_types"],
                 "average_boredom": float(overall["avg_boredom"]) if overall["avg_boredom"] else 0,
+                "average_moods_per_type": float(overall["avg_moods_per_type"]) if overall["avg_moods_per_type"] else 0,
                 "boredom_range": {
                     "min": float(overall["min_boredom"]) if overall["min_boredom"] else 0,
                     "max": float(overall["max_boredom"]) if overall["max_boredom"] else 0
@@ -497,7 +523,7 @@ async def get_interaction_type_statistics():
             "by_mood": [
                 {
                     "mood": row["session_mood_name"],
-                    "count": row["count"],
+                    "compatible_type_count": row["type_count"],
                     "avg_boredom": float(row["avg_boredom"]),
                     "boredom_range": {
                         "min": float(row["min_boredom"]),
