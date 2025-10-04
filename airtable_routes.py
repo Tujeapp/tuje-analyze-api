@@ -143,9 +143,9 @@ class HintEntry(BaseEntry):
 
 class InteractionTypeEntry(BaseEntry):
     name: str
-    boredom: float  # Decimal number 0.00 to 1.00
+    boredom: float
     description: str
-    sessionMood: str  # Single select: effective, playful, cultural, relax, listening
+    sessionMoodId: str
     
     @validator('name', 'description')
     def validate_text_fields(cls, v):
@@ -159,21 +159,13 @@ class InteractionTypeEntry(BaseEntry):
             raise ValueError('Boredom cannot be None')
         if v < 0.0 or v > 1.0:
             raise ValueError('Boredom must be between 0.0 and 1.0')
-        return v
+        return round(v, 2)
     
-    @validator('sessionMood')
-    def validate_session_mood(cls, v):
+    @validator('sessionMoodId')
+    def validate_session_mood_id(cls, v):
         if not v or len(v.strip()) == 0:
-            raise ValueError('Session mood cannot be empty')
-        
-        # Validate against allowed values
-        allowed_moods = ['effective', 'playful', 'cultural', 'relax', 'listening']
-        mood_lower = v.strip().lower()
-        
-        if mood_lower not in allowed_moods:
-            raise ValueError(f'Session mood must be one of: {", ".join(allowed_moods)}')
-        
-        return mood_lower  # Store as lowercase for consistency
+            raise ValueError('Session mood ID cannot be empty')
+        return v.strip()
 
 class CombinationEntry(BaseEntry):
     name: str
@@ -452,9 +444,9 @@ SYNC_CONFIGS = {
     "interaction_type": {
         "table_name": "brain_interaction_type",
         "airtable_table": "Type",
-        "columns": ["id", "name", "boredom", "description", "session_mood",
-                   "airtable_record_id", "last_modified_time_ref", 
-                   "created_at", "update_at", "live"]
+        "columns": ["id", "name", "boredom", "description", "session_mood_id",
+               "airtable_record_id", "last_modified_time_ref", 
+               "created_at", "update_at", "live"]
     },
     "combination": {
         "table_name": "brain_combination",
@@ -518,6 +510,7 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "levelOwned": "level_owned",
         "levelTo": "level_to",
         "sessionMood": "session_mood",
+        "sessionMoodId": "session_mood_id",
         "subtopicId": "subtopic_id"
     }
     
