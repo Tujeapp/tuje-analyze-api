@@ -748,6 +748,135 @@ async def get_notions_by_weightiness(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# ========================================
+# NEW ENDPOINTS: Subtopic
+# ========================================
+
+@router.get("/subtopics-detailed")
+async def get_subtopics_detailed():
+    """Get all subtopics with descriptions and boredom scores"""
+    try:
+        conn = await asyncpg.connect(DATABASE_URL)
+        
+        rows = await conn.fetch("""
+            SELECT 
+                id, 
+                name_fr, 
+                name_en, 
+                description_fr, 
+                description_en, 
+                boredom
+            FROM brain_subtopic
+            WHERE live = TRUE
+            ORDER BY boredom ASC, name_fr ASC
+        """)
+        
+        await conn.close()
+        
+        return {
+            "count": len(rows),
+            "subtopics": [
+                {
+                    "id": row["id"],
+                    "name_fr": row["name_fr"],
+                    "name_en": row["name_en"],
+                    "description_fr": row["description_fr"],
+                    "description_en": row["description_en"],
+                    "boredom": float(row["boredom"])
+                }
+                for row in rows
+            ]
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/subtopics-low-boredom")
+async def get_low_boredom_subtopics(max_boredom: float = 0.5):
+    """Get subtopics with low boredom score"""
+    try:
+        if max_boredom < 0 or max_boredom > 1:
+            raise HTTPException(
+                status_code=400,
+                detail="max_boredom must be between 0 and 1"
+            )
+        
+        conn = await asyncpg.connect(DATABASE_URL)
+        
+        rows = await conn.fetch("""
+            SELECT 
+                id, 
+                name_fr, 
+                name_en, 
+                description_fr, 
+                description_en, 
+                boredom
+            FROM brain_subtopic
+            WHERE live = TRUE 
+              AND boredom <= $1
+            ORDER BY boredom ASC
+        """, max_boredom)
+        
+        await conn.close()
+        
+        return {
+            "max_boredom": max_boredom,
+            "count": len(rows),
+            "subtopics": [
+                {
+                    "id": row["id"],
+                    "name_fr": row["name_fr"],
+                    "name_en": row["name_en"],
+                    "description_fr": row["description_fr"],
+                    "description_en": row["description_en"],
+                    "boredom": float(row["boredom"])
+                }
+                for row in rows
+            ]
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/subtopic-statistics")
+async def get_subtopic_statistics():
+    """Get statistics about subtopic boredom scores"""
+    try:
+        conn = await asyncpg.connect(DATABASE_URL)
+        
+        stats = await conn.fetchrow("""
+            SELECT 
+                COUNT(*) as total_subtopics,
+                ROUND(AVG(boredom)::numeric, 2) as avg_boredom,
+                MIN(boredom) as min_boredom,
+                MAX(boredom) as max_boredom,
+                COUNT(*) FILTER (WHERE boredom <= 0.3) as low_boredom_count,
+                COUNT(*) FILTER (WHERE boredom > 0.3 AND boredom <= 0.7) as medium_boredom_count,
+                COUNT(*) FILTER (WHERE boredom > 0.7) as high_boredom_count
+            FROM brain_subtopic
+            WHERE live = TRUE
+        """)
+        
+        await conn.close()
+        
+        return {
+            "total_subtopics": stats["total_subtopics"],
+            "boredom_statistics": {
+                "average": float(stats["avg_boredom"]) if stats["avg_boredom"] else 0,
+                "min": float(stats["min_boredom"]) if stats["min_boredom"] else 0,
+                "max": float(stats["max_boredom"]) if stats["max_boredom"] else 0
+            },
+            "boredom_distribution": {
+                "low": stats["low_boredom_count"],       # 0.0 - 0.3
+                "medium": stats["medium_boredom_count"],  # 0.3 - 0.7
+                "high": stats["high_boredom_count"]       # 0.7 - 1.0
+            }
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ========================================
 # NEW ENDPOINTS: Session Moods
