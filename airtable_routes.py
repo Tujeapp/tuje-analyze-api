@@ -350,6 +350,23 @@ class IntentEntry(BaseEntry):
 class SubtopicEntry(BaseEntry):
     nameFr: str
     nameEn: str
+    descriptionFr: str
+    descriptionEn: str
+    boredom: float
+    
+    @validator('nameFr', 'nameEn', 'descriptionFr', 'descriptionEn')
+    def validate_text_fields(cls, v):
+        if not v or len(v.strip()) == 0:
+            raise ValueError('Text fields cannot be empty')
+        return v.strip()
+    
+    @validator('boredom')
+    def validate_boredom(cls, v):
+        if v is None:
+            raise ValueError('Boredom cannot be None')
+        if v < 0.0 or v > 1.0:
+            raise ValueError('Boredom must be between 0.0 and 1.0')
+        return round(v, 2)
 
 class InteractionAnswerEntry(BaseEntry):
     interaction_id: str
@@ -420,8 +437,9 @@ SYNC_CONFIGS = {
     "subtopic": {
         "table_name": "brain_subtopic",
         "airtable_table": "Subtopic",
-        "columns": ["id", "name_fr", "name_en", "airtable_record_id",
-                   "last_modified_time_ref", "created_at", "update_at", "live"]
+        "columns": ["id", "name_fr", "name_en", "description_fr", "description_en", "boredom",  # ✅ Added new columns
+                   "airtable_record_id", "last_modified_time_ref", 
+                   "created_at", "update_at", "live"]
     },
     "interaction_answer": {
         "table_name": "brain_interaction_answer",
@@ -508,13 +526,15 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "answerOptimumLevel": "answer_optimum_level",
         "entityTypeId": "entity_type_id",
         "expectedNotionIds": "expected_notion_id",
-        "expectedIntentIds": "expected_intent_id",  # NEW: Add intent mapping
+        "expectedIntentIds": "expected_intent_id",
         "expectedEntitiesIds": "expected_entities_id",
         "expectedVocabIds": "expected_vocab_id",
         "interactionVocabIds": "interaction_vocab_id",
         "airtableRecordId": "airtable_record_id",
         "nameFr": "name_fr",
         "nameEn": "name_en",
+        "descriptionFr": "description_fr",
+        "descriptionEn": "description_en",
         "levelFrom": "level_from",
         "levelOwned": "level_owned",
         "levelTo": "level_to",
