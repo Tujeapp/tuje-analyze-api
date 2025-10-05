@@ -879,6 +879,195 @@ async def get_subtopic_statistics():
         raise HTTPException(status_code=500, detail=str(e))
 
 # ========================================
+# NEW ENDPOINTS: Interests
+# ========================================
+
+@router.get("/interests")
+async def get_interests():
+    """Get all interests with their linked subtopics"""
+    try:
+        conn = await asyncpg.connect(DATABASE_URL)
+        
+        rows = await conn.fetch("""
+            SELECT 
+                i.id,
+                i.name,
+                i.subtopic_ids,
+                array_agg(s.name_fr) FILTER (WHERE s.id IS NOT NULL) as subtopic_names_fr,
+                array_agg(s.name_en) FILTER (WHERE s.id IS NOT NULL) as subtopic_names_en
+            FROM brain_interest i
+            LEFT JOIN brain_subtopic s ON s.id = ANY(i.subtopic_ids) AND s.live = TRUE
+            WHERE i.live = TRUE
+            GROUP BY i.id, i.name, i.subtopic_ids
+            ORDER BY i.name ASC
+        """)
+        
+        await conn.close()
+        
+        return {
+            "count": len(rows),
+            "interests": [
+                {
+                    "id": row["id"],
+                    "name": row["name"],
+                    "subtopic_ids": row["subtopic_ids"],
+                    "subtopic_count": len(row["subtopic_ids"]) if row["subtopic_ids"] else 0,
+                    "subtopics": {
+                        "names_fr": row["subtopic_names_fr"] if row["subtopic_names_fr"] else [],
+                        "names_en": row["subtopic_names_en"] if row["subtopic_names_en"] else []
+                    }
+                }
+                for row in rows
+            ]
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/interest/{interest_id}")
+async def get_interest_by_id(interest_id: str):
+    """Get a specific interest with detailed subtopic information"""
+    try:
+        conn = await asyncpg.connect(DATABASE_URL)
+        
+        # Get interest
+        interest = await conn.fetchrow("""
+            SELECT id, name, subtopic_ids
+            FROM brain_interest
+            WHERE id = $1 AND live = TRUE
+        """, interest_id)
+        
+        if not interest:
+            await conn.close()
+            raise HTTPException(
+                status_code=404,
+                detail=f"Interest '{interest_id}' not found"
+            )
+        
+        # Get detailed subtopic info
+        subtopics = await conn.fetch("""
+            SELECT 
+                id,
+                name_fr,
+                name_en,
+                description_fr,
+                description_en,
+                boredom
+            FROM brain_subtopic
+            WHERE id = ANY($1) AND live = TRUE
+            ORDER BY name_fr ASC
+        """, interest["subtopic_ids"])
+        
+        await conn.close()
+        
+        return {
+            "id": interest["id"],
+            "name": interest["name"],
+            "subtopic_count": len(subtopics),
+            "subtopics": [
+                {
+                    "id": row["id"],
+                    "name_fr": row["name_fr"],
+                    "name_en": row["name_en"],
+                    "description_fr": row["description_fr"],
+                    "description_en": row["description_en"],
+                    "boredom": float(row["boredom"])
+                }
+                for row in subtopics
+            ]
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/interests-by-subtopic/{subtopic_id}")
+async def get_interests_by_subtopic(subtopic_id: str):
+    """Get all interests that include a specific subtopic"""
+    try:
+        conn = await asyncpg.connect(DATABASE_URL)
+        
+        rows = await conn.fetch("""
+            SELECT id, name, subtopic_ids
+            FROM brain_interest
+            WHERE live = TRUE 
+              AND $1 = ANY(subtopic_ids)
+            ORDER BY name ASC
+        """, subtopic_id)
+        
+        await conn.close()
+        
+        return {
+            "subtopic_id": subtopic_id,
+            "count": len(rows),
+            "interests": [
+                {
+                    "id": row["id"],
+                    "name": row["name"],
+                    "total_subtopics": len(row["subtopic_ids"]) if row["subtopic_ids"] else 0
+                }
+                for row in rows
+            ]
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/interest-statistics")
+async def get_interest_statistics():
+    """Get statistics about interests and their subtopic coverage"""
+    try:
+        conn = await asyncpg.connect(DATABASE_URL)
+        
+        stats = await conn.fetchrow("""
+            SELECT 
+                COUNT(*) as total_interests,
+                ROUND(AVG(array_length(subtopic_ids, 1))::numeric, 1) as avg_subtopics_per_interest,
+                MIN(array_length(subtopic_ids, 1)) as min_subtopics,
+                MAX(array_length(subtopic_ids, 1)) as max_subtopics
+            FROM brain_interest
+            WHERE live = TRUE
+        """)
+        
+        # Top interests by subtopic count
+        top_interests = await conn.fetch("""
+            SELECT 
+                id,
+                name,
+                array_length(subtopic_ids, 1) as subtopic_count
+            FROM brain_interest
+            WHERE live = TRUE
+            ORDER BY subtopic_count DESC
+            LIMIT 10
+        """)
+        
+        await conn.close()
+        
+        return {
+            "total_interests": stats["total_interests"],
+            "subtopic_coverage": {
+                "average_per_interest": float(stats["avg_subtopics_per_interest"]) if stats["avg_subtopics_per_interest"] else 0,
+                "min": stats["min_subtopics"],
+                "max": stats["max_subtopics"]
+            },
+            "top_interests_by_coverage": [
+                {
+                    "id": row["id"],
+                    "name": row["name"],
+                    "subtopic_count": row["subtopic_count"]
+                }
+                for row in top_interests
+            ]
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ========================================
 # NEW ENDPOINTS: Session Moods
 # ========================================
 
