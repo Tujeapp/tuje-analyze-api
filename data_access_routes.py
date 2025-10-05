@@ -1068,6 +1068,178 @@ async def get_interest_statistics():
         raise HTTPException(status_code=500, detail=str(e))
 
 # ========================================
+# UPDATED: Interaction Endpoints with New Fields
+# ========================================
+
+@router.get("/interactions-detailed/{interaction_id}")
+async def get_interaction_detailed(interaction_id: str):
+    """Get detailed interaction with all relationships"""
+    try:
+        conn = await asyncpg.connect(DATABASE_URL)
+        
+        # Get interaction
+        interaction = await conn.fetchrow("""
+            SELECT 
+                i.id,
+                i.transcription_fr,
+                i.transcription_en,
+                i.subtopic_id,
+                i.interaction_optimum_level,
+                i.boredom,
+                i.intents,
+                i.expected_entities_id,
+                i.expected_vocab_id,
+                i.expected_notion_id,
+                i.interaction_vocab_id,
+                i.hint_ids,
+                i.interaction_type_id,
+                s.name_fr as subtopic_name,
+                it.name as interaction_type_name
+            FROM brain_interaction i
+            LEFT JOIN brain_subtopic s ON i.subtopic_id = s.id
+            LEFT JOIN brain_interaction_type it ON i.interaction_type_id = it.id
+            WHERE i.id = $1 AND i.live = TRUE
+        """, interaction_id)
+        
+        if not interaction:
+            await conn.close()
+            raise HTTPException(
+                status_code=404,
+                detail=f"Interaction '{interaction_id}' not found"
+            )
+        
+        # Get hints
+        hints = []
+        if interaction["hint_ids"]:
+            hints = await conn.fetch("""
+                SELECT id, name, value, description
+                FROM brain_hint
+                WHERE id = ANY($1) AND live = TRUE
+            """, interaction["hint_ids"])
+        
+        await conn.close()
+        
+        return {
+            "id": interaction["id"],
+            "transcription": {
+                "fr": interaction["transcription_fr"],
+                "en": interaction["transcription_en"]
+            },
+            "subtopic": {
+                "id": interaction["subtopic_id"],
+                "name": interaction["subtopic_name"]
+            } if interaction["subtopic_id"] else None,
+            "interaction_type": {
+                "id": interaction["interaction_type_id"],
+                "name": interaction["interaction_type_name"]
+            } if interaction["interaction_type_id"] else None,
+            "metrics": {
+                "optimum_level": float(interaction["interaction_optimum_level"]) if interaction["interaction_optimum_level"] else None,
+                "boredom": float(interaction["boredom"]) if interaction["boredom"] else None
+            },
+            "hints": [
+                {
+                    "id": h["id"],
+                    "name": h["name"],
+                    "value": h["value"],
+                    "description": h["description"]
+                }
+                for h in hints
+            ],
+            "relationships": {
+                "intent_count": len(interaction["intents"]) if interaction["intents"] else 0,
+                "expected_entities_count": len(interaction["expected_entities_id"]) if interaction["expected_entities_id"] else 0,
+                "expected_vocab_count": len(interaction["expected_vocab_id"]) if interaction["expected_vocab_id"] else 0,
+                "expected_notion_count": len(interaction["expected_notion_id"]) if interaction["expected_notion_id"] else 0,
+                "interaction_vocab_count": len(interaction["interaction_vocab_id"]) if interaction["interaction_vocab_id"] else 0,
+                "hint_count": len(hints)
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/interactions-by-type/{type_id}")
+async def get_interactions_by_type(type_id: str):
+    """Get all interactions of a specific type"""
+    try:
+        conn = await asyncpg.connect(DATABASE_URL)
+        
+        rows = await conn.fetch("""
+            SELECT 
+                i.id,
+                i.transcription_fr,
+                i.boredom,
+                i.interaction_optimum_level,
+                s.name_fr as subtopic_name
+            FROM brain_interaction i
+            LEFT JOIN brain_subtopic s ON i.subtopic_id = s.id
+            WHERE i.interaction_type_id = $1 AND i.live = TRUE
+            ORDER BY i.boredom ASC
+        """, type_id)
+        
+        await conn.close()
+        
+        return {
+            "type_id": type_id,
+            "count": len(rows),
+            "interactions": [
+                {
+                    "id": row["id"],
+                    "transcription_fr": row["transcription_fr"],
+                    "subtopic": row["subtopic_name"],
+                    "boredom": float(row["boredom"]) if row["boredom"] else None,
+                    "optimum_level": float(row["interaction_optimum_level"]) if row["interaction_optimum_level"] else None
+                }
+                for row in rows
+            ]
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/interactions-by-hint/{hint_id}")
+async def get_interactions_by_hint(hint_id: str):
+    """Get all interactions that use a specific hint"""
+    try:
+        conn = await asyncpg.connect(DATABASE_URL)
+        
+        rows = await conn.fetch("""
+            SELECT 
+                id,
+                transcription_fr,
+                boredom,
+                interaction_optimum_level
+            FROM brain_interaction
+            WHERE live = TRUE 
+              AND $1 = ANY(hint_ids)
+            ORDER BY boredom ASC
+        """, hint_id)
+        
+        await conn.close()
+        
+        return {
+            "hint_id": hint_id,
+            "count": len(rows),
+            "interactions": [
+                {
+                    "id": row["id"],
+                    "transcription_fr": row["transcription_fr"],
+                    "boredom": float(row["boredom"]) if row["boredom"] else None,
+                    "optimum_level": float(row["interaction_optimum_level"]) if row["interaction_optimum_level"] else None
+                }
+                for row in rows
+            ]
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ========================================
 # NEW ENDPOINTS: Session Moods
 # ========================================
 
