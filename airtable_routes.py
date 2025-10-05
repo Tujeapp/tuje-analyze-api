@@ -270,6 +270,29 @@ class InteractionEntry(BaseEntry):
         cleaned = [str(vocab_id).strip() for vocab_id in v if vocab_id and str(vocab_id).strip()]
         return cleaned
 
+class InterestEntry(BaseEntry):
+    name: str
+    subtopicsIds: List[str]  # Array of subtopic IDs
+    
+    @validator('name')
+    def validate_name(cls, v):
+        if not v or len(v.strip()) == 0:
+            raise ValueError('Name cannot be empty')
+        return v.strip()
+    
+    @validator('subtopicsIds')
+    def validate_subtopics_ids(cls, v):
+        if not v or not isinstance(v, list):
+            raise ValueError('Subtopics IDs must be a list')
+        
+        # Clean and validate
+        cleaned = [str(subtopic_id).strip() for subtopic_id in v if subtopic_id and str(subtopic_id).strip()]
+        
+        if len(cleaned) == 0:
+            raise ValueError('At least one subtopic ID is required')
+        
+        return cleaned
+
 class NotionEntry(BaseEntry):
     nameFr: str
     nameEn: str
@@ -488,6 +511,13 @@ SYNC_CONFIGS = {
         "columns": ["id", "name", "description",
                    "airtable_record_id", "last_modified_time_ref", 
                    "created_at", "update_at", "live"]
+    },
+    "interest": {
+        "table_name": "brain_interest",
+        "airtable_table": "Interest",
+        "columns": ["id", "name", "subtopic_ids",
+                   "airtable_record_id", "last_modified_time_ref", 
+                   "created_at", "update_at", "live"]
     }
 }
 
@@ -540,6 +570,7 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "levelTo": "level_to",
         "sessionMood": "session_mood",
         "sessionMoodIds": "session_mood_ids",
+        "subtopicsIds": "subtopic_ids",
         "subtopicId": "subtopic_id"
     }
     
@@ -598,7 +629,7 @@ async def sync_entity_to_database(entry_data: Dict, config: Dict) -> None:
             for col in columns:
                 value = entry_data.get(col)
                 # CHANGE 1: Add 'expected_intent_id' to this list (just add it to the existing list)
-                if col in ['intents', 'expected_entities_id', 'expected_vocab_id', 'expected_notion_id', 'expected_intent_id', 'interaction_vocab_id', 'session_mood_ids'] and isinstance(value, list):
+                if col in ['intents', 'expected_entities_id', 'expected_vocab_id', 'expected_notion_id', 'expected_intent_id', 'interaction_vocab_id', 'session_mood_ids', 'subtopic_ids'] and isinstance(value, list):
                     values.append(value)  # PostgreSQL will handle the array
                 else:
                     values.append(value)
@@ -727,6 +758,11 @@ async def webhook_sync_combination(entry: CombinationEntry, background_tasks: Ba
 async def webhook_sync_session_mood(entry: SessionMoodEntry, background_tasks: BackgroundTasks):
     """Webhook endpoint to sync session mood data from Airtable"""
     return await generic_sync_webhook(entry, "session_mood", background_tasks)
+
+@router.post("/webhook-sync-interest")
+async def webhook_sync_interest(entry: InterestEntry, background_tasks: BackgroundTasks):
+    """Webhook endpoint to sync interest data from Airtable"""
+    return await generic_sync_webhook(entry, "interest", background_tasks)
 
 # Health check endpoint
 @router.get("/sync-health")
