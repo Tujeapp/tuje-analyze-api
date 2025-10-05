@@ -220,55 +220,66 @@ class SessionMoodEntry(BaseEntry):
             raise ValueError('Text fields cannot be empty')
         return v.strip()
 
+from typing import List, Optional
+
 class InteractionEntry(BaseEntry):
     transcriptionFr: str
     transcriptionEn: str
-    intents: List[str] = []
+    intents: List[str]
     subtopicId: Optional[str] = None
-    expectedEntitiesIds: Optional[List[str]] = []
-    expectedVocabIds: Optional[List[str]] = []
-    expectedNotionIds: Optional[List[str]] = []
-    interactionVocabIds: Optional[List[str]] = []  # NEW: Add interaction vocab IDs
+    expectedEntitiesIds: Optional[List[str]] = None
+    expectedVocabIds: Optional[List[str]] = None
+    expectedNotionIds: Optional[List[str]] = None
+    interactionVocabIds: Optional[List[str]] = None
+    hintIds: Optional[List[str]] = None
+    interactionTypeId: Optional[str] = None
+    interactionOptimumLevel: Optional[int] = None
+    boredom: Optional[float] = None
     
-    @validator('expectedEntitiesIds')
-    def clean_expected_entities_ids(cls, v):
-        """Clean expected entities list"""
-        if v is None:
-            return []
-        if not isinstance(v, list):
-            return []
-        cleaned = [str(entity_id).strip() for entity_id in v if entity_id and str(entity_id).strip()]
-        return cleaned
+    @validator('transcriptionFr', 'transcriptionEn')
+    def validate_transcriptions(cls, v):
+        if not v or len(v.strip()) == 0:
+            raise ValueError('Transcription fields cannot be empty')
+        return v.strip()
     
-    @validator('expectedVocabIds')
-    def clean_expected_vocab_ids(cls, v):
-        """Clean expected vocab IDs list"""
+    @validator('intents')
+    def validate_intents(cls, v):
+        if not v or len(v) == 0:
+            raise ValueError('At least one intent is required')
+        return v
+    
+    @validator('boredom')
+    def validate_boredom(cls, v):
+        if v is not None:
+            if v < 0.0 or v > 1.0:
+                raise ValueError('Boredom must be between 0.0 and 1.0')
+            return round(v, 2)  # Round to 2 decimal places
+        return v
+    
+    @validator('interactionOptimumLevel')
+    def validate_interaction_optimum_level(cls, v):
+        if v is not None:
+            if not isinstance(v, int) and not isinstance(v, float):
+                raise ValueError('Interaction optimum level must be a number')
+            
+            v_int = int(v)  # Convert to integer
+            
+            if v_int < 0 or v_int > 500:
+                raise ValueError('Interaction optimum level must be between 0 and 500')
+            
+            return v_int  # Return as integer
+        return v
+    
+    @validator('hintIds', 'expectedEntitiesIds', 'expectedVocabIds', 
+               'expectedNotionIds', 'interactionVocabIds')
+    def validate_optional_arrays(cls, v):
+        # Allow None or empty arrays
         if v is None:
             return []
         if not isinstance(v, list):
             return []
-        cleaned = [str(vocab_id).strip() for vocab_id in v if vocab_id and str(vocab_id).strip()]
-        return cleaned
-
-    @validator('expectedNotionIds')
-    def clean_expected_notion_ids(cls, v):
-        """Clean expected notion IDs list"""
-        if v is None:
-            return []
-        if not isinstance(v, list):
-            return []
-        cleaned = [str(notion_id).strip() for notion_id in v if notion_id and str(notion_id).strip()]
-        return cleaned
-
-    @validator('interactionVocabIds')
-    def clean_interaction_vocab_ids(cls, v):
-        """Clean interaction vocab IDs list"""
-        if v is None:
-            return []
-        if not isinstance(v, list):
-            return []
-        cleaned = [str(vocab_id).strip() for vocab_id in v if vocab_id and str(vocab_id).strip()]
-        return cleaned
+        # Filter out None/empty values
+        return [str(item).strip() for item in v if item and str(item).strip()]
 
 class InterestEntry(BaseEntry):
     name: str
@@ -430,10 +441,15 @@ SYNC_CONFIGS = {
     "interaction": {
         "table_name": "brain_interaction",
         "airtable_table": "Interaction",
-        "columns": ["id", "transcription_fr", "transcription_en", "airtable_record_id",
-                   "last_modified_time_ref", "created_at", "update_at", "live", 
-                   "intents", "subtopic_id", "expected_entities_id", "expected_vocab_id", 
-                   "expected_notion_id", "interaction_vocab_id"]  # NEW: Add interaction_vocab_id
+        "columns": [
+            "id", "transcription_fr", "transcription_en", "subtopic_id",
+            "intents", "expected_entities_id", "expected_vocab_id",
+            "expected_notion_id", "interaction_vocab_id",
+            "hint_ids", "interaction_type_id",
+            "interaction_optimum_level", "boredom",
+            "airtable_record_id", "last_modified_time_ref",
+            "created_at", "update_at", "live"
+        ]
     },
     "vocab": {
         "table_name": "brain_vocab",
@@ -561,6 +577,9 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "expectedVocabIds": "expected_vocab_id",
         "interactionVocabIds": "interaction_vocab_id",
         "airtableRecordId": "airtable_record_id",
+        "hintIds": "hint_ids",
+        "interactionTypeId": "interaction_type_id",
+        "interactionOptimumLevel": "interaction_optimum_level",
         "nameFr": "name_fr",
         "nameEn": "name_en",
         "descriptionFr": "description_fr",
@@ -629,7 +648,7 @@ async def sync_entity_to_database(entry_data: Dict, config: Dict) -> None:
             for col in columns:
                 value = entry_data.get(col)
                 # CHANGE 1: Add 'expected_intent_id' to this list (just add it to the existing list)
-                if col in ['intents', 'expected_entities_id', 'expected_vocab_id', 'expected_notion_id', 'expected_intent_id', 'interaction_vocab_id', 'session_mood_ids', 'subtopic_ids'] and isinstance(value, list):
+                if col in ['intents', 'expected_entities_id', 'expected_vocab_id', 'expected_notion_id', 'expected_intent_id', 'interaction_vocab_id', 'session_mood_ids', 'subtopic_ids', 'hint_ids'] and isinstance(value, list):
                     values.append(value)  # PostgreSQL will handle the array
                 else:
                     values.append(value)
