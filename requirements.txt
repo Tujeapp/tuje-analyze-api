@@ -7,3 +7,7 @@ aiohttp
 httpx
 python-dotenv
 pydantic
+python-multipart
+bcrypt
+PyJWT
+python-dotenv
