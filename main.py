@@ -16,6 +16,7 @@ from data_access_routes import router as data_access_router
 from gpt_fallback_router import router as gpt_fallback_router
 from adjustement_main_router import router as transcription_router
 from matching_answer_router import router as matching_router
+from user_routes import router as user_router
 
 # BUBBLE ROUTER - Choose ONE of these options:
 
@@ -63,8 +64,9 @@ app.add_middleware(
 # ROUTE INCLUSION
 # =====================================
 app.include_router(match_router)
-app.include_router(airtable_router)
-app.include_router(data_access_router)
+app.include_router(airtable_router, tags=["Airtable Sync"])
+app.include_router(data_access_router, tags=["Data Access"])
+app.include_router(user_router, tags=["Users"])
 app.include_router(transcription_router, prefix="/api", tags=["transcription"])
 app.include_router(matching_router, prefix="/api/matching", tags=["answer_matching"])
 app.include_router(gpt_fallback_router, prefix="/api/gpt", tags=["gpt_fallback"])
