@@ -10,4 +10,3 @@ pydantic
 python-multipart
 bcrypt
 PyJWT
-python-dotenv
