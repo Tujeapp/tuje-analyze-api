@@ -1,5 +1,8 @@
 from pydantic import BaseModel, validator
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Set
+from dataclasses import dataclass
+from datetime import datetime
+from enum import Enum
 
 # -------------------------------
 # Vocabulary & Answer Models
@@ -64,3 +67,49 @@ class MatchResponse(BaseModel):
     matched_entities: Dict[str, str]
     matches: List[Dict]
     call_gpt: bool
+
+
+# ============================================================================
+# Data Models and Enums
+# ============================================================================
+
+class UserState(Enum):
+    """User journey state"""
+    BRAND_NEW = "brand_new"
+    EARLY_USER = "early_user"
+    ACTIVE_USER = "active_user"
+    RETURNING_USER = "returning_user"
+
+
+@dataclass
+class UserHistory:
+    """Historical data about user's app usage"""
+    user_id: str
+    first_session_date: Optional[datetime]
+    last_session_date: Optional[datetime]
+    total_sessions: int
+    days_since_first_session: int
+    days_since_last_session: int
+    last_session_level: Optional[int]
+    state: UserState
+    available_history_days: int
+    streak7_days: int
+    streak30_days: int
+
+
+@dataclass
+class InteractionCandidate:
+    """Interaction with metadata for selection"""
+    id: str
+    subtopic_id: str
+    intent_ids: List[str]
+    boredom_rate: float
+    is_entry_point: bool
+    level_from: int
+    combination: Optional[int] = None
+
+
+class InsufficientInteractionsError(Exception):
+    """Raised when cannot find enough interactions"""
+    pass
+    
