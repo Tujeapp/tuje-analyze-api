@@ -5,8 +5,8 @@
 import asyncpg
 import logging
 from typing import List
-from .models import InteractionCandidate, InsufficientInteractionsError
-from .session_context import SessionContext
+from models import InteractionCandidate, InsufficientInteractionsError
+from session_context import SessionContext
 
 logger = logging.getLogger(__name__)
 
