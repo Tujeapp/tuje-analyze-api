@@ -1,5 +1,5 @@
 # ============================================================================
-# interaction_selection.py - Interaction Selection Logic
+# cycle_manager/interaction_selection.py - Interaction Selection Logic
 # ============================================================================
 
 import logging
