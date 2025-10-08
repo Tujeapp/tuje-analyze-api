@@ -1,5 +1,5 @@
 # ============================================================================
-# cycle_calculations.py - Cycle Level and Boredom Calculations
+# cycle_manager/cycle_calculations.py - Cycle Level and Boredom Calculations
 # ============================================================================
 
 import asyncpg
