@@ -70,8 +70,10 @@ class MatchResponse(BaseModel):
 
 
 # ============================================================================
-# Data Models and Enums
+# SESSION MANAGEMENT MODELS
 # ============================================================================
+
+# --- Enums ---
 
 class UserState(Enum):
     """User journey state"""
@@ -80,6 +82,15 @@ class UserState(Enum):
     ACTIVE_USER = "active_user"
     RETURNING_USER = "returning_user"
 
+
+# --- Type Aliases ---
+
+SessionMood = str  # "effective", "playful", "cultural", "relax", "listening"
+CycleGoal = str    # "story", "notion", "intent"
+SessionType = str  # "short", "medium", "long"
+
+
+# --- Core Data Models ---
 
 @dataclass
 class UserHistory:
@@ -98,6 +109,15 @@ class UserHistory:
 
 
 @dataclass
+class SessionContext:
+    """Pre-loaded context for fast combination calculations"""
+    user_id: str
+    seen_subtopics: Set[str]
+    seen_interaction_ids: Set[str]
+    seen_intents: Set[str]
+
+
+@dataclass
 class InteractionCandidate:
     """Interaction with metadata for selection"""
     id: str
@@ -109,7 +129,8 @@ class InteractionCandidate:
     combination: Optional[int] = None
 
 
+# --- Exceptions ---
+
 class InsufficientInteractionsError(Exception):
-    """Raised when cannot find enough interactions"""
+    """Raised when cannot find enough interactions after all fallbacks"""
     pass
-    
