@@ -17,6 +17,7 @@ from gpt_fallback_router import router as gpt_fallback_router
 from adjustement_main_router import router as transcription_router
 from matching_answer_router import router as matching_router
 from user_routes import router as user_router
+from session_management_router import router as session_router
 
 # BUBBLE ROUTER - Choose ONE of these options:
 
@@ -70,6 +71,7 @@ app.include_router(user_router, tags=["Users"])
 app.include_router(transcription_router, prefix="/api", tags=["transcription"])
 app.include_router(matching_router, prefix="/api/matching", tags=["answer_matching"])
 app.include_router(gpt_fallback_router, prefix="/api/gpt", tags=["gpt_fallback"])
+app.include_router(session_router, prefix="/api/session", tags=["session_management"])
 
 # Bubble Integration Router
 app.include_router(bubble_router, prefix="/api/bubble", tags=["bubble_integration"])
@@ -88,7 +90,8 @@ async def root():
             "transcription_adjustment": "✅ Available",
             "answer_matching": "✅ Available", 
             "gpt_fallback": "✅ Available",
-            "bubble_optimized": "✅ Available"
+            "bubble_optimized": "✅ Available",
+            "session_management": "✅ Available"
         },
         
         # Main Bubble endpoints
