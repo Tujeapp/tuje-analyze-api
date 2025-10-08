@@ -30,7 +30,7 @@ async def find_best_subtopic_with_fallback(
     Raises InsufficientInteractionsError if all fallbacks fail
     """
     
-    from .helpers import get_mood_types
+    from helpers import get_mood_types
     
     mood_types = get_mood_types(session_mood)
     current_boredom = cycle_boredom
