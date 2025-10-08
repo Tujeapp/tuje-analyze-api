@@ -1,5 +1,5 @@
 # ============================================================================
-# __init__.py - Cycle Manager Module
+# cycle_manager/__init__.py - Cycle Manager Module
 # ============================================================================
 
 from .cycle_creation import (
@@ -27,21 +27,14 @@ from .cycle_calculations import (
 )
 
 __all__ = [
-    # Creation
     'start_new_cycle',
     'advance_to_next_interaction',
-    
-    # Completion
     'complete_cycle',
     'update_cycle_level_direction',
     'get_cycle_summary',
-    
-    # Selection
     'select_cycle_interactions',
     'select_first_interaction_story',
     'select_next_interaction',
-    
-    # Calculations
     'calculate_cycle_level',
     'calculate_cycle_boredom',
     'calculate_cycle_goal',
