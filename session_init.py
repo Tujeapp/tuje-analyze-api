@@ -5,9 +5,9 @@
 import asyncpg
 import logging
 from typing import Dict, Any
-from .models import UserHistory, UserState
-from .session_context import SessionContext
-from .helpers import generate_id, get_cycle_count, calculate_adaptive_boredom
+from models import UserHistory, UserState
+from session_context import SessionContext
+from helpers import generate_id, get_cycle_count, calculate_adaptive_boredom
 
 logger = logging.getLogger(__name__)
 
