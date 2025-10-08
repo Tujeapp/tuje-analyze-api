@@ -5,7 +5,7 @@
 import asyncpg
 import logging
 from datetime import datetime
-from .models import UserState, UserHistory
+from models import UserState, UserHistory
 
 logger = logging.getLogger(__name__)
 
