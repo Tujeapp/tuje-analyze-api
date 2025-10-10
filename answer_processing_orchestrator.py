@@ -11,6 +11,7 @@ from typing import Dict
 from adjustement_adjuster import TranscriptionAdjuster
 from matching_answer_service import answer_matching_service
 from gpt_fallback_service import gpt_fallback_service
+from session_management import scoring_service
 
 # Import NEW session management services
 from session_management import answer_service, interaction_service
@@ -174,6 +175,49 @@ async def process_user_answer_complete(
         logger.error(f"❌ Error processing answer: {e}", exc_info=True)
         raise
 
+# ================================================================
+# STEP 5: Calculate Interaction Score
+# ================================================================
+if matching_result['match_found'] and matching_result['similarity_score'] >= 80:
+    logger.info("💯 Calculating interaction score...")
+    
+    # Use the scoring service
+    interaction_score = await scoring_service.calculate_interaction_score(
+        interaction_id=interaction_id,
+        matched_answer_id=matching_result.get('answer_id'),
+        similarity_score=matching_result['similarity_score'],
+        db_pool=db_pool
+    )
+    
+    logger.info(f"✅ Calculated score: {interaction_score}")
+    
+    # Mark as final answer
+    await answer_service.mark_as_final_answer(
+        answer_id=answer_id,
+        processing_method="answer_match",
+        cost_saved=0.002,
+        db_pool=db_pool
+    )
+    
+    # Complete the interaction with calculated score
+    await interaction_service.complete_interaction(
+        interaction_id=interaction_id,
+        final_answer_id=answer_id,
+        interaction_score=interaction_score,
+        db_pool=db_pool
+    )
+    
+    return {
+        "status": "success",
+        "answer_id": answer_id,
+        "method": "answer_match",
+        "similarity_score": matching_result['similarity_score'],
+        "interaction_score": interaction_score,
+        "interaction_complete": True,
+        "feedback": "Perfect! Well done! 🎉",
+        "gpt_used": False,
+        "cost_saved": 0.002
+    }
 
 # ================================================================
 # OPTIONAL: With GPT Fallback (for later - Phase 2)
