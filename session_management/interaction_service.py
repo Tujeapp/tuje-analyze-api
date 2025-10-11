@@ -247,6 +247,26 @@ class InteractionService:
             
             return count + 1
 
+    async def record_hint_used(
+        self,
+        interaction_id: str,
+        db_pool: asyncpg.Pool
+    ):
+        """
+        Record that user used a hint for this interaction
+    
+        Args:
+            interaction_id: Interaction ID
+            db_pool: Database connection pool
+        """
+        async with db_pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE session_interaction
+                SET hints_used = hints_used + 1
+                WHERE id = $1
+            """, interaction_id)
+    
+        logger.info(f"💡 Hint used recorded for interaction {interaction_id}")
 
 # Global service instance
 interaction_service = InteractionService()
