@@ -89,6 +89,11 @@ class BonusMalusEntry(BaseEntry):
     description: str
     levelFrom: int
     levelTo: int
+    bonusMalusType: str
+    ruleCode: str
+    value: int
+    priority: int
+    conditions: Optional[str] = None
     
     @validator('nameFr', 'nameEn', 'description')
     def validate_text_fields(cls, v):
@@ -98,8 +103,8 @@ class BonusMalusEntry(BaseEntry):
     
     @validator('levelFrom', 'levelTo')
     def validate_level_fields(cls, v):
-        if v < 0 or v > 500:  # Adjust range as needed
-            raise ValueError('Level must be between 0 and 100')
+        if v < 0 or v > 999:
+            raise ValueError('Level must be between 0 and 999')
         return v
     
     @validator('levelTo')
@@ -107,6 +112,28 @@ class BonusMalusEntry(BaseEntry):
         if 'levelFrom' in values and v < values['levelFrom']:
             raise ValueError('levelTo must be greater than or equal to levelFrom')
         return v
+    
+    @validator('bonusMalusType')
+    def validate_bonus_malus_type(cls, v):
+        if not v or len(v.strip()) == 0:
+            raise ValueError('Bonus/Malus type cannot be empty')
+        
+        v_lower = v.strip().lower()
+        if v_lower not in ['bonus', 'malus']:
+            raise ValueError('Type must be "bonus" or "malus"')
+        
+        return v_lower
+    
+    @validator('ruleCode')
+    def validate_rule_code(cls, v):
+        if not v or len(v.strip()) == 0:
+            raise ValueError('Rule code cannot be empty')
+        
+        # Only allow alphanumeric and underscores
+        import re
+        if not re.match(r'^[a-z0-9_]+
+
+---
 
 class HintEntry(BaseEntry):
     name: str
