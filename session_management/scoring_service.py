@@ -6,6 +6,7 @@ Implements the scoring formula from "Details of logic of session"
 import asyncpg
 import logging
 from typing import Dict, Optional
+from .bonus_malus_service import bonus_malus_service
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,8 @@ class ScoringService:
         interaction_id: str,
         matched_answer_id: Optional[str],
         similarity_score: float,
+        user_id: str,
+        user_level: int,
         db_pool: asyncpg.Pool
     ) -> int:
         """
@@ -130,38 +133,50 @@ class ScoringService:
             logger.info(f"📊 Gross interaction score: {gross_interaction_score}")
             
             # ============================================================
-            # STEP 5: Apply Bonus-Malus (Placeholder)
+            # STEP 5: Apply Bonus-Malus (NOW IMPLEMENTED!)
             # ============================================================
-            
-            # TODO: Implement bonus-malus logic when requirements are defined
-            # For now, bonus_malus = 0
-            bonus_malus = 0
-            
+    
+            logger.info("🎁 Calculating bonus-malus...")
+    
+            bonus_malus_result = await bonus_malus_service.calculate_bonus_malus(
+                user_id=user_id,
+                interaction_id=interaction_id,
+                user_level=user_level,
+                db_pool=db_pool
+            )
+    
+            bonus_malus = bonus_malus_result['total']
+            applied_rules = bonus_malus_result['applied_rules']
+    
+            logger.info(f"📊 Bonus-Malus total: {bonus_malus:+d}")
+            for applied in applied_rules:
+                logger.info(f"   - {applied['name']}: {applied['value']:+d} ({applied['reason']})")
+    
             # Calculate final score
             final_score = gross_interaction_score + bonus_malus
-            
+    
             # Ensure within bounds after bonus-malus
             final_score = max(0, min(100, final_score))
-            
+    
             logger.info(f"✅ Final interaction score: {final_score}")
-            
+    
             return final_score
     
-    async def calculate_simple_score(
-        self,
-        similarity_score: float
-    ) -> int:
-        """
-        Simple scoring without levels (for testing or basic mode)
-        Just converts similarity percentage to score
+            async def calculate_simple_score(
+                self,
+                similarity_score: float
+            ) -> int:
+                """
+                Simple scoring without levels (for testing or basic mode)
+                Just converts similarity percentage to score
         
-        Args:
-            similarity_score: Similarity percentage (0-100)
+                Args:
+                    similarity_score: Similarity percentage (0-100)
             
-        Returns:
-            Score (0-100)
-        """
-        return int(round(min(100, max(0, similarity_score))))
+                Returns:
+                    Score (0-100)
+                """
+                return int(round(min(100, max(0, similarity_score))))
     
     async def get_cycle_statistics(
         self,
