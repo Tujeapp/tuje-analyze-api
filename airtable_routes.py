@@ -534,6 +534,21 @@ SYNC_CONFIGS = {
         "columns": ["id", "name", "subtopic_ids",
                    "airtable_record_id", "last_modified_time_ref", 
                    "created_at", "update_at", "live"]
+    },
+    "bonus_malus": {
+        "table_name": "brain_bonus_malus",
+        "airtable_table": "Bonus-Malus",
+        "columns": [
+            "id", "name_fr", "name_en", "description", 
+            "level_from", "level_to",
+            "bonus_malus_type",
+            "rule_code",
+            "value",
+            "priority",
+            "conditions",
+            "airtable_record_id", "last_modified_time_ref", 
+            "created_at", "update_at", "live"
+        ]
     }
 }
 
@@ -590,7 +605,12 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "sessionMood": "session_mood",
         "sessionMoodIds": "session_mood_ids",
         "subtopicsIds": "subtopic_ids",
-        "subtopicId": "subtopic_id"
+        "subtopicId": "subtopic_id",
+        "bonusMalusType": "bonus_malus_type",
+        "ruleCode": "rule_code",
+        "value": "value",
+        "priority": "priority",
+        "conditions": "conditions"
     }
     
     for old_key, new_key in field_mappings.items():
