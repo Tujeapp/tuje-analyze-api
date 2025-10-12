@@ -1,20 +1,24 @@
 # answer_processing_orchestrator.py
 """
-Orchestrates the complete answer processing pipeline
-Connects all existing services with the new Answer Service
+Answer Processing Orchestrator
+Coordinates all services for complete answer processing workflow
 """
 import asyncpg
 import logging
 from typing import Dict
 
-# Import your EXISTING services
+# Import your EXISTING services (no changes to these)
 from adjustement_adjuster import TranscriptionAdjuster
 from matching_answer_service import answer_matching_service
 from gpt_fallback_service import gpt_fallback_service
-from session_management import scoring_service
 
 # Import NEW session management services
-from session_management import answer_service, interaction_service
+from session_management import (
+    answer_service,
+    interaction_service,
+    scoring_service,
+    bonus_malus_service
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,13 +30,16 @@ async def process_user_answer_complete(
     db_pool: asyncpg.Pool
 ) -> Dict:
     """
-    Complete answer processing pipeline:
-    1. Create answer record
-    2. Call adjustment service (existing)
-    3. Call matching service (existing)
-    4. Optionally call GPT (existing)
-    5. Update answer record with all results
-    6. Return results to Bubble
+    Complete answer processing pipeline
+    
+    This orchestrates ALL services in the correct order:
+    1. Creates answer record in database
+    2. Calls adjustment service (your existing code)
+    3. Calls matching service (your existing code)
+    4. Optionally calls GPT (your existing code)
+    5. Calculates score with bonus-malus (new)
+    6. Completes interaction if successful (new)
+    7. Returns comprehensive results
     
     Args:
         interaction_id: Current interaction ID
@@ -41,15 +48,17 @@ async def process_user_answer_complete(
         db_pool: Database connection pool
         
     Returns:
-        Dict with all results and feedback for user
+        Dict with all results for Bubble to display
     """
     
     logger.info(f"🎯 Processing answer for interaction {interaction_id}")
     
     try:
-        # ================================================================
+        # ====================================================================
         # STEP 1: Create Answer Record
-        # ================================================================
+        # ====================================================================
+        logger.info("📝 Step 1: Creating answer record")
+        
         answer_id = await answer_service.create_answer(
             interaction_id=interaction_id,
             user_id=user_id,
@@ -62,12 +71,12 @@ async def process_user_answer_complete(
             interaction_id, db_pool
         )
         
-        logger.info(f"✅ Created answer: {answer_id}")
+        logger.info(f"✅ Answer record created: {answer_id}")
         
-        # ================================================================
+        # ====================================================================
         # STEP 2: Call Adjustment Service (YOUR EXISTING CODE)
-        # ================================================================
-        logger.info("📝 Calling adjustment service...")
+        # ====================================================================
+        logger.info("📝 Step 2: Calling adjustment service")
         
         adjuster = TranscriptionAdjuster()
         adjustment_result = await adjuster.adjust_transcription(
@@ -92,10 +101,10 @@ async def process_user_answer_complete(
         
         logger.info(f"✅ Adjustment complete")
         
-        # ================================================================
+        # ====================================================================
         # STEP 3: Call Matching Service (YOUR EXISTING CODE)
-        # ================================================================
-        logger.info("🔍 Calling matching service...")
+        # ====================================================================
+        logger.info("🔍 Step 3: Calling matching service")
         
         matching_result = await answer_matching_service.match_completed_transcript(
             interaction_id=interaction_id,
@@ -111,27 +120,54 @@ async def process_user_answer_complete(
             db_pool=db_pool
         )
         
-        logger.info(f"✅ Matching complete (score: {matching_result.get('similarity_score', 0)})")
+        logger.info(f"✅ Matching complete (score: {matching_result.get('similarity_score', 0)}%)")
         
-        # ================================================================
-        # STEP 4: Decide What Happens Next
-        # ================================================================
+        # ====================================================================
+        # STEP 4: Decide Next Steps
+        # ====================================================================
         
         # Check if we have a good match
         if matching_result['match_found'] and matching_result['similarity_score'] >= 80:
             # ✅ SUCCESS - Good answer match!
             logger.info("🎉 Good answer match found!")
             
-            # Mark as final answer
+            # ================================================================
+            # STEP 5: Calculate Score with Bonus-Malus
+            # ================================================================
+            logger.info("💯 Step 5: Calculating interaction score")
+            
+            # Get user level for scoring
+            async with db_pool.acquire() as conn:
+                user_level = await conn.fetchval("""
+                    SELECT sc.cycle_level
+                    FROM session_interaction si
+                    JOIN session_cycle sc ON si.cycle_id = sc.id
+                    WHERE si.id = $1
+                """, interaction_id) or 100
+            
+            # Calculate base score using scoring service
+            interaction_score = await scoring_service.calculate_interaction_score(
+                interaction_id=interaction_id,
+                matched_answer_id=matching_result.get('answer_id'),
+                similarity_score=matching_result['similarity_score'],
+                user_id=user_id,
+                user_level=user_level,
+                db_pool=db_pool
+            )
+            
+            logger.info(f"✅ Score calculated: {interaction_score}")
+            
+            # ================================================================
+            # STEP 6: Mark as Final Answer & Complete Interaction
+            # ================================================================
+            logger.info("✅ Step 6: Completing interaction")
+            
             await answer_service.mark_as_final_answer(
                 answer_id=answer_id,
                 processing_method="answer_match",
                 cost_saved=0.002,  # Saved GPT call
                 db_pool=db_pool
             )
-            
-            # Calculate score (we'll do this in Part 3)
-            interaction_score = int(matching_result['similarity_score'])
             
             # Complete the interaction
             await interaction_service.complete_interaction(
@@ -141,14 +177,32 @@ async def process_user_answer_complete(
                 db_pool=db_pool
             )
             
+            # Check if cycle is complete
+            async with db_pool.acquire() as conn:
+                cycle_id = await conn.fetchval("""
+                    SELECT cycle_id FROM session_interaction WHERE id = $1
+                """, interaction_id)
+            
+            cycle_complete = await interaction_service.check_cycle_complete(
+                cycle_id, db_pool
+            )
+            
+            if cycle_complete:
+                logger.info("🎊 Cycle completed!")
+                await cycle_service.complete_cycle(cycle_id, db_pool)
+            
+            # ================================================================
+            # STEP 7: Return Success Response
+            # ================================================================
             return {
-                "status": "success",
                 "answer_id": answer_id,
+                "status": "success",
                 "method": "answer_match",
                 "similarity_score": matching_result['similarity_score'],
                 "interaction_score": interaction_score,
                 "interaction_complete": True,
-                "feedback": "Perfect! Well done! 🎉",
+                "cycle_complete": cycle_complete,
+                "feedback": _get_feedback_for_score(interaction_score),
                 "gpt_used": False,
                 "cost_saved": 0.002
             }
@@ -157,16 +211,18 @@ async def process_user_answer_complete(
             # ⚠️ NO GOOD MATCH - User needs to try again
             logger.info("⚠️ No good match - user should retry")
             
-            # Don't complete interaction yet - let user try again
+            # Option: Check if we should try GPT fallback
+            # (This is optional - you can implement GPT fallback here if needed)
             
             return {
-                "status": "retry",
                 "answer_id": answer_id,
+                "status": "retry",
                 "method": "no_match",
                 "similarity_score": matching_result.get('similarity_score', 0),
                 "interaction_score": 0,
                 "interaction_complete": False,
-                "feedback": "Not quite right. Try again! 💪",
+                "cycle_complete": False,
+                "feedback": _get_retry_feedback(matching_result.get('similarity_score', 0)),
                 "gpt_used": False,
                 "cost_saved": 0
             }
@@ -175,95 +231,30 @@ async def process_user_answer_complete(
         logger.error(f"❌ Error processing answer: {e}", exc_info=True)
         raise
 
-# ================================================================
-# STEP 5: Calculate Interaction Score
-# ================================================================
-if matching_result['match_found'] and matching_result['similarity_score'] >= 80:
-    logger.info("💯 Calculating interaction score...")
-    
-    # Use the scoring service
-    interaction_score = await scoring_service.calculate_interaction_score(
-        interaction_id=interaction_id,
-        matched_answer_id=matching_result.get('answer_id'),
-        similarity_score=matching_result['similarity_score'],
-        db_pool=db_pool
-    )
-    
-    logger.info(f"✅ Calculated score: {interaction_score}")
-    
-    # Mark as final answer
-    await answer_service.mark_as_final_answer(
-        answer_id=answer_id,
-        processing_method="answer_match",
-        cost_saved=0.002,
-        db_pool=db_pool
-    )
-    
-    # Complete the interaction with calculated score
-    await interaction_service.complete_interaction(
-        interaction_id=interaction_id,
-        final_answer_id=answer_id,
-        interaction_score=interaction_score,
-        db_pool=db_pool
-    )
-    
-    return {
-        "status": "success",
-        "answer_id": answer_id,
-        "method": "answer_match",
-        "similarity_score": matching_result['similarity_score'],
-        "interaction_score": interaction_score,
-        "interaction_complete": True,
-        "feedback": "Perfect! Well done! 🎉",
-        "gpt_used": False,
-        "cost_saved": 0.002
-    }
 
-# ================================================================
-# OPTIONAL: With GPT Fallback (for later - Phase 2)
-# ================================================================
-async def process_user_answer_with_gpt(
-    interaction_id: str,
-    user_id: str,
-    original_transcript: str,
-    db_pool: asyncpg.Pool
-) -> Dict:
-    """
-    Same as above, but includes GPT fallback logic
-    This is for Phase 2 - after basic system works
-    """
-    
-    # Steps 1-3 same as above...
-    # ... (adjustment and matching)
-    
-    # STEP 4: If no good match, try GPT
-    if not matching_result['match_found']:
-        logger.info("🤖 Calling GPT fallback...")
-        
-        gpt_result = await gpt_fallback_service.analyze_intent(
-            interaction_id=interaction_id,
-            original_transcript=original_transcript,
-            threshold=70
-        )
-        
-        if gpt_result.get('intent_matched'):
-            # GPT detected intent
-            await answer_service.update_answer_with_gpt(
-                answer_id=answer_id,
-                gpt_intent_detected=gpt_result.get('intent_id'),
-                processing_method="gpt_fallback",
-                db_pool=db_pool
-            )
-            
-            # Partial score for intent match
-            interaction_score = int(gpt_result.get('similarity_score', 0) * 0.6)
-            
-            return {
-                "status": "partial_success",
-                "method": "gpt_fallback",
-                "gpt_intent": gpt_result.get('intent_name'),
-                "interaction_score": interaction_score,
-                "feedback": "I understood your intent, but try to be more specific! 💡",
-                "gpt_used": True,
-                "cost_saved": 0
-            }
+# ============================================================================
+# Helper Functions
+# ============================================================================
+
+def _get_feedback_for_score(score: int) -> str:
+    """Get user-friendly feedback based on score"""
+    if score >= 90:
+        return "Excellent! Perfect answer! 🌟"
+    elif score >= 80:
+        return "Very good! Well done! 👍"
+    elif score >= 70:
+        return "Good job! 👌"
+    elif score >= 60:
+        return "Not bad! Keep practicing! 💪"
+    else:
+        return "Keep trying! You're learning! 📚"
+
+
+def _get_retry_feedback(similarity: float) -> str:
+    """Get user-friendly feedback for retry"""
+    if similarity >= 60:
+        return "Close! Try to be more specific. 🎯"
+    elif similarity >= 40:
+        return "You're on the right track. Try again! 💪"
+    else:
+        return "Not quite. Listen carefully and try again! 👂"
