@@ -131,9 +131,10 @@ class BonusMalusEntry(BaseEntry):
         
         # Only allow alphanumeric and underscores
         import re
-        if not re.match(r'^[a-z0-9_]+
-
----
+        if not re.match(r'^[a-z0-9_]+$', v.strip().lower()):
+            raise ValueError('Rule code must be lowercase alphanumeric with underscores only')
+        
+        return v.strip().lower()
 
 class HintEntry(BaseEntry):
     name: str
