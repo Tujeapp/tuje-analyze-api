@@ -17,7 +17,8 @@ from session_management import (
     answer_service,
     interaction_service,
     scoring_service,
-    bonus_malus_service
+    bonus_malus_service,
+    cycle_service
 )
 
 logger = logging.getLogger(__name__)
