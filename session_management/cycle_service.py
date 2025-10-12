@@ -6,6 +6,7 @@ import asyncpg
 import logging
 import uuid
 from datetime import datetime
+from typing import Optional, Dict
 
 logger = logging.getLogger(__name__)
 
