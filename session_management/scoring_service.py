@@ -25,23 +25,23 @@ class ScoringService:
     ) -> int:
         """
         Calculate final interaction score using your business logic
-        Now includes bonus-malus calculation
-        """
-        
+    
         Steps:
-        1. Get gross score (100 for first attempt, or previous score)
-        2. Get required levels (interaction, answer, cycle)
-        3. Calculate coefficient
-        4. Calculate gross interaction score
-        5. Apply bonus-malus (placeholder for now)
-        6. Return final score (0-100)
-        
+            1. Get gross score (100 for first attempt, or previous score)
+            2. Get required levels (interaction, answer, cycle)
+            3. Calculate coefficient
+            4. Calculate gross interaction score
+            5. Apply bonus-malus (placeholder for now)
+            6. Return final score (0-100)
+    
         Args:
             interaction_id: Current interaction ID
             matched_answer_id: Matched brain_answer ID (can be None)
             similarity_score: Similarity percentage (0-100)
+            user_id: User ID
+            user_level: User's current level
             db_pool: Database connection pool
-            
+        
         Returns:
             Final interaction score (0-100)
         """
