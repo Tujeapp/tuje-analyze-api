@@ -25,6 +25,8 @@ class ScoringService:
     ) -> int:
         """
         Calculate final interaction score using your business logic
+        Now includes bonus-malus calculation
+        """
         
         Steps:
         1. Get gross score (100 for first attempt, or previous score)
