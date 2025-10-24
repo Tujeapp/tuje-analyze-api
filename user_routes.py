@@ -472,6 +472,17 @@ async def social_auth(social_data: SocialAuthLogin):
 # User Profile Endpoints
 # ========================================
 
+@router.get("/users/me/role")
+async def get_current_user_role(current_user: dict = Depends(get_current_user)):
+    """Get current user's role for frontend authorization"""
+    return {
+        "user_id": current_user["id"],
+        "email": current_user["email"],
+        "role": current_user["role"],
+        "is_admin": current_user["role"] == "admin",
+        "can_access_test": current_user["role"] in ["admin", "super_admin"]
+    }
+
 @router.get("/users/me", response_model=UserProfile)
 async def get_my_profile(current_user: dict = Depends(get_current_user)):
     """Get current user's profile"""
