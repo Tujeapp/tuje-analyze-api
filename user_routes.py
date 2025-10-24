@@ -621,3 +621,67 @@ async def get_user_public_profile(user_id: UUID):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
         )
+
+@router.get("/users/{user_id}/role")
+async def get_user_role_by_id(user_id: str):
+    """Get user's role by user ID - for static API key authentication"""
+    try:
+        conn = await asyncpg.connect(DATABASE_URL)
+        
+        user = await conn.fetchrow("""
+            SELECT id, email, username, role, is_active
+            FROM brain_user
+            WHERE id = $1 AND is_active = true AND deleted_at IS NULL
+        """, user_id)
+        
+        await conn.close()
+        
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found or inactive"
+            )
+        
+        return {
+            "user_id": str(user["id"]),
+            "email": user["email"],
+            "username": user["username"],
+            "role": user["role"],
+            "is_admin": user["role"] == "admin",
+            "can_access_test": user["role"] in ["admin", "super_admin"]
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+# Alternative: Simple role check endpoint
+@router.get("/admin/check-access/{user_id}")
+async def check_admin_access(user_id: str):
+    """Simple admin access check"""
+    try:
+        conn = await asyncpg.connect(DATABASE_URL)
+        
+        is_admin = await conn.fetchval("""
+            SELECT role = 'admin' as is_admin
+            FROM brain_user
+            WHERE id = $1 AND is_active = true AND deleted_at IS NULL
+        """, user_id)
+        
+        await conn.close()
+        
+        return {
+            "user_id": user_id,
+            "has_admin_access": bool(is_admin),
+            "can_access_test_section": bool(is_admin)
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
