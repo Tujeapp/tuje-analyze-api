@@ -685,3 +685,43 @@ async def check_admin_access(user_id: str):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
         )
+
+@router.get("/users/{user_id}/role")
+async def get_user_role_by_id(user_id: str):
+    """Get user's role by user ID - for section_test admin access control"""
+    try:
+        conn = await asyncpg.connect(DATABASE_URL)
+        
+        user = await conn.fetchrow("""
+            SELECT id, email, username, role, is_active
+            FROM brain_user
+            WHERE id = $1 AND is_active = true AND deleted_at IS NULL
+        """, user_id)
+        
+        await conn.close()
+        
+        if not user:
+            return {
+                "user_found": False,
+                "requires_login": True,
+                "message": "User not found or inactive"
+            }
+        
+        return {
+            "user_found": True,
+            "requires_login": False,
+            "user_id": str(user["id"]),
+            "email": user["email"],
+            "username": user["username"],
+            "role": user["role"],
+            "is_admin": user["role"] == "admin",
+            "can_access_test": user["role"] in ["admin", "super_admin"]
+        }
+        
+    except Exception as e:
+        return {
+            "user_found": False,
+            "requires_login": True,
+            "error": str(e),
+            "message": "Authentication required"
+        }
