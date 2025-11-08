@@ -263,6 +263,7 @@ class InteractionEntry(BaseEntry):
     interactionTypeId: Optional[str] = None
     interactionOptimumLevel: Optional[int] = None
     boredom: Optional[float] = None
+    videoUrl: Optional[str] = None
     
     @validator('transcriptionFr', 'transcriptionEn')
     def validate_transcriptions(cls, v):
