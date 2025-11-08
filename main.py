@@ -19,6 +19,7 @@ from matching_answer_router import router as matching_router
 from user_routes import router as user_router
 from session_management_router import router as session_router
 from routers.session_router import router as session_router
+from upload_video_endpoint import router as video_router
 
 # BUBBLE ROUTER - Choose ONE of these options:
 
@@ -74,6 +75,7 @@ app.include_router(matching_router, prefix="/api/matching", tags=["answer_matchi
 app.include_router(gpt_fallback_router, prefix="/api/gpt", tags=["gpt_fallback"])
 app.include_router(session_router, prefix="/api/session", tags=["session_management"])
 app.include_router(session_router, prefix="/api/session", tags=["session_management"])
+app.include_router(video_router)
 
 # Bubble Integration Router
 app.include_router(bubble_router, prefix="/api/bubble", tags=["bubble_integration"])
