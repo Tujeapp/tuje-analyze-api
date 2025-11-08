@@ -19,7 +19,7 @@ from matching_answer_router import router as matching_router
 from user_routes import router as user_router
 from session_management_router import router as session_router
 from routers.session_router import router as session_router
-from upload_video_endpoint import router as video_router
+from upload_video_simplified import router as video_router
 
 # BUBBLE ROUTER - Choose ONE of these options:
 
