@@ -51,96 +51,68 @@ class CloudinaryService:
         'gravity': 'center'
     }
 
-    @staticmethod
-    async def upload_video_from_url_simple(
-        airtable_url: str,
-        public_id: str
-    ) -> Optional[str]:
-        """Simplified video upload using public_id directly"""
-        try:
-            logger.info(f"📤 Uploading to Cloudinary: {public_id}")
-            
-            result = cloudinary.uploader.upload(
-                airtable_url,
-                resource_type="video",
-                public_id=public_id,
-                overwrite=True,
-                use_filename=False,
-                unique_filename=False,
-                eager=[CloudinaryService.VIDEO_TRANSFORMATION],
-                eager_async=False,
-                invalidate=True,
-                timeout=120
-            )
-            
-            optimized_url = cloudinary.CloudinaryVideo(result['public_id']).build_url(
-                **CloudinaryService.VIDEO_TRANSFORMATION
-            )
-            
-            logger.info(f"✅ Upload complete: {optimized_url}")
-            return optimized_url
-            
-        except Exception as e:
-            logger.error(f"❌ Upload failed for {public_id}: {e}")
-            return None
+@staticmethod
+async def upload_video_from_url_simple(
+    airtable_url: str,
+    public_id: str
+) -> Optional[str]:
+    """
+    Upload with explicit folder parameter
     
-    @staticmethod
-    async def upload_video_from_url(
-        airtable_url: str,
-        interaction_id: str,
-        subtopic_name: str,
-        level: int,
-        optimum_level: Optional[int] = None
-    ) -> Optional[str]:
-        """
-        Upload video from Airtable URL to Cloudinary
+    Args:
+        public_id: Full path like "tuje/videos/interactions/SUBT123/int_456"
+    """
+    try:
+        # Split public_id into folder + filename
+        # "tuje/videos/interactions/SUBT123/int_456"
+        # -> folder: "tuje/videos/interactions/SUBT123"
+        # -> filename: "int_456"
         
-        Args:
-            airtable_url: URL of video in Airtable
-            interaction_id: Unique interaction ID
-            subtopic_name: Name of subtopic (for folder organization)
-            level: Interaction level (1-5)
-            optimum_level: Optional optimum level for folder organization
-            
-        Returns:
-            Cloudinary URL with transformations or None if failed
-        """
-        try:
-            # Clean subtopic name for folder structure
-            clean_subtopic = subtopic_name.lower().replace(' ', '_').replace('/', '_')
-            
-            # Determine folder based on level
-            folder = f"{CloudinaryService.VIDEO_BASE_FOLDER}/level_{level}"
-            
-            # Create public_id (unique identifier in Cloudinary)
-            public_id = f"{folder}/int_{interaction_id}_{clean_subtopic}"
-            
-            logger.info(f"Uploading video: {public_id}")
-            
-            # Upload to Cloudinary
-            result = cloudinary.uploader.upload(
-                airtable_url,
-                resource_type="video",
-                public_id=public_id,
-                overwrite=True,
-                notification_url=None,  # Can add webhook for upload completion
-                eager=[CloudinaryService.VIDEO_TRANSFORMATION],  # Pre-generate transformations
-                eager_async=False,  # Wait for transformations to complete
-                invalidate=True  # Invalidate CDN cache
-            )
-            
-            # Build optimized URL
-            optimized_url = cloudinary.CloudinaryVideo(result['public_id']).build_url(
-                **CloudinaryService.VIDEO_TRANSFORMATION
-            )
-            
-            logger.info(f"✅ Video uploaded successfully: {optimized_url}")
-            
-            return optimized_url
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to upload video {interaction_id}: {e}")
-            return None
+        if '/' in public_id:
+            folder_path = public_id.rsplit('/', 1)[0]  # Everything before last /
+            file_name = public_id.rsplit('/', 1)[1]     # Everything after last /
+        else:
+            folder_path = None
+            file_name = public_id
+        
+        logger.info(f"📤 Uploading to Cloudinary")
+        logger.info(f"   📁 Folder: {folder_path}")
+        logger.info(f"   📄 Filename: {file_name}")
+        
+        # Build upload parameters
+        upload_params = {
+            "resource_type": "video",
+            "public_id": file_name,  # Just the filename!
+            "overwrite": True,
+            "use_filename": False,
+            "unique_filename": False,
+            "eager": [CloudinaryService.VIDEO_TRANSFORMATION],
+            "eager_async": False,
+            "invalidate": True,
+            "timeout": 120
+        }
+        
+        # Add folder parameter explicitly
+        if folder_path:
+            upload_params["folder"] = folder_path
+        
+        result = cloudinary.uploader.upload(airtable_url, **upload_params)
+        
+        # Log what Cloudinary actually saved
+        logger.info(f"   ✅ Saved to folder: {result.get('folder', 'NONE')}")
+        logger.info(f"   ✅ Full public_id: {result.get('public_id', 'UNKNOWN')}")
+        
+        # Build optimized URL
+        optimized_url = cloudinary.CloudinaryVideo(result['public_id']).build_url(
+            **CloudinaryService.VIDEO_TRANSFORMATION
+        )
+        
+        logger.info(f"✅ Upload complete: {optimized_url}")
+        return optimized_url
+        
+    except Exception as e:
+        logger.error(f"❌ Upload failed: {e}")
+        return None
 
 @staticmethod
 async def upload_video_from_url_simple(
