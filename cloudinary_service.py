@@ -51,121 +51,214 @@ class CloudinaryService:
         'gravity': 'center'
     }
 
-@staticmethod
-async def upload_video_from_url_simple(
-    airtable_url: str,
-    public_id: str
-) -> Optional[str]:
-    """
-    Upload with explicit folder parameter
+    @staticmethod
+    async def upload_video_from_url_simple(
+        airtable_url: str,
+        public_id: str
+    ) -> Optional[str]:
+        """
+        Simplified video upload using explicit folder parameter
+        
+        Args:
+            airtable_url: URL of video in Airtable
+            public_id: Full Cloudinary public_id path
+                      Example: "tuje/videos/interactions/SUBT123/int_456"
+            
+        Returns:
+            Cloudinary URL with transformations or None if failed
+        """
+        try:
+            # ============================================
+            # SPLIT public_id into folder + filename
+            # ============================================
+            # Example: "tuje/videos/interactions/SUBT123/int_456"
+            # -> folder: "tuje/videos/interactions/SUBT123"
+            # -> filename: "int_456"
+            
+            if '/' in public_id:
+                parts = public_id.rsplit('/', 1)  # Split at last slash
+                folder_path = parts[0]  # Everything before last slash
+                file_name = parts[1]    # Everything after last slash
+            else:
+                folder_path = None
+                file_name = public_id
+            
+            logger.info(f"📤 Uploading to Cloudinary")
+            logger.info(f"   📁 Folder: {folder_path}")
+            logger.info(f"   📄 Filename: {file_name}")
+            logger.info(f"   🔗 Full path: {public_id}")
+            
+            # ============================================
+            # UPLOAD WITH EXPLICIT FOLDER PARAMETER
+            # ============================================
+            upload_params = {
+                "resource_type": "video",
+                "public_id": file_name,  # Just the filename
+                "overwrite": True,
+                "use_filename": False,
+                "unique_filename": False,
+                "eager": [CloudinaryService.VIDEO_TRANSFORMATION],
+                "eager_async": False,
+                "invalidate": True,
+                "timeout": 120
+            }
+            
+            # Add folder parameter only if we have a folder path
+            if folder_path:
+                upload_params["folder"] = folder_path
+            
+            result = cloudinary.uploader.upload(airtable_url, **upload_params)
+            
+            # ============================================
+            # LOG WHAT CLOUDINARY ACTUALLY SAVED
+            # ============================================
+            actual_public_id = result.get('public_id', 'UNKNOWN')
+            actual_folder = result.get('folder', 'NONE')
+            
+            logger.info(f"   ✅ Cloudinary saved:")
+            logger.info(f"      public_id: {actual_public_id}")
+            logger.info(f"      folder: {actual_folder}")
+            
+            # Build optimized URL
+            optimized_url = cloudinary.CloudinaryVideo(result['public_id']).build_url(
+                **CloudinaryService.VIDEO_TRANSFORMATION
+            )
+            
+            logger.info(f"✅ Upload complete: {optimized_url}")
+            return optimized_url
+            
+        except Exception as e:
+            logger.error(f"❌ Upload failed for {public_id}: {e}")
+            logger.exception(e)  # Full stack trace
+            return None
     
-    Args:
-        public_id: Full path like "tuje/videos/interactions/SUBT123/int_456"
-    """
-    try:
-        # Split public_id into folder + filename
-        # "tuje/videos/interactions/SUBT123/int_456"
-        # -> folder: "tuje/videos/interactions/SUBT123"
-        # -> filename: "int_456"
+    @staticmethod
+    def get_video_poster_url(video_url: str, frame_offset: float = 2.0) -> str:
+        """
+        Generate poster image URL from video URL
         
-        if '/' in public_id:
-            folder_path = public_id.rsplit('/', 1)[0]  # Everything before last /
-            file_name = public_id.rsplit('/', 1)[1]     # Everything after last /
-        else:
-            folder_path = None
-            file_name = public_id
+        Args:
+            video_url: Cloudinary video URL
+            frame_offset: Time offset in seconds for poster frame
+            
+        Returns:
+            Poster image URL
+        """
+        try:
+            # Extract public_id from URL
+            # URL format: https://res.cloudinary.com/{cloud}/video/upload/{transformations}/v1/{public_id}.mp4
+            
+            # Split by / and find the parts after 'upload'
+            parts = video_url.split('/')
+            
+            # Find 'upload' index
+            upload_idx = -1
+            for i, part in enumerate(parts):
+                if part == 'upload':
+                    upload_idx = i
+                    break
+            
+            if upload_idx == -1:
+                logger.error("Could not find 'upload' in URL")
+                return video_url.replace('.mp4', '.jpg')
+            
+            # Get everything after upload, skipping transformations and version
+            path_parts = []
+            for i in range(upload_idx + 1, len(parts)):
+                part = parts[i]
+                # Skip transformation strings (contain commas or underscores but not slashes)
+                # Skip version strings (start with 'v' followed by numbers)
+                if not (',' in part or (part.startswith('v') and len(part) > 1 and part[1:].isdigit())):
+                    path_parts.append(part)
+            
+            # Reconstruct public_id (without .mp4 extension)
+            public_id_with_ext = '/'.join(path_parts)
+            public_id = public_id_with_ext.rsplit('.', 1)[0] if '.' in public_id_with_ext else public_id_with_ext
+            
+            logger.info(f"   🖼️ Generating poster for: {public_id}")
+            
+            # Generate poster URL
+            poster_url = cloudinary.CloudinaryVideo(public_id).build_url(
+                format='jpg',
+                start_offset=frame_offset,
+                quality='auto:good',
+                transformation=[
+                    {'width': 720, 'crop': 'limit'}
+                ]
+            )
+            
+            return poster_url
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to generate poster URL: {e}")
+            # Fallback: simple replacement
+            return video_url.replace('.mp4', '.jpg')
+    
+    @staticmethod
+    async def upload_video_from_url(
+        airtable_url: str,
+        interaction_id: str,
+        subtopic_name: str,
+        level: int,
+        optimum_level: Optional[int] = None
+    ) -> Optional[str]:
+        """
+        Upload video from Airtable URL to Cloudinary
         
-        logger.info(f"📤 Uploading to Cloudinary")
-        logger.info(f"   📁 Folder: {folder_path}")
-        logger.info(f"   📄 Filename: {file_name}")
-        
-        # Build upload parameters
-        upload_params = {
-            "resource_type": "video",
-            "public_id": file_name,  # Just the filename!
-            "overwrite": True,
-            "use_filename": False,
-            "unique_filename": False,
-            "eager": [CloudinaryService.VIDEO_TRANSFORMATION],
-            "eager_async": False,
-            "invalidate": True,
-            "timeout": 120
-        }
-        
-        # Add folder parameter explicitly
-        if folder_path:
-            upload_params["folder"] = folder_path
-        
-        result = cloudinary.uploader.upload(airtable_url, **upload_params)
-        
-        # Log what Cloudinary actually saved
-        logger.info(f"   ✅ Saved to folder: {result.get('folder', 'NONE')}")
-        logger.info(f"   ✅ Full public_id: {result.get('public_id', 'UNKNOWN')}")
-        
-        # Build optimized URL
-        optimized_url = cloudinary.CloudinaryVideo(result['public_id']).build_url(
-            **CloudinaryService.VIDEO_TRANSFORMATION
-        )
-        
-        logger.info(f"✅ Upload complete: {optimized_url}")
-        return optimized_url
-        
-    except Exception as e:
-        logger.error(f"❌ Upload failed: {e}")
-        return None
+        Args:
+            airtable_url: URL of video in Airtable
+            interaction_id: Unique interaction ID
+            subtopic_name: Name of subtopic (for folder organization)
+            level: Interaction level (1-5)
+            optimum_level: Optional optimum level for folder organization
+            
+        Returns:
+            Cloudinary URL with transformations or None if failed
+        """
+        try:
+            # Clean subtopic name for folder structure
+            clean_subtopic = subtopic_name.lower().replace(' ', '_').replace('/', '_')
+            
+            # Determine folder based on level
+            folder = f"{CloudinaryService.VIDEO_BASE_FOLDER}/level_{level}"
+            
+            # Create public_id (unique identifier in Cloudinary)
+            public_id = f"{folder}/int_{interaction_id}_{clean_subtopic}"
+            
+            logger.info(f"Uploading video: {public_id}")
+            
+            # Upload to Cloudinary
+            result = cloudinary.uploader.upload(
+                airtable_url,
+                resource_type="video",
+                public_id=public_id,
+                overwrite=True,
+                use_filename=False,
+                unique_filename=False,
+                eager=[CloudinaryService.VIDEO_TRANSFORMATION],
+                eager_async=False,
+                invalidate=True
+            )
+            
+            # Build optimized URL
+            optimized_url = cloudinary.CloudinaryVideo(result['public_id']).build_url(
+                **CloudinaryService.VIDEO_TRANSFORMATION
+            )
+            
+            logger.info(f"✅ Video uploaded successfully: {optimized_url}")
+            
+            return optimized_url
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to upload video {interaction_id}: {e}")
+            return None
 
-@staticmethod
-async def upload_video_from_url_simple(
-    airtable_url: str,
-    public_id: str
-) -> Optional[str]:
-    """
-    Simplified video upload using public_id directly
-    
-    Args:
-        airtable_url: URL of video in Airtable
-        public_id: Full Cloudinary public_id path
-                  Example: "tuje/videos/interactions/subtopic_123/int_456"
-        
-    Returns:
-        Cloudinary URL with transformations or None if failed
-    """
-    try:
-        logger.info(f"📤 Uploading to Cloudinary: {public_id}")
-        
-        # ✅ FIXED: Correct cloudinary.uploader.upload call
-        result = cloudinary.uploader.upload(
-            airtable_url,
-            resource_type="video",
-            public_id=public_id,
-            overwrite=True,
-            use_filename=False,
-            unique_filename=False,
-            eager=[CloudinaryService.VIDEO_TRANSFORMATION],
-            eager_async=False,
-            invalidate=True,
-            timeout=120  # 2 minute timeout
-        )
-        
-        # Build optimized URL
-        optimized_url = cloudinary.CloudinaryVideo(result['public_id']).build_url(
-            **CloudinaryService.VIDEO_TRANSFORMATION
-        )
-        
-        logger.info(f"✅ Upload complete: {optimized_url}")
-        
-        return optimized_url
-        
-    except Exception as e:
-        logger.error(f"❌ Upload failed for {public_id}: {e}")
-        return None
-    
     @staticmethod
     async def upload_image_from_url(
         airtable_url: str,
         subtopic_id: str,
         subtopic_name: str,
-        image_type: str = "subtopic"  # subtopic, icon, background
+        image_type: str = "subtopic"
     ) -> Optional[str]:
         """
         Upload image from Airtable URL to Cloudinary
@@ -202,6 +295,8 @@ async def upload_video_from_url_simple(
                 resource_type="image",
                 public_id=public_id,
                 overwrite=True,
+                use_filename=False,
+                unique_filename=False,
                 eager=[CloudinaryService.IMAGE_TRANSFORMATION],
                 eager_async=False,
                 invalidate=True
@@ -219,115 +314,6 @@ async def upload_video_from_url_simple(
         except Exception as e:
             logger.error(f"❌ Failed to upload image {subtopic_id}: {e}")
             return None
-    
-    @staticmethod
-    async def download_and_upload(
-        airtable_url: str,
-        public_id: str,
-        resource_type: str = "video",
-        transformations: Optional[Dict[str, Any]] = None
-    ) -> Optional[str]:
-        """
-        Generic method to download from Airtable and upload to Cloudinary
-        
-        Args:
-            airtable_url: URL to download from
-            public_id: Cloudinary public ID
-            resource_type: 'video' or 'image'
-            transformations: Optional transformations dict
-            
-        Returns:
-            Cloudinary URL or None
-        """
-        try:
-            # Use httpx for async download
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.get(airtable_url)
-                response.raise_for_status()
-                
-                # Save temporarily
-                temp_path = f"/tmp/{public_id.replace('/', '_')}"
-                with open(temp_path, 'wb') as f:
-                    f.write(response.content)
-            
-            # Upload to Cloudinary
-            result = cloudinary.uploader.upload(
-                temp_path,
-                resource_type=resource_type,
-                public_id=public_id,
-                overwrite=True,
-                eager=[transformations] if transformations else [],
-                eager_async=False,
-                invalidate=True
-            )
-            
-            # Clean up temp file
-            os.remove(temp_path)
-            
-            # Build URL based on resource type
-            if resource_type == "video":
-                url = cloudinary.CloudinaryVideo(result['public_id']).build_url(
-                    **(transformations or {})
-                )
-            else:
-                url = cloudinary.CloudinaryImage(result['public_id']).build_url(
-                    **(transformations or {})
-                )
-            
-            logger.info(f"✅ Uploaded to Cloudinary: {url}")
-            return url
-            
-        except Exception as e:
-            logger.error(f"❌ Upload failed for {public_id}: {e}")
-            # Clean up temp file if it exists
-            try:
-                os.remove(temp_path)
-            except:
-                pass
-            return None
-    
-    @staticmethod
-    def get_video_poster_url(video_url: str, frame_offset: float = 2.0) -> str:
-        """
-        Generate poster image URL from video URL
-        
-        Args:
-            video_url: Cloudinary video URL
-            frame_offset: Time offset in seconds for poster frame
-            
-        Returns:
-            Poster image URL
-        """
-        try:
-            # Extract public_id from URL
-            # Format: https://res.cloudinary.com/{cloud}/video/upload/{transformations}/{public_id}.mp4
-            parts = video_url.split('/')
-            public_id_with_ext = parts[-1]
-            public_id = public_id_with_ext.rsplit('.', 1)[0]
-            
-            # Reconstruct path without version and transformations
-            path_parts = []
-            found_upload = False
-            for part in parts:
-                if found_upload and not part.startswith('v'):
-                    path_parts.append(part)
-                elif part == 'upload':
-                    found_upload = True
-            
-            full_public_id = '/'.join(path_parts[:-1]) + '/' + public_id
-            
-            # Generate poster URL
-            poster_url = cloudinary.CloudinaryVideo(full_public_id).build_url(
-                format='jpg',
-                start_offset=frame_offset,
-                quality='auto:good'
-            )
-            
-            return poster_url
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to generate poster URL: {e}")
-            return video_url.replace('.mp4', '.jpg')
     
     @staticmethod
     async def delete_asset(public_id: str, resource_type: str = "video") -> bool:
