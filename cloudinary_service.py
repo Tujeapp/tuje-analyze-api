@@ -146,7 +146,7 @@ async def upload_video_from_url_simple(
     public_id: str
 ) -> Optional[str]:
     """
-    Simplified video upload using public_id directly.
+    Simplified video upload using public_id directly
     
     Args:
         airtable_url: URL of video in Airtable
@@ -159,11 +159,11 @@ async def upload_video_from_url_simple(
     try:
         logger.info(f"📤 Uploading to Cloudinary: {public_id}")
         
-        # Upload to Cloudinary with mobile optimizations
+        # ✅ FIXED: Correct cloudinary.uploader.upload call
         result = cloudinary.uploader.upload(
             airtable_url,
             resource_type="video",
-            public_id=public_id,
+            public_id=public_id,  # ✅ This already includes full folder path from router
             overwrite=True,
             eager=[CloudinaryService.VIDEO_TRANSFORMATION],
             eager_async=False,
