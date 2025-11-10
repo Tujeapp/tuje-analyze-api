@@ -68,8 +68,8 @@ async def upload_video_to_cloudinary(request: VideoUploadRequest):
         {
             "success": bool,
             "cloudinary_url": str,
-            "poster_url": str,
-            "execution_time": str
+            "execution_time": str,
+            "cloudinary_path": str
         }
     """
     start_time = time.time()
@@ -102,12 +102,6 @@ async def upload_video_to_cloudinary(request: VideoUploadRequest):
                 detail="Cloudinary upload failed - upload returned None"
             )
         
-        # Generate poster/thumbnail
-        poster_url = CloudinaryService.get_video_poster_url(
-            cloudinary_url,
-            frame_offset=2.0
-        )
-        
         elapsed = time.time() - start_time
         
         logger.info(f"✅ Video uploaded in {elapsed:.2f}s")
@@ -117,7 +111,6 @@ async def upload_video_to_cloudinary(request: VideoUploadRequest):
             "success": True,
             "message": "✅ Video uploaded successfully",
             "cloudinary_url": cloudinary_url,
-            "poster_url": poster_url,
             "execution_time": f"{elapsed:.2f}s",
             "cloudinary_path": public_id
         }
@@ -133,7 +126,6 @@ async def upload_video_to_cloudinary(request: VideoUploadRequest):
             "success": False,
             "message": f"❌ Upload failed: {str(e)}",
             "cloudinary_url": None,
-            "poster_url": None,
             "execution_time": f"{elapsed:.2f}s",
             "error": str(e)
         }
