@@ -133,68 +133,6 @@ class CloudinaryService:
             return None
     
     @staticmethod
-    def get_video_poster_url(video_url: str, frame_offset: float = 2.0) -> str:
-        """
-        Generate poster image URL from video URL
-        
-        Args:
-            video_url: Cloudinary video URL
-            frame_offset: Time offset in seconds for poster frame
-            
-        Returns:
-            Poster image URL
-        """
-        try:
-            # Extract public_id from URL
-            # URL format: https://res.cloudinary.com/{cloud}/video/upload/{transformations}/v1/{public_id}.mp4
-            
-            # Split by / and find the parts after 'upload'
-            parts = video_url.split('/')
-            
-            # Find 'upload' index
-            upload_idx = -1
-            for i, part in enumerate(parts):
-                if part == 'upload':
-                    upload_idx = i
-                    break
-            
-            if upload_idx == -1:
-                logger.error("Could not find 'upload' in URL")
-                return video_url.replace('.mp4', '.jpg')
-            
-            # Get everything after upload, skipping transformations and version
-            path_parts = []
-            for i in range(upload_idx + 1, len(parts)):
-                part = parts[i]
-                # Skip transformation strings (contain commas or underscores but not slashes)
-                # Skip version strings (start with 'v' followed by numbers)
-                if not (',' in part or (part.startswith('v') and len(part) > 1 and part[1:].isdigit())):
-                    path_parts.append(part)
-            
-            # Reconstruct public_id (without .mp4 extension)
-            public_id_with_ext = '/'.join(path_parts)
-            public_id = public_id_with_ext.rsplit('.', 1)[0] if '.' in public_id_with_ext else public_id_with_ext
-            
-            logger.info(f"   🖼️ Generating poster for: {public_id}")
-            
-            # Generate poster URL
-            poster_url = cloudinary.CloudinaryVideo(public_id).build_url(
-                format='jpg',
-                start_offset=frame_offset,
-                quality='auto:good',
-                transformation=[
-                    {'width': 720, 'crop': 'limit'}
-                ]
-            )
-            
-            return poster_url
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to generate poster URL: {e}")
-            # Fallback: simple replacement
-            return video_url.replace('.mp4', '.jpg')
-    
-    @staticmethod
     async def upload_video_from_url(
         airtable_url: str,
         interaction_id: str,
