@@ -65,6 +65,8 @@ class CloudinaryService:
                 resource_type="video",
                 public_id=public_id,
                 overwrite=True,
+                use_filename=False,
+                unique_filename=False,
                 eager=[CloudinaryService.VIDEO_TRANSFORMATION],
                 eager_async=False,
                 invalidate=True,
@@ -163,8 +165,10 @@ async def upload_video_from_url_simple(
         result = cloudinary.uploader.upload(
             airtable_url,
             resource_type="video",
-            public_id=public_id,  # ✅ This already includes full folder path from router
+            public_id=public_id,
             overwrite=True,
+            use_filename=False,
+            unique_filename=False,
             eager=[CloudinaryService.VIDEO_TRANSFORMATION],
             eager_async=False,
             invalidate=True,
