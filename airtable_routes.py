@@ -264,6 +264,8 @@ class InteractionEntry(BaseEntry):
     interactionOptimumLevel: Optional[int] = None
     boredom: Optional[float] = None
     videoUrl: Optional[str] = None
+    videoUrl: Optional[str] = None
+    videoPosterUrl: Optional[str] = None
     
     @validator('transcriptionFr', 'transcriptionEn')
     def validate_transcriptions(cls, v):
@@ -477,7 +479,7 @@ SYNC_CONFIGS = {
             "hint_ids", "interaction_type_id",
             "interaction_optimum_level", "boredom",
             "airtable_record_id", "last_modified_time_ref",
-            "created_at", "update_at", "live"
+            "created_at", "update_at", "live", "video_url", "video_poster_url"
         ]
     },
     "vocab": {
@@ -639,7 +641,9 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "ruleCode": "rule_code",
         "value": "value",
         "priority": "priority",
-        "conditions": "conditions"
+        "conditions": "conditions",
+        "videoUrl": "video_url",
+        "videoPosterUrl": "video_poster_url"
     }
     
     for old_key, new_key in field_mappings.items():
