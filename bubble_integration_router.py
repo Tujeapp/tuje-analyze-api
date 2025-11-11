@@ -433,6 +433,171 @@ async def bubble_gpt_fallback(request: BubbleGPTRequest):
         )
 
 # -------------------------
+# 4. GET INTERACTION DATA ENDPOINT
+# -------------------------
+
+class BubbleInteractionResponse(BaseModel):
+    """Bubble-friendly interaction data response"""
+    success: bool
+    processing_time_ms: float
+    timestamp: str
+    
+    # Interaction data
+    interaction_id: str
+    subtopic_id: Optional[str] = None
+    subtopic_name: Optional[str] = None
+    
+    # Video data (Cloudinary)
+    video_url: Optional[str] = None
+    video_poster_url: Optional[str] = None
+    cloudinary_public_id: Optional[str] = None
+    video_duration_seconds: Optional[int] = None
+    
+    # Interaction details
+    interaction_type: Optional[str] = None
+    interaction_level_from: Optional[int] = None
+    interaction_optimum_level: Optional[int] = None
+    
+    # Content
+    question_text_fr: Optional[str] = None
+    question_text_en: Optional[str] = None
+    
+    # Metadata
+    is_entry_point: bool = False
+    
+    # Error handling
+    error: Optional[str] = None
+
+
+@router.get("/get-interaction/{interaction_id}", response_model=BubbleInteractionResponse)
+async def bubble_get_interaction(interaction_id: str):
+    """
+    🎥 ENDPOINT 4: GET INTERACTION DATA
+    
+    Returns complete interaction data including:
+    - Video URL (Cloudinary optimized)
+    - Question text (French + English)
+    - Interaction metadata
+    - All fields from brain_interaction table
+    
+    Usage in Bubble:
+    1. Call this endpoint with interaction_id
+    2. Use response.video_url in your video player
+    3. Display response.question_text_fr to user
+    4. Use response.interaction_type for UI logic
+    
+    Example:
+        GET /api/bubble/get-interaction/inter_abc123
+    """
+    start_time = time.time()
+    
+    try:
+        logger.info(f"📥 Fetching interaction: {interaction_id}")
+        
+        # Get database connection
+        import os
+        DATABASE_URL = os.getenv("DATABASE_URL")
+        pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=2)
+        
+        try:
+            # Query brain_interaction table
+            query = """
+            SELECT 
+                bi.id,
+                bi.subtopic_id,
+                bs.name as subtopic_name,
+                bi.video_url,
+                bi.cloudinary_public_id,
+                bi.video_duration_seconds,
+                bi.interaction_type,
+                bi.level_from,
+                bi.optimum_level,
+                bi.question_text_fr,
+                bi.question_text_en,
+                bi.is_entry_point
+            FROM brain_interaction bi
+            LEFT JOIN brain_subtopic bs ON bi.subtopic_id = bs.id
+            WHERE bi.id = $1
+            """
+            
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(query, interaction_id)
+                
+                if not row:
+                    processing_time = round((time.time() - start_time) * 1000, 2)
+                    logger.warning(f"❌ Interaction not found: {interaction_id}")
+                    
+                    return BubbleInteractionResponse(
+                        success=False,
+                        processing_time_ms=processing_time,
+                        timestamp=datetime.now().isoformat(),
+                        interaction_id=interaction_id,
+                        error=f"Interaction '{interaction_id}' not found in database"
+                    )
+                
+                # Convert to dict
+                data = dict(row)
+                
+                # Build Cloudinary URLs if needed
+                video_url = data.get('video_url')
+                video_poster_url = None
+                
+                # If video_url is empty but we have cloudinary_public_id, build URL
+                if not video_url and data.get('cloudinary_public_id'):
+                    cloudinary_public_id = data['cloudinary_public_id']
+                    # Replace with your actual Cloudinary cloud name
+                    CLOUDINARY_CLOUD = "YOUR_CLOUD_NAME"  # TODO: Update this!
+                    
+                    # Mobile-optimized video URL
+                    video_url = (
+                        f"https://res.cloudinary.com/{CLOUDINARY_CLOUD}/video/upload/"
+                        f"c_limit,w_720,q_auto:eco,f_auto/{cloudinary_public_id}.mp4"
+                    )
+                    
+                    # Poster image (first frame of video)
+                    video_poster_url = (
+                        f"https://res.cloudinary.com/{CLOUDINARY_CLOUD}/video/upload/"
+                        f"so_0,w_720,h_1280,c_fill,q_auto:eco/{cloudinary_public_id}.jpg"
+                    )
+                
+                processing_time = round((time.time() - start_time) * 1000, 2)
+                logger.info(f"✅ Interaction fetched: {interaction_id} ({processing_time}ms)")
+                
+                return BubbleInteractionResponse(
+                    success=True,
+                    processing_time_ms=processing_time,
+                    timestamp=datetime.now().isoformat(),
+                    interaction_id=data['id'],
+                    subtopic_id=data.get('subtopic_id'),
+                    subtopic_name=data.get('subtopic_name'),
+                    video_url=video_url,
+                    video_poster_url=video_poster_url,
+                    cloudinary_public_id=data.get('cloudinary_public_id'),
+                    video_duration_seconds=data.get('video_duration_seconds'),
+                    interaction_type=data.get('interaction_type'),
+                    interaction_level_from=data.get('level_from'),
+                    interaction_optimum_level=data.get('optimum_level'),
+                    question_text_fr=data.get('question_text_fr'),
+                    question_text_en=data.get('question_text_en'),
+                    is_entry_point=data.get('is_entry_point', False)
+                )
+                
+        finally:
+            await pool.close()
+            
+    except Exception as e:
+        processing_time = round((time.time() - start_time) * 1000, 2)
+        logger.error(f"❌ Error fetching interaction {interaction_id}: {e}")
+        
+        return BubbleInteractionResponse(
+            success=False,
+            processing_time_ms=processing_time,
+            timestamp=datetime.now().isoformat(),
+            interaction_id=interaction_id,
+            error=f"Database error: {str(e)}"
+        )
+
+# -------------------------
 # CONFIGURATION AND HEALTH ENDPOINTS
 # -------------------------
 @router.get("/bubble-config")
