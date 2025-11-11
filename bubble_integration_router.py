@@ -546,7 +546,7 @@ async def bubble_get_interaction(interaction_id: str):
                 if not video_url and data.get('cloudinary_public_id'):
                     cloudinary_public_id = data['cloudinary_public_id']
                     # Replace with your actual Cloudinary cloud name
-                    CLOUDINARY_CLOUD = "YOUR_CLOUD_NAME"  # TODO: Update this!
+                    CLOUDINARY_CLOUD = "dz2qwevm9"  # TODO: Update this!
                     
                     # Mobile-optimized video URL
                     video_url = (
