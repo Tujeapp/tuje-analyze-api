@@ -8,6 +8,8 @@ from pydantic import BaseModel, validator
 from typing import Optional, List, Dict, Any
 import logging
 import time
+import asyncpg
+import os
 from datetime import datetime
 
 # Import your existing services
