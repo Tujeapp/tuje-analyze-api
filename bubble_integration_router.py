@@ -507,7 +507,7 @@ async def bubble_get_interaction(interaction_id: str):
             SELECT 
                 bi.id,
                 bi.subtopic_id,
-                bs.name as subtopic_name,
+                bs.name_fr as subtopic_name,
                 bi.video_url,
                 bi.cloudinary_public_id,
                 bi.video_duration_seconds,
