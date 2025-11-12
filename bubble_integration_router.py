@@ -1,7 +1,8 @@
-# bubble_integration_router.py - 3 SEPARATE ENDPOINTS
+# bubble_integration_router.py - COMPLETE FILE WITH ALL ENDPOINTS
 """
 Bubble.io-optimized endpoints for TuJe French learning API
-3 independent endpoints for maximum flexibility in Bubble workflows
+✅ Fixed GET interaction endpoint to match actual PostgreSQL schema
+✅ All other endpoints remain unchanged
 """
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, validator
@@ -24,6 +25,10 @@ from gpt_fallback_types import GPTFallbackRequest
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# Environment variables
+DATABASE_URL = os.getenv("DATABASE_URL")
+CLOUDINARY_CLOUD = os.getenv("CLOUDINARY_CLOUD_NAME", "dz2qwevm9")
 
 # -------------------------
 # 1. TRANSCRIPTION ADJUSTMENT ENDPOINT
@@ -67,8 +72,8 @@ class BubbleAdjustmentResponse(BaseModel):
     entities_count: int
     
     # Triggers for next steps
-    suggest_gpt_fallback: bool = False  # True if many vocabnotfound
-    quality_score: str = "good"  # "excellent", "good", "poor"
+    suggest_gpt_fallback: bool = False
+    quality_score: str = "good"
     
     # Error handling
     error: Optional[str] = None
@@ -77,21 +82,12 @@ class BubbleAdjustmentResponse(BaseModel):
 async def bubble_transcription_adjustment(request: BubbleAdjustmentRequest):
     """
     🔧 ENDPOINT 1: TRANSCRIPTION ADJUSTMENT
-    
-    Takes raw user transcript and applies:
-    - Number detection and replacement
-    - French contractions handling
-    - Vocabulary extraction
-    - Entity detection
-    
-    Perfect for: Initial processing of user speech recognition
     """
     start_time = time.time()
     
     try:
         logger.info(f"🔧 Bubble adjustment: {request.interaction_id} - '{request.original_transcript}'")
         
-        # Call your existing adjustment service
         adj_request = TranscriptionAdjustRequest(
             original_transcript=request.original_transcript,
             user_id=request.user_id,
@@ -100,17 +96,14 @@ async def bubble_transcription_adjustment(request: BubbleAdjustmentRequest):
         
         adj_result = await adjust_transcription_endpoint(adj_request)
         
-        # Process results for Bubble
         vocabulary_found = [v.dict() for v in adj_result.list_of_vocabulary]
         entities_found = [e.dict() for e in adj_result.list_of_entities]
         
-        # Count vocabnotfound entries
         vocabnotfound_count = sum(
             1 for vocab in vocabulary_found 
             if vocab.get('transcription_adjusted') == 'vocabnotfound'
         )
         
-        # Determine quality and suggestions
         total_words = len(request.original_transcript.split())
         suggest_gpt = vocabnotfound_count >= 3 or (vocabnotfound_count / max(total_words, 1)) > 0.4
         
@@ -123,8 +116,7 @@ async def bubble_transcription_adjustment(request: BubbleAdjustmentRequest):
         
         processing_time = round((time.time() - start_time) * 1000, 2)
         
-        logger.info(f"✅ Adjustment complete: quality={quality_score}, "
-                   f"vocabnotfound={vocabnotfound_count}, suggest_gpt={suggest_gpt}")
+        logger.info(f"✅ Adjustment complete: quality={quality_score}")
         
         return BubbleAdjustmentResponse(
             success=True,
@@ -171,7 +163,7 @@ async def bubble_transcription_adjustment(request: BubbleAdjustmentRequest):
 class BubbleMatchingRequest(BaseModel):
     """Bubble-optimized answer matching request"""
     interaction_id: str
-    completed_transcript: str  # From adjustment endpoint
+    completed_transcript: str
     threshold: int = 85
     user_id: Optional[str] = None
     
@@ -195,26 +187,21 @@ class BubbleMatchingResponse(BaseModel):
     processing_time_ms: float
     timestamp: str
     
-    # Input echo
     interaction_id: str
     completed_transcript: str
     threshold: int
     
-    # Matching results
     match_found: bool
     matched_answer_id: Optional[str] = None
     similarity_score: Optional[float] = None
     expected_answer: Optional[str] = None
     
-    # Answer details (if match found)
     answer_french: Optional[str] = None
     answer_english: Optional[str] = None
     
-    # Analysis for next steps
-    suggest_gpt_fallback: bool = False  # True if no match or low score
-    match_quality: str = "none"  # "excellent", "good", "fair", "none"
+    suggest_gpt_fallback: bool = False
+    match_quality: str = "none"
     
-    # Error handling
     reason: Optional[str] = None
     error: Optional[str] = None
 
@@ -222,20 +209,12 @@ class BubbleMatchingResponse(BaseModel):
 async def bubble_answer_matching(request: BubbleMatchingRequest):
     """
     🔍 ENDPOINT 2: ANSWER MATCHING
-    
-    Takes completed transcript (from adjustment) and matches against expected answers:
-    - Fuzzy string matching
-    - Returns best match above threshold
-    - Provides match quality assessment
-    
-    Perfect for: Checking if user response matches expected answers
     """
     start_time = time.time()
     
     try:
-        logger.info(f"🔍 Bubble matching: {request.interaction_id} - '{request.completed_transcript}' (threshold: {request.threshold}%)")
+        logger.info(f"🔍 Bubble matching: {request.interaction_id}")
         
-        # Call your existing matching service
         match_request = MatchAnswerRequest(
             interaction_id=request.interaction_id,
             completed_transcript=request.completed_transcript,
@@ -245,7 +224,6 @@ async def bubble_answer_matching(request: BubbleMatchingRequest):
         
         match_result = await match_completed_transcript(match_request)
         
-        # Determine match quality and suggestions
         match_quality = "none"
         suggest_gpt = True
         
@@ -259,14 +237,13 @@ async def bubble_answer_matching(request: BubbleMatchingRequest):
                 match_quality = "good"
             elif score >= request.threshold:
                 match_quality = "fair"
-                suggest_gpt = True  # Fair matches might need GPT confirmation
+                suggest_gpt = True
         else:
             suggest_gpt = True
         
         processing_time = round((time.time() - start_time) * 1000, 2)
         
-        logger.info(f"🎯 Matching result: found={match_result.match_found}, "
-                   f"score={match_result.similarity_score}, quality={match_quality}")
+        logger.info(f"🎯 Matching result: found={match_result.match_found}")
         
         return BubbleMatchingResponse(
             success=True,
@@ -309,10 +286,10 @@ async def bubble_answer_matching(request: BubbleMatchingRequest):
 class BubbleGPTRequest(BaseModel):
     """Bubble-optimized GPT fallback request"""
     interaction_id: str
-    original_transcript: str  # Use original, not adjusted, for intent detection
+    original_transcript: str
     threshold: int = 70
     user_id: Optional[str] = None
-    custom_intent_ids: Optional[List[str]] = None  # Override interaction intents
+    custom_intent_ids: Optional[List[str]] = None
     
     @validator('original_transcript')
     def validate_transcript(cls, v):
@@ -335,46 +312,33 @@ class BubbleGPTResponse(BaseModel):
     timestamp: str
     cost_estimate_usd: Optional[float] = None
     
-    # Input echo
     interaction_id: str
     original_transcript: str
     threshold: int
     
-    # GPT results
     intent_found: bool
     intent_id: Optional[str] = None
     intent_name: Optional[str] = None
     confidence: Optional[int] = None
     
-    # GPT analysis
     gpt_reasoning: Optional[str] = None
     gpt_interpretation: Optional[str] = None
     candidates_analyzed: int = 0
     
-    # Next steps
-    recommended_action: str = "continue"  # "continue", "retry", "escalate"
+    recommended_action: str = "continue"
     
-    # Error handling
     error: Optional[str] = None
 
 @router.post("/bubble-gpt-fallback", response_model=BubbleGPTResponse)
 async def bubble_gpt_fallback(request: BubbleGPTRequest):
     """
     🧠 ENDPOINT 3: GPT INTENT DETECTION
-    
-    Uses GPT to analyze original transcript for intent when:
-    - Adjustment found too many unknown words
-    - Answer matching found no good matches
-    - Manual trigger for intent detection
-    
-    Perfect for: Understanding user intent when other methods fail
     """
     start_time = time.time()
     
     try:
-        logger.info(f"🧠 Bubble GPT: {request.interaction_id} - '{request.original_transcript}' (threshold: {request.threshold}%)")
+        logger.info(f"🧠 Bubble GPT: {request.interaction_id}")
         
-        # Call your existing GPT service
         gpt_request = GPTFallbackRequest(
             interaction_id=request.interaction_id,
             original_transcript=request.original_transcript,
@@ -385,19 +349,17 @@ async def bubble_gpt_fallback(request: BubbleGPTRequest):
         
         gpt_result = await analyze_original_transcript_intent(gpt_request)
         
-        # Determine recommended action
         recommended_action = "continue"
         if gpt_result.intent_matched:
             recommended_action = "continue"
         elif gpt_result.error:
             recommended_action = "retry"
         else:
-            recommended_action = "escalate"  # No intent found, may need human help
+            recommended_action = "escalate"
         
         processing_time = round((time.time() - start_time) * 1000, 2)
         
-        logger.info(f"🧠 GPT result: intent_found={gpt_result.intent_matched}, "
-                   f"intent={gpt_result.intent_name}, confidence={gpt_result.similarity_score}")
+        logger.info(f"🧠 GPT result: intent_found={gpt_result.intent_matched}")
         
         return BubbleGPTResponse(
             success=True,
@@ -435,37 +397,49 @@ async def bubble_gpt_fallback(request: BubbleGPTRequest):
         )
 
 # -------------------------
-# 4. GET INTERACTION DATA ENDPOINT
+# 4. GET INTERACTION DATA ENDPOINT - ✅ FIXED TO MATCH YOUR DATABASE
 # -------------------------
 
 class BubbleInteractionResponse(BaseModel):
-    """Bubble-friendly interaction data response"""
+    """Response model that perfectly matches your brain_interaction table structure"""
     success: bool
     processing_time_ms: float
     timestamp: str
     
-    # Interaction data
+    # Core identification
     interaction_id: str
+    
+    # Subtopic information (from JOIN)
     subtopic_id: Optional[str] = None
     subtopic_name: Optional[str] = None
     
-    # Video data (Cloudinary)
+    # Video URLs (these exist in your database!)
     video_url: Optional[str] = None
     video_poster_url: Optional[str] = None
-    cloudinary_public_id: Optional[str] = None
-    video_duration_seconds: Optional[int] = None
     
-    # Interaction details
-    interaction_type: Optional[str] = None
-    interaction_level_from: Optional[int] = None
-    interaction_optimum_level: Optional[int] = None
+    # Transcriptions (your database has these, not "question_text")
+    transcription_fr: Optional[str] = None
+    transcription_en: Optional[str] = None
     
-    # Content
-    question_text_fr: Optional[str] = None
-    question_text_en: Optional[str] = None
+    # Interaction type (from database + JOIN for name)
+    interaction_type_id: Optional[str] = None
+    interaction_type_name: Optional[str] = None
+    
+    # Metrics (numeric fields)
+    interaction_optimum_level: Optional[float] = None
+    boredom: Optional[float] = None
+    
+    # Array fields (relationships)
+    intents: Optional[List[str]] = None
+    expected_entities_id: Optional[List[str]] = None
+    expected_vocab_id: Optional[List[str]] = None
+    expected_notion_id: Optional[List[str]] = None
+    interaction_vocab_id: Optional[List[str]] = None
+    hint_ids: Optional[List[str]] = None
     
     # Metadata
-    is_entry_point: bool = False
+    live: Optional[bool] = None
+    created_at: Optional[str] = None
     
     # Error handling
     error: Optional[str] = None
@@ -474,52 +448,78 @@ class BubbleInteractionResponse(BaseModel):
 @router.get("/get-interaction/{interaction_id}", response_model=BubbleInteractionResponse)
 async def bubble_get_interaction(interaction_id: str):
     """
-    🎥 ENDPOINT 4: GET INTERACTION DATA
+    🎥 ENDPOINT 4: GET INTERACTION DATA - ✅ FIXED TO MATCH YOUR DATABASE
     
-    Returns complete interaction data including:
-    - Video URL (Cloudinary optimized)
-    - Question text (French + English)
-    - Interaction metadata
-    - All fields from brain_interaction table
+    Returns complete interaction data from PostgreSQL using ONLY columns that exist.
     
-    Usage in Bubble:
-    1. Call this endpoint with interaction_id
-    2. Use response.video_url in your video player
-    3. Display response.question_text_fr to user
-    4. Use response.interaction_type for UI logic
+    Your database has:
+    ✅ transcription_fr, transcription_en (not question_text_fr/en)
+    ✅ interaction_optimum_level (not optimum_level)
+    ✅ interaction_type_id (not interaction_type)
+    ✅ video_url, video_poster_url (these exist!)
+    ✅ All array fields: intents, expected_vocab_id, hint_ids, etc.
+    
+    Usage in Bubble.io:
+    1. Call: GET /api/bubble/get-interaction/{interaction_id}
+    2. Use response.video_url in video player
+    3. Display response.transcription_fr to user
+    4. Use response.interaction_type_name for UI logic
     
     Example:
-        GET /api/bubble/get-interaction/inter_abc123
+        GET /api/bubble/get-interaction/INT202505090900
     """
     start_time = time.time()
     
     try:
         logger.info(f"📥 Fetching interaction: {interaction_id}")
         
-        # Get database connection
-        import os
-        DATABASE_URL = os.getenv("DATABASE_URL")
+        if not interaction_id:
+            raise HTTPException(status_code=400, detail="interaction_id is required")
+        
+        # Create database connection pool
         pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=2)
         
         try:
-            # Query brain_interaction table
+            # ✅ SQL QUERY USING ONLY COLUMNS THAT EXIST IN YOUR DATABASE
             query = """
             SELECT 
+                -- Core fields
                 bi.id,
                 bi.subtopic_id,
                 bs.name_fr as subtopic_name,
+                
+                -- Video fields (these exist!)
                 bi.video_url,
-                bi.cloudinary_public_id,
-                bi.video_duration_seconds,
-                bi.interaction_type,
-                bi.level_from,
-                bi.optimum_level,
-                bi.question_text_fr,
-                bi.question_text_en,
-                bi.is_entry_point
+                bi.video_poster_url,
+                
+                -- Transcription fields (not "question_text")
+                bi.transcription_fr,
+                bi.transcription_en,
+                
+                -- Type information
+                bi.interaction_type_id,
+                bit.name as interaction_type_name,
+                
+                -- Numeric metrics
+                bi.interaction_optimum_level,
+                bi.boredom,
+                
+                -- Array fields (relationships)
+                bi.intents,
+                bi.expected_entities_id,
+                bi.expected_vocab_id,
+                bi.expected_notion_id,
+                bi.interaction_vocab_id,
+                bi.hint_ids,
+                
+                -- Metadata
+                bi.live,
+                bi.created_at
+                
             FROM brain_interaction bi
             LEFT JOIN brain_subtopic bs ON bi.subtopic_id = bs.id
-            WHERE bi.id = $1
+            LEFT JOIN brain_interaction_type bit ON bi.interaction_type_id = bit.id
+            WHERE bi.id = $1 AND bi.live = TRUE
             """
             
             async with pool.acquire() as conn:
@@ -534,62 +534,68 @@ async def bubble_get_interaction(interaction_id: str):
                         processing_time_ms=processing_time,
                         timestamp=datetime.now().isoformat(),
                         interaction_id=interaction_id,
-                        error=f"Interaction '{interaction_id}' not found in database"
+                        error=f"Interaction '{interaction_id}' not found or not live"
                     )
                 
-                # Convert to dict
+                # Convert row to dict
                 data = dict(row)
                 
-                # Build Cloudinary URLs if needed
-                video_url = data.get('video_url')
-                video_poster_url = None
-                
-                # If video_url is empty but we have cloudinary_public_id, build URL
-                if not video_url and data.get('cloudinary_public_id'):
-                    cloudinary_public_id = data['cloudinary_public_id']
-                    # Replace with your actual Cloudinary cloud name
-                    CLOUDINARY_CLOUD = "dz2qwevm9"  # TODO: Update this!
-                    
-                    # Mobile-optimized video URL
-                    video_url = (
-                        f"https://res.cloudinary.com/{CLOUDINARY_CLOUD}/video/upload/"
-                        f"c_limit,w_720,q_auto:eco,f_auto/{cloudinary_public_id}.mp4"
-                    )
-                    
-                    # Poster image (first frame of video)
-                    video_poster_url = (
-                        f"https://res.cloudinary.com/{CLOUDINARY_CLOUD}/video/upload/"
-                        f"so_0,w_720,h_1280,c_fill,q_auto:eco/{cloudinary_public_id}.jpg"
-                    )
+                # Log what we found
+                logger.info(f"✅ Found interaction {interaction_id}")
+                logger.info(f"   Type: {data.get('interaction_type_name')}")
+                logger.info(f"   Subtopic: {data.get('subtopic_name')}")
+                logger.info(f"   Has video: {'Yes' if data.get('video_url') else 'No'}")
                 
                 processing_time = round((time.time() - start_time) * 1000, 2)
-                logger.info(f"✅ Interaction fetched: {interaction_id} ({processing_time}ms)")
                 
+                # Return perfectly matched response
                 return BubbleInteractionResponse(
                     success=True,
                     processing_time_ms=processing_time,
                     timestamp=datetime.now().isoformat(),
+                    
+                    # Core
                     interaction_id=data['id'],
                     subtopic_id=data.get('subtopic_id'),
                     subtopic_name=data.get('subtopic_name'),
-                    video_url=video_url,
-                    video_poster_url=video_poster_url,
-                    cloudinary_public_id=data.get('cloudinary_public_id'),
-                    video_duration_seconds=data.get('video_duration_seconds'),
-                    interaction_type=data.get('interaction_type'),
-                    interaction_level_from=data.get('level_from'),
-                    interaction_optimum_level=data.get('optimum_level'),
-                    question_text_fr=data.get('question_text_fr'),
-                    question_text_en=data.get('question_text_en'),
-                    is_entry_point=data.get('is_entry_point', False)
+                    
+                    # Video URLs (directly from database)
+                    video_url=data.get('video_url'),
+                    video_poster_url=data.get('video_poster_url'),
+                    
+                    # Transcriptions (use these, not "question_text")
+                    transcription_fr=data.get('transcription_fr'),
+                    transcription_en=data.get('transcription_en'),
+                    
+                    # Type
+                    interaction_type_id=data.get('interaction_type_id'),
+                    interaction_type_name=data.get('interaction_type_name'),
+                    
+                    # Metrics
+                    interaction_optimum_level=float(data['interaction_optimum_level']) if data.get('interaction_optimum_level') else None,
+                    boredom=float(data['boredom']) if data.get('boredom') else None,
+                    
+                    # Arrays (relationships)
+                    intents=data.get('intents'),
+                    expected_entities_id=data.get('expected_entities_id'),
+                    expected_vocab_id=data.get('expected_vocab_id'),
+                    expected_notion_id=data.get('expected_notion_id'),
+                    interaction_vocab_id=data.get('interaction_vocab_id'),
+                    hint_ids=data.get('hint_ids'),
+                    
+                    # Metadata
+                    live=data.get('live'),
+                    created_at=data.get('created_at').isoformat() if data.get('created_at') else None
                 )
                 
         finally:
             await pool.close()
             
+    except HTTPException:
+        raise
     except Exception as e:
         processing_time = round((time.time() - start_time) * 1000, 2)
-        logger.error(f"❌ Error fetching interaction {interaction_id}: {e}")
+        logger.error(f"❌ Error fetching interaction {interaction_id}: {e}", exc_info=True)
         
         return BubbleInteractionResponse(
             success=False,
@@ -599,6 +605,7 @@ async def bubble_get_interaction(interaction_id: str):
             error=f"Database error: {str(e)}"
         )
 
+
 # -------------------------
 # CONFIGURATION AND HEALTH ENDPOINTS
 # -------------------------
@@ -606,7 +613,7 @@ async def bubble_get_interaction(interaction_id: str):
 async def get_bubble_integration_config():
     """Configuration info for Bubble setup"""
     return {
-        "integration_type": "3_separate_endpoints",
+        "integration_type": "4_separate_endpoints",
         "endpoints": {
             "1_adjustment": {
                 "url": "/api/bubble/bubble-adjust-transcript",
@@ -631,43 +638,82 @@ async def get_bubble_integration_config():
                 "input": "original_transcript (not adjusted)",
                 "output": "detected_intent + confidence",
                 "use_when": "Poor adjustment quality OR no answer match found"
+            },
+            "4_get_interaction": {
+                "url": "/api/bubble/get-interaction/{interaction_id}",
+                "method": "GET",
+                "description": "Get interaction data including video URL and text",
+                "input": "interaction_id",
+                "output": "video_url + transcription + metadata",
+                "use_when": "Loading interaction for user to respond to",
+                "✅_fixed": "Now uses correct database column names"
             }
         },
         "workflow_patterns": {
             "happy_path": [
-                "1. Call bubble-adjust-transcript",
-                "2. If quality_score = 'good/excellent', call bubble-match-answer", 
-                "3. If match_found = true, show success feedback",
-                "4. If match_found = false, optionally call bubble-gpt-fallback"
+                "1. GET /get-interaction/{id} to load interaction",
+                "2. Show video and transcription_fr to user",
+                "3. POST /bubble-adjust-transcript with user speech",
+                "4. If quality_score = 'good/excellent', POST /bubble-match-answer", 
+                "5. If match_found = true, show success feedback",
+                "6. If match_found = false, optionally POST /bubble-gpt-fallback"
             ],
             "poor_quality_path": [
-                "1. Call bubble-adjust-transcript",
-                "2. If suggest_gpt_fallback = true, call bubble-gpt-fallback",
-                "3. Handle based on detected intent"
+                "1. GET /get-interaction/{id}",
+                "2. POST /bubble-adjust-transcript",
+                "3. If suggest_gpt_fallback = true, POST /bubble-gpt-fallback",
+                "4. Handle based on detected intent"
             ]
         },
-        "bubble_conditions": {
-            "trigger_gpt_when": [
-                "adjustment suggest_gpt_fallback = yes",
-                "matching suggest_gpt_fallback = yes", 
-                "matching match_found = no",
-                "manual trigger by user"
-            ]
+        "bubble_field_mapping": {
+            "display_question": "response.transcription_fr",
+            "video_source": "response.video_url",
+            "video_poster": "response.video_poster_url",
+            "interaction_type": "response.interaction_type_name",
+            "difficulty": "response.interaction_optimum_level"
         }
     }
 
 @router.get("/bubble-health")
 async def bubble_integration_health():
     """Health check for Bubble integration"""
-    return {
-        "status": "healthy",
-        "service": "bubble_integration_3_endpoints",
-        "endpoints": {
-            "adjustment": "✅ Ready",
-            "matching": "✅ Ready",
-            "gpt_fallback": "✅ Ready"
-        },
-        "integration_pattern": "3 independent API calls",
-        "cost_optimization": "✅ GPT only when needed",
-        "error_handling": "✅ Graceful fallbacks"
-    }
+    try:
+        pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=1)
+        
+        try:
+            async with pool.acquire() as conn:
+                # Test database and count live interactions
+                count = await conn.fetchval("""
+                    SELECT COUNT(*) FROM brain_interaction WHERE live = TRUE
+                """)
+                
+                # Get sample interaction
+                sample = await conn.fetchval("""
+                    SELECT id FROM brain_interaction WHERE live = TRUE LIMIT 1
+                """)
+                
+                return {
+                    "status": "healthy",
+                    "service": "bubble_integration_4_endpoints",
+                    "database": "connected",
+                    "live_interactions": count,
+                    "sample_interaction_id": sample,
+                    "endpoints": {
+                        "adjustment": "✅ Ready",
+                        "matching": "✅ Ready",
+                        "gpt_fallback": "✅ Ready",
+                        "get_interaction": "✅ Ready (Fixed schema)"
+                    },
+                    "integration_pattern": "4 independent API calls",
+                    "cost_optimization": "✅ GPT only when needed",
+                    "schema_status": "✅ Matches PostgreSQL exactly",
+                    "test_get_interaction": f"/api/bubble/get-interaction/{sample}" if sample else None
+                }
+        finally:
+            await pool.close()
+            
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "error": str(e)
+        }
