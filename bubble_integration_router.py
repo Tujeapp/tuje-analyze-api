@@ -416,6 +416,8 @@ class BubbleInteractionResponse(BaseModel):
     # Video URLs (these exist in your database!)
     video_url: Optional[str] = None
     video_poster_url: Optional[str] = None
+
+    speak: Optional[bool] = None
     
     # Transcriptions (your database has these, not "question_text")
     transcription_fr: Optional[str] = None
@@ -492,6 +494,8 @@ async def bubble_get_interaction(interaction_id: str):
                 bi.video_url,
                 bi.video_poster_url,
                 
+                bi.speak,
+                    
                 -- Transcription fields (not "question_text")
                 bi.transcription_fr,
                 bi.transcription_en,
@@ -562,6 +566,8 @@ async def bubble_get_interaction(interaction_id: str):
                     # Video URLs (directly from database)
                     video_url=data.get('video_url'),
                     video_poster_url=data.get('video_poster_url'),
+
+                    speak=row["speak"],
                     
                     # Transcriptions (use these, not "question_text")
                     transcription_fr=data.get('transcription_fr'),
