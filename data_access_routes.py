@@ -1271,6 +1271,64 @@ async def get_session_moods():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/answers-by-interaction/{interaction_id}")
+async def get_answers_by_interaction(interaction_id: str):
+    """
+    Get all answers linked to a specific interaction
+    
+    This endpoint fetches answers from brain_interaction_answer table
+    and joins with brain_answer to get the answer details.
+    
+    Returns 2-4 answers for multiple choice interactions.
+    """
+    try:
+        conn = await asyncpg.connect(DATABASE_URL)
+        
+        # Get answers linked to this interaction through brain_interaction_answer
+        rows = await conn.fetch("""
+            SELECT 
+                a.id,
+                a.transcription_fr,
+                a.transcription_en,
+                a.transcription_adjusted,
+                a.answer_optimum_level,
+                ia.interaction_id
+            FROM brain_interaction_answer ia
+            JOIN brain_answer a ON ia.answer_id = a.id
+            WHERE ia.interaction_id = $1 
+              AND a.live = TRUE
+            ORDER BY a.created_at ASC
+            LIMIT 4
+        """, interaction_id)
+        
+        await conn.close()
+        
+        if not rows:
+            return {
+                "interaction_id": interaction_id,
+                "count": 0,
+                "answers": []
+            }
+        
+        answers = [
+            {
+                "id": row["id"],
+                "transcription_fr": row["transcription_fr"],
+                "transcription_en": row["transcription_en"],
+                "transcription_adjusted": row["transcription_adjusted"],
+                "answer_optimum_level": float(row["answer_optimum_level"]) if row["answer_optimum_level"] else None
+            }
+            for row in rows
+        ]
+        
+        return {
+            "interaction_id": interaction_id,
+            "count": len(answers),
+            "answers": answers
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/session-mood/{mood_name}")
 async def get_session_mood_by_name(mood_name: str):
