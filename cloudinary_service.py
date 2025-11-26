@@ -32,6 +32,7 @@ class CloudinaryService:
     IMAGE_BASE_FOLDER = "tuje/images/subtopics"
     TUTORIAL_FOLDER = "tuje/videos/tutorials"
     UI_FOLDER = "tuje/images/ui"
+    ANSWER_IMAGE_FOLDER = "tuje/images/answers"
     
     # Video transformation for mobile optimization
     VIDEO_TRANSFORMATION = {
@@ -49,6 +50,14 @@ class CloudinaryService:
         'height': 400,
         'crop': 'fill',
         'gravity': 'center'
+    }
+   
+    # Image transformation for answer images
+    ANSWER_IMAGE_TRANSFORMATION = {
+    'quality': 'auto:good',
+    'fetch_format': 'auto',
+    'width': 800,
+    'crop': 'limit'
     }
 
     @staticmethod
@@ -306,6 +315,67 @@ class CloudinaryService:
         except Exception as e:
             logger.error(f"❌ Error checking asset: {e}")
             return False
+
+@staticmethod
+async def upload_answer_image_from_url(
+    airtable_url: str,
+    answer_id: str
+) -> Optional[str]:
+    """
+    Upload answer image from Airtable URL to Cloudinary
+    
+    Folder structure: tuje/images/answers/{answer_id}
+    
+    Args:
+        airtable_url: URL of image in Airtable
+        answer_id: Unique answer ID
+        
+    Returns:
+        Cloudinary URL with transformations or None if failed
+    """
+    try:
+        # Clean answer ID for folder name (replace hyphens with underscores)
+        clean_answer_id = answer_id.replace('-', '_')
+        
+        # Build folder and public_id
+        folder = CloudinaryService.ANSWER_IMAGE_FOLDER
+        public_id = f"{folder}/{clean_answer_id}"
+        
+        logger.info(f"📤 Uploading answer image")
+        logger.info(f"   📁 Folder: {folder}")
+        logger.info(f"   📄 Public ID: {public_id}")
+        
+        # Upload to Cloudinary
+        result = cloudinary.uploader.upload(
+            airtable_url,
+            resource_type="image",
+            folder=folder,
+            public_id=clean_answer_id,  # Just the filename, folder is separate
+            overwrite=True,
+            use_filename=False,
+            unique_filename=False,
+            eager=[CloudinaryService.ANSWER_IMAGE_TRANSFORMATION],
+            eager_async=False,
+            invalidate=True
+        )
+        
+        # Log what Cloudinary actually saved
+        actual_public_id = result.get('public_id', 'UNKNOWN')
+        logger.info(f"   ✅ Cloudinary saved: {actual_public_id}")
+        
+        # Build optimized URL
+        optimized_url = cloudinary.CloudinaryImage(result['public_id']).build_url(
+            **CloudinaryService.ANSWER_IMAGE_TRANSFORMATION
+        )
+        
+        logger.info(f"✅ Answer image uploaded: {optimized_url}")
+        
+        return optimized_url
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to upload answer image {answer_id}: {e}")
+        logger.exception(e)
+        return None
 
 
 # Utility functions for cost optimization
