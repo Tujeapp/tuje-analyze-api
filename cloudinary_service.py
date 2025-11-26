@@ -54,10 +54,10 @@ class CloudinaryService:
    
     # Image transformation for answer images
     ANSWER_IMAGE_TRANSFORMATION = {
-    'quality': 'auto:good',
-    'fetch_format': 'auto',
-    'width': 300,
-    'crop': 'limit'
+        'quality': 'auto:good',
+        'fetch_format': 'auto',
+        'width': 300,
+        'crop': 'limit'
     }
 
     @staticmethod
@@ -80,14 +80,10 @@ class CloudinaryService:
             # ============================================
             # SPLIT public_id into folder + filename
             # ============================================
-            # Example: "tuje/videos/interactions/SUBT123/int_456"
-            # -> folder: "tuje/videos/interactions/SUBT123"
-            # -> filename: "int_456"
-            
             if '/' in public_id:
-                parts = public_id.rsplit('/', 1)  # Split at last slash
-                folder_path = parts[0]  # Everything before last slash
-                file_name = parts[1]    # Everything after last slash
+                parts = public_id.rsplit('/', 1)
+                folder_path = parts[0]
+                file_name = parts[1]
             else:
                 folder_path = None
                 file_name = public_id
@@ -102,7 +98,7 @@ class CloudinaryService:
             # ============================================
             upload_params = {
                 "resource_type": "video",
-                "public_id": file_name,  # Just the filename
+                "public_id": file_name,
                 "overwrite": True,
                 "use_filename": False,
                 "unique_filename": False,
@@ -112,15 +108,11 @@ class CloudinaryService:
                 "timeout": 120
             }
             
-            # Add folder parameter only if we have a folder path
             if folder_path:
                 upload_params["folder"] = folder_path
             
             result = cloudinary.uploader.upload(airtable_url, **upload_params)
             
-            # ============================================
-            # LOG WHAT CLOUDINARY ACTUALLY SAVED
-            # ============================================
             actual_public_id = result.get('public_id', 'UNKNOWN')
             actual_folder = result.get('folder', 'NONE')
             
@@ -128,7 +120,6 @@ class CloudinaryService:
             logger.info(f"      public_id: {actual_public_id}")
             logger.info(f"      folder: {actual_folder}")
             
-            # Build optimized URL
             optimized_url = cloudinary.CloudinaryVideo(result['public_id']).build_url(
                 **CloudinaryService.VIDEO_TRANSFORMATION
             )
@@ -138,7 +129,7 @@ class CloudinaryService:
             
         except Exception as e:
             logger.error(f"❌ Upload failed for {public_id}: {e}")
-            logger.exception(e)  # Full stack trace
+            logger.exception(e)
             return None
     
     @staticmethod
@@ -151,30 +142,14 @@ class CloudinaryService:
     ) -> Optional[str]:
         """
         Upload video from Airtable URL to Cloudinary
-        
-        Args:
-            airtable_url: URL of video in Airtable
-            interaction_id: Unique interaction ID
-            subtopic_name: Name of subtopic (for folder organization)
-            level: Interaction level (1-5)
-            optimum_level: Optional optimum level for folder organization
-            
-        Returns:
-            Cloudinary URL with transformations or None if failed
         """
         try:
-            # Clean subtopic name for folder structure
             clean_subtopic = subtopic_name.lower().replace(' ', '_').replace('/', '_')
-            
-            # Determine folder based on level
             folder = f"{CloudinaryService.VIDEO_BASE_FOLDER}/level_{level}"
-            
-            # Create public_id (unique identifier in Cloudinary)
             public_id = f"{folder}/int_{interaction_id}_{clean_subtopic}"
             
             logger.info(f"Uploading video: {public_id}")
             
-            # Upload to Cloudinary
             result = cloudinary.uploader.upload(
                 airtable_url,
                 resource_type="video",
@@ -187,13 +162,11 @@ class CloudinaryService:
                 invalidate=True
             )
             
-            # Build optimized URL
             optimized_url = cloudinary.CloudinaryVideo(result['public_id']).build_url(
                 **CloudinaryService.VIDEO_TRANSFORMATION
             )
             
             logger.info(f"✅ Video uploaded successfully: {optimized_url}")
-            
             return optimized_url
             
         except Exception as e:
@@ -209,21 +182,10 @@ class CloudinaryService:
     ) -> Optional[str]:
         """
         Upload image from Airtable URL to Cloudinary
-        
-        Args:
-            airtable_url: URL of image in Airtable
-            subtopic_id: Unique subtopic ID
-            subtopic_name: Name of subtopic
-            image_type: Type of image (subtopic, icon, background)
-            
-        Returns:
-            Cloudinary URL with transformations or None if failed
         """
         try:
-            # Clean subtopic name
             clean_name = subtopic_name.lower().replace(' ', '_').replace('/', '_')
             
-            # Determine folder
             if image_type == "subtopic":
                 folder = f"{CloudinaryService.IMAGE_BASE_FOLDER}/{clean_name}"
                 public_id = f"{folder}/sub_{subtopic_id}"
@@ -236,7 +198,6 @@ class CloudinaryService:
             
             logger.info(f"Uploading image: {public_id}")
             
-            # Upload to Cloudinary
             result = cloudinary.uploader.upload(
                 airtable_url,
                 resource_type="image",
@@ -249,13 +210,11 @@ class CloudinaryService:
                 invalidate=True
             )
             
-            # Build optimized URL
             optimized_url = cloudinary.CloudinaryImage(result['public_id']).build_url(
                 **CloudinaryService.IMAGE_TRANSFORMATION
             )
             
             logger.info(f"✅ Image uploaded successfully: {optimized_url}")
-            
             return optimized_url
             
         except Exception as e:
@@ -266,13 +225,6 @@ class CloudinaryService:
     async def delete_asset(public_id: str, resource_type: str = "video") -> bool:
         """
         Delete asset from Cloudinary
-        
-        Args:
-            public_id: Cloudinary public ID
-            resource_type: 'video' or 'image'
-            
-        Returns:
-            True if successful, False otherwise
         """
         try:
             result = cloudinary.uploader.destroy(
@@ -296,13 +248,6 @@ class CloudinaryService:
     async def check_asset_exists(public_id: str, resource_type: str = "video") -> bool:
         """
         Check if asset exists in Cloudinary
-        
-        Args:
-            public_id: Cloudinary public ID
-            resource_type: 'video' or 'image'
-            
-        Returns:
-            True if exists, False otherwise
         """
         try:
             result = cloudinary.api.resource(
@@ -317,23 +262,6 @@ class CloudinaryService:
             return False
 
     @staticmethod
-    async def check_asset_exists(public_id: str, resource_type: str = "video") -> bool:
-        """
-        Check if asset exists in Cloudinary
-        """
-        try:
-            result = cloudinary.api.resource(
-                public_id,
-                resource_type=resource_type
-            )
-            return True
-        except cloudinary.exceptions.NotFound:
-            return False
-        except Exception as e:
-            logger.error(f"❌ Error checking asset: {e}")
-            return False
-
-    @staticmethod  # ✅ CORRECT - Indented inside the class
     async def upload_answer_image_from_url(
         airtable_url: str,
         answer_id: str
@@ -342,26 +270,15 @@ class CloudinaryService:
         Upload answer image from Airtable URL to Cloudinary
         
         Folder structure: tuje/images/answers/{answer_id}
-        
-        Args:
-            airtable_url: URL of image in Airtable
-            answer_id: Unique answer ID
-            
-        Returns:
-            Cloudinary URL with transformations or None if failed
         """
         try:
-            # Clean answer ID for folder name (replace hyphens with underscores)
             clean_answer_id = answer_id.replace('-', '_')
-            
-            # Build folder and public_id
             folder = CloudinaryService.ANSWER_IMAGE_FOLDER
             
             logger.info(f"📤 Uploading answer image")
             logger.info(f"   📁 Folder: {folder}")
             logger.info(f"   📄 Public ID: {clean_answer_id}")
             
-            # Upload to Cloudinary
             result = cloudinary.uploader.upload(
                 airtable_url,
                 resource_type="image",
@@ -375,17 +292,14 @@ class CloudinaryService:
                 invalidate=True
             )
             
-            # Log what Cloudinary actually saved
             actual_public_id = result.get('public_id', 'UNKNOWN')
             logger.info(f"   ✅ Cloudinary saved: {actual_public_id}")
             
-            # Build optimized URL
             optimized_url = cloudinary.CloudinaryImage(result['public_id']).build_url(
                 **CloudinaryService.ANSWER_IMAGE_TRANSFORMATION
             )
             
             logger.info(f"✅ Answer image uploaded: {optimized_url}")
-            
             return optimized_url
             
         except Exception as e:
@@ -394,40 +308,21 @@ class CloudinaryService:
             return None
 
 
-# Utility functions for cost optimization (these stay OUTSIDE the class)
-def get_optimized_video_url(cloudinary_url: str, quality: str = "auto:low") -> str:
-    # ... rest of file
-
-
+# ============================================
 # Utility functions for cost optimization
+# (Outside the class)
+# ============================================
 
 def get_optimized_video_url(cloudinary_url: str, quality: str = "auto:low") -> str:
     """
     Get video URL with specific quality settings for cost optimization
-    
-    Args:
-        cloudinary_url: Original Cloudinary URL
-        quality: Quality setting (auto:low, auto:good, auto:best)
-        
-    Returns:
-        Optimized URL
     """
-    # This allows you to serve different quality levels based on user tier
-    # Free users: auto:low
-    # Premium users: auto:good
     return cloudinary_url.replace('q_auto:low', f'q_{quality}')
 
 
 def get_thumbnail_url(video_url: str, width: int = 200) -> str:
     """
     Generate thumbnail URL from video
-    
-    Args:
-        video_url: Cloudinary video URL
-        width: Thumbnail width
-        
-    Returns:
-        Thumbnail URL
     """
     try:
         parts = video_url.split('/')
