@@ -56,7 +56,7 @@ class CloudinaryService:
     ANSWER_IMAGE_TRANSFORMATION = {
     'quality': 'auto:good',
     'fetch_format': 'auto',
-    'width': 800,
+    'width': 300,
     'crop': 'limit'
     }
 
