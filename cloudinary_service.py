@@ -316,7 +316,7 @@ class CloudinaryService:
             logger.error(f"❌ Error checking asset: {e}")
             return False
 
-@staticmethod
+    @staticmethod
     async def check_asset_exists(public_id: str, resource_type: str = "video") -> bool:
         """
         Check if asset exists in Cloudinary
