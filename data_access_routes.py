@@ -1292,6 +1292,7 @@ async def get_answers_by_interaction(interaction_id: str):
                 a.transcription_en,
                 a.transcription_adjusted,
                 a.answer_optimum_level,
+                a.image_url,
                 ia.interaction_id
             FROM brain_interaction_answer ia
             JOIN brain_answer a ON ia.answer_id = a.id
@@ -1316,7 +1317,8 @@ async def get_answers_by_interaction(interaction_id: str):
                 "transcription_fr": row["transcription_fr"],
                 "transcription_en": row["transcription_en"],
                 "transcription_adjusted": row["transcription_adjusted"],
-                "answer_optimum_level": float(row["answer_optimum_level"]) if row["answer_optimum_level"] else None
+                "answer_optimum_level": float(row["answer_optimum_level"]) if row["answer_optimum_level"] else None,
+                "image_url": row["image_url"]
             }
             for row in rows
         ]
