@@ -82,6 +82,7 @@ class AnswerEntry(BaseEntry):
     transcriptionEn: str
     transcriptionAdjusted: str
     answerOptimumLevel: Optional[int] = None
+    imageUrl: Optional[str] = None
 
 class BonusMalusEntry(BaseEntry):
     nameFr: str
@@ -467,7 +468,7 @@ SYNC_CONFIGS = {
         "table_name": "brain_answer",
         "airtable_table": "Answer",
         "columns": ["id", "transcription_fr", "transcription_en", "transcription_adjusted",
-                   "answer_optimum_level",  # NEW: Add this line
+                   "answer_optimum_level", "image_url",
                    "airtable_record_id", "last_modified_time_ref", "created_at", "update_at", "live"]
     },
     "interaction": {
@@ -644,7 +645,8 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "priority": "priority",
         "conditions": "conditions",
         "videoUrl": "video_url",
-        "videoPosterUrl": "video_poster_url"
+        "videoPosterUrl": "video_poster_url",
+        "imageUrl": "image_url"
     }
     
     for old_key, new_key in field_mappings.items():
