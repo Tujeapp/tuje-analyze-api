@@ -307,6 +307,67 @@ class CloudinaryService:
             logger.exception(e)
             return None
 
+    
+    @staticmethod
+    async def upload_subtopic_image_from_url(
+        airtable_url: str,
+        subtopic_id: str
+    ) -> Optional[str]:
+        """
+        Upload subtopic image from Airtable URL to Cloudinary
+        
+        Folder structure: tuje/images/subtopics/{subtopic_id}
+        
+        Args:
+            airtable_url: URL of image in Airtable
+            subtopic_id: Unique subtopic ID
+            
+        Returns:
+            Cloudinary URL with transformations or None if failed
+        """
+        try:
+            # Clean subtopic ID for folder name (replace hyphens with underscores)
+            clean_subtopic_id = subtopic_id.replace('-', '_')
+            
+            # Use existing folder constant
+            folder = CloudinaryService.IMAGE_BASE_FOLDER  # "tuje/images/subtopics"
+            
+            logger.info(f"📤 Uploading subtopic image")
+            logger.info(f"   📁 Folder: {folder}")
+            logger.info(f"   📄 Public ID: {clean_subtopic_id}")
+            
+            # Upload to Cloudinary
+            result = cloudinary.uploader.upload(
+                airtable_url,
+                resource_type="image",
+                folder=folder,
+                public_id=clean_subtopic_id,
+                overwrite=True,
+                use_filename=False,
+                unique_filename=False,
+                eager=[CloudinaryService.IMAGE_TRANSFORMATION],
+                eager_async=False,
+                invalidate=True
+            )
+            
+            # Log what Cloudinary actually saved
+            actual_public_id = result.get('public_id', 'UNKNOWN')
+            logger.info(f"   ✅ Cloudinary saved: {actual_public_id}")
+            
+            # Build optimized URL
+            optimized_url = cloudinary.CloudinaryImage(result['public_id']).build_url(
+                **CloudinaryService.IMAGE_TRANSFORMATION
+            )
+            
+            logger.info(f"✅ Subtopic image uploaded: {optimized_url}")
+            
+            return optimized_url
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to upload subtopic image {subtopic_id}: {e}")
+            logger.exception(e)
+            return None
+
 
 # ============================================
 # Utility functions for cost optimization
