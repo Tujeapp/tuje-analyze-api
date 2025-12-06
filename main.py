@@ -21,6 +21,7 @@ from session_management_router import router as session_router
 from routers.session_router import router as session_router
 from upload_video_simplified import router as video_router
 from upload_answer_image import router as answer_image_router
+from upload_subtopic_image import router as subtopic_image_router
 
 # BUBBLE ROUTER - Choose ONE of these options:
 
@@ -78,6 +79,7 @@ app.include_router(session_router, prefix="/api/session", tags=["session_managem
 app.include_router(session_router, prefix="/api/session", tags=["session_management"])
 app.include_router(video_router)
 app.include_router(answer_image_router)
+app.include_router(subtopic_image_router)
 
 # Bubble Integration Router
 app.include_router(bubble_router, prefix="/api/bubble", tags=["bubble_integration"])
