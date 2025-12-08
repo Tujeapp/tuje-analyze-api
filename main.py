@@ -79,7 +79,6 @@ app.include_router(session_router, prefix="/api/session", tags=["session_managem
 app.include_router(session_router, prefix="/api/session", tags=["session_management"])
 app.include_router(video_router)
 app.include_router(answer_image_router)
-app.include_router(subtopic_image_router)
 app.include_router(subtopic_media_router)
 
 # Bubble Integration Router
