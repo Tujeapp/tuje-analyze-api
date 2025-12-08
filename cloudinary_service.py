@@ -33,6 +33,8 @@ class CloudinaryService:
     TUTORIAL_FOLDER = "tuje/videos/tutorials"
     UI_FOLDER = "tuje/images/ui"
     ANSWER_IMAGE_FOLDER = "tuje/images/answers"
+    SUBTOPIC_VIDEO_FOLDER = "tuje/videos/subtopics"
+    SUBTOPIC_ICON_FOLDER = "tuje/images/subtopics"
     
     # Video transformation for mobile optimization
     VIDEO_TRANSFORMATION = {
@@ -58,6 +60,15 @@ class CloudinaryService:
         'fetch_format': 'auto',
         'width': 300,
         'crop': 'limit'
+    }
+
+    ICON_IMAGE_TRANSFORMATION = {
+    'quality': 'auto:good',
+    'fetch_format': 'auto',
+    'width': 200,
+    'height': 200,
+    'crop': 'fill',
+    'gravity': 'center'
     }
 
     @staticmethod
@@ -365,6 +376,116 @@ class CloudinaryService:
             
         except Exception as e:
             logger.error(f"❌ Failed to upload subtopic image {subtopic_id}: {e}")
+            logger.exception(e)
+            return None
+
+
+    @staticmethod
+    async def upload_subtopic_video_cover_from_url(
+        airtable_url: str,
+        subtopic_id: str
+    ) -> Optional[str]:
+        """
+        Upload subtopic video cover from Airtable URL to Cloudinary
+        
+        Folder structure: tuje/videos/subtopics/{subtopic_id}
+        
+        Args:
+            airtable_url: URL of video in Airtable
+            subtopic_id: Unique subtopic ID
+            
+        Returns:
+            Cloudinary URL with transformations or None if failed
+        """
+        try:
+            clean_subtopic_id = subtopic_id.replace('-', '_')
+            folder = CloudinaryService.SUBTOPIC_VIDEO_FOLDER
+            
+            logger.info(f"📤 Uploading subtopic video cover")
+            logger.info(f"   📁 Folder: {folder}")
+            logger.info(f"   📄 Public ID: {clean_subtopic_id}")
+            
+            result = cloudinary.uploader.upload(
+                airtable_url,
+                resource_type="video",
+                folder=folder,
+                public_id=clean_subtopic_id,
+                overwrite=True,
+                use_filename=False,
+                unique_filename=False,
+                eager=[CloudinaryService.VIDEO_TRANSFORMATION],
+                eager_async=False,
+                invalidate=True,
+                timeout=120
+            )
+            
+            actual_public_id = result.get('public_id', 'UNKNOWN')
+            logger.info(f"   ✅ Cloudinary saved: {actual_public_id}")
+            
+            optimized_url = cloudinary.CloudinaryVideo(result['public_id']).build_url(
+                **CloudinaryService.VIDEO_TRANSFORMATION
+            )
+            
+            logger.info(f"✅ Subtopic video cover uploaded: {optimized_url}")
+            
+            return optimized_url
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to upload subtopic video cover {subtopic_id}: {e}")
+            logger.exception(e)
+            return None
+
+    @staticmethod
+    async def upload_subtopic_icon_from_url(
+        airtable_url: str,
+        subtopic_id: str
+    ) -> Optional[str]:
+        """
+        Upload subtopic icon image from Airtable URL to Cloudinary
+        
+        Folder structure: tuje/images/subtopics/{subtopic_id}
+        
+        Args:
+            airtable_url: URL of image in Airtable
+            subtopic_id: Unique subtopic ID
+            
+        Returns:
+            Cloudinary URL with transformations or None if failed
+        """
+        try:
+            clean_subtopic_id = subtopic_id.replace('-', '_')
+            folder = CloudinaryService.SUBTOPIC_ICON_FOLDER
+            
+            logger.info(f"📤 Uploading subtopic icon")
+            logger.info(f"   📁 Folder: {folder}")
+            logger.info(f"   📄 Public ID: {clean_subtopic_id}")
+            
+            result = cloudinary.uploader.upload(
+                airtable_url,
+                resource_type="image",
+                folder=folder,
+                public_id=clean_subtopic_id,
+                overwrite=True,
+                use_filename=False,
+                unique_filename=False,
+                eager=[CloudinaryService.ICON_IMAGE_TRANSFORMATION],
+                eager_async=False,
+                invalidate=True
+            )
+            
+            actual_public_id = result.get('public_id', 'UNKNOWN')
+            logger.info(f"   ✅ Cloudinary saved: {actual_public_id}")
+            
+            optimized_url = cloudinary.CloudinaryImage(result['public_id']).build_url(
+                **CloudinaryService.ICON_IMAGE_TRANSFORMATION
+            )
+            
+            logger.info(f"✅ Subtopic icon uploaded: {optimized_url}")
+            
+            return optimized_url
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to upload subtopic icon {subtopic_id}: {e}")
             logger.exception(e)
             return None
 
