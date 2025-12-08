@@ -417,9 +417,11 @@ class IntentEntry(BaseEntry):
 class SubtopicEntry(BaseEntry):
     nameFr: str
     nameEn: str
-    descriptionFr: str
-    descriptionEn: str
-    boredom: float
+    descriptionFr: Optional[str] = None
+    descriptionEn: Optional[str] = None
+    boredom: Optional[float] = None
+    videoCoverUrl: Optional[str] = None
+    imageIconUrl: Optional[str] = None 
     
     @validator('nameFr', 'nameEn', 'descriptionFr', 'descriptionEn')
     def validate_text_fields(cls, v):
@@ -509,7 +511,8 @@ SYNC_CONFIGS = {
     "subtopic": {
         "table_name": "brain_subtopic",
         "airtable_table": "Subtopic",
-        "columns": ["id", "name_fr", "name_en", "description_fr", "description_en", "boredom",  # ✅ Added new columns
+        "columns": ["id", "name_fr", "name_en", "description_fr", "description_en", "boredom",
+                   "video_cover_url", "image_icon_url",
                    "airtable_record_id", "last_modified_time_ref", 
                    "created_at", "update_at", "live"]
     },
@@ -646,6 +649,8 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "conditions": "conditions",
         "videoUrl": "video_url",
         "videoPosterUrl": "video_poster_url",
+        "videoCoverUrl": "video_cover_url",
+        "imageIconUrl": "image_icon_url", 
         "imageUrl": "image_url"
     }
     
