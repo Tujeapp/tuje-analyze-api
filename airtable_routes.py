@@ -578,6 +578,16 @@ SYNC_CONFIGS = {
                    "airtable_record_id", "last_modified_time_ref", 
                    "created_at", "update_at", "live"]
     },
+    "mistake": {
+        "table_name": "brain_mistake",
+        "airtable_table": "Mistake",
+        "columns": [
+            "id", "name_fr", "name_en", 
+            "description_fr", "description_en",
+            "type", "rule_code", "conditions",
+            "airtable_record_id", "last_modified_time_ref",
+            "created_at", "update_at", "live"]
+    },
     "hint": {
         "table_name": "brain_hint",
         "airtable_table": "Hint",
@@ -885,6 +895,11 @@ async def webhook_sync_session_mood(entry: SessionMoodEntry, background_tasks: B
 async def webhook_sync_interest(entry: InterestEntry, background_tasks: BackgroundTasks):
     """Webhook endpoint to sync interest data from Airtable"""
     return await generic_sync_webhook(entry, "interest", background_tasks)
+
+@router.post("/webhook-sync-mistake")
+async def webhook_sync_mistake(entry: MistakeEntry, background_tasks: BackgroundTasks):
+    """Webhook endpoint to sync mistake data from Airtable"""
+    return await generic_sync_webhook(entry, "mistake", background_tasks)
 
 # Health check endpoint
 @router.get("/sync-health")
