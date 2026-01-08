@@ -314,6 +314,48 @@ class InteractionEntry(BaseEntry):
         # Filter out None/empty values
         return [str(item).strip() for item in v if item and str(item).strip()]
 
+class MistakeEntry(BaseEntry):
+    """Pydantic model for Mistake table sync"""
+    nameFr: str
+    nameEn: str
+    descriptionFr: Optional[str] = None
+    descriptionEn: Optional[str] = None
+    type: Optional[str] = None  # Single select value
+    ruleCode: Optional[str] = None
+    conditions: Optional[str] = None
+    
+    @validator('nameFr', 'nameEn')
+    def validate_name_fields(cls, v):
+        if not v or len(v.strip()) == 0:
+            raise ValueError('Name fields cannot be empty')
+        if len(v) > 255:
+            raise ValueError('Name fields cannot exceed 255 characters')
+        return v.strip()
+    
+    @validator('descriptionFr', 'descriptionEn', 'conditions')
+    def validate_text_fields(cls, v):
+        if v is not None and len(v.strip()) > 0:
+            return v.strip()
+        return v
+    
+    @validator('type')
+    def validate_type(cls, v):
+        if v is not None:
+            v = v.strip()
+            if len(v) == 0:
+                return None
+        return v
+    
+    @validator('ruleCode')
+    def validate_rule_code(cls, v):
+        if v is not None:
+            v = v.strip()
+            if len(v) == 0:
+                return None
+            if len(v) > 255:
+                raise ValueError('Rule code cannot exceed 255 characters')
+        return v
+
 class InterestEntry(BaseEntry):
     name: str
     subtopicsIds: List[str]  # Array of subtopic IDs
