@@ -480,26 +480,15 @@ class SubtopicEntry(BaseEntry):
         return round(v, 2)
 
 class InteractionAnswerEntry(BaseEntry):
-    """Pydantic model for Interaction-Answer junction table sync"""
     interactionId: str
     answerId: str
-    listOfMistakes: Optional[List[str]] = None  # NEW: Array of mistake IDs
+    listOfMistakes: Optional[List[str]] = None  # ⭐ ADD THIS
     
     @validator('listOfMistakes', pre=True, always=True)
     def clean_list_of_mistakes(cls, v):
-        """
-        Clean and validate the list of mistake IDs
-        Handles lookup field data from Airtable
-        """
         if v is None:
             return []
-        if isinstance(v, str):
-            # Handle comma-separated string from lookup field
-            if ',' in v:
-                return [mid.strip() for mid in v.split(',') if mid.strip()]
-            return [v.strip()] if v.strip() else []
         if isinstance(v, list):
-            # Filter out None/empty values and clean whitespace
             return [str(item).strip() for item in v if item and str(item).strip()]
         return []
 
