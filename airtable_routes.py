@@ -480,14 +480,28 @@ class SubtopicEntry(BaseEntry):
         return round(v, 2)
 
 class InteractionAnswerEntry(BaseEntry):
-    interaction_id: str
-    answer_id: str
+    """Pydantic model for Interaction-Answer junction table sync"""
+    interactionId: str
+    answerId: str
+    listOfMistakes: Optional[List[str]] = None  # NEW: Array of mistake IDs
     
-    @validator('interaction_id', 'answer_id')
-    def validate_ids(cls, v):
-        if not v or len(v.strip()) == 0:
-            raise ValueError('Interaction ID and Answer ID cannot be empty')
-        return v.strip()
+    @validator('listOfMistakes', pre=True, always=True)
+    def clean_list_of_mistakes(cls, v):
+        """
+        Clean and validate the list of mistake IDs
+        Handles lookup field data from Airtable
+        """
+        if v is None:
+            return []
+        if isinstance(v, str):
+            # Handle comma-separated string from lookup field
+            if ',' in v:
+                return [mid.strip() for mid in v.split(',') if mid.strip()]
+            return [v.strip()] if v.strip() else []
+        if isinstance(v, list):
+            # Filter out None/empty values and clean whitespace
+            return [str(item).strip() for item in v if item and str(item).strip()]
+        return []
 
 class EntityEntry(BaseEntry):
     name: str
@@ -561,7 +575,7 @@ SYNC_CONFIGS = {
     "interaction_answer": {
         "table_name": "brain_interaction_answer",
         "airtable_table": "Interaction-Answer",
-        "columns": ["id", "interaction_id", "answer_id", "airtable_record_id",
+        "columns": ["id", "interaction_id", "answer_id", "list_of_mistakes", "airtable_record_id",
                    "last_modified_time_ref", "created_at", "update_at", "live"]
     },
     "entity": {
@@ -694,6 +708,7 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "sessionMoodIds": "session_mood_ids",
         "subtopicsIds": "subtopic_ids",
         "subtopicId": "subtopic_id",
+        "listOfMistakes": "list_of_mistakes",
         "bonusMalusType": "bonus_malus_type",
         "ruleCode": "rule_code",
         "value": "value",
