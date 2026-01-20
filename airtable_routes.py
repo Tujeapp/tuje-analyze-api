@@ -707,7 +707,9 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "videoPosterUrl": "video_poster_url",
         "videoCoverUrl": "video_cover_url",
         "imageIconUrl": "image_icon_url", 
-        "imageUrl": "image_url"
+        "imageUrl": "image_url",
+        "interactionId": "interaction_id",
+        "answerId": "answer_id"
     }
     
     for old_key, new_key in field_mappings.items():
