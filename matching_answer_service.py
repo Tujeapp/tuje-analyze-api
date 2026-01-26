@@ -32,7 +32,7 @@ class AnswerMatchingService:
         self, 
         interaction_id: str, 
         completed_transcript: str,
-        threshold: int = 85,
+        threshold: int = 80,
         pool: Optional[asyncpg.Pool] = None
     ) -> Dict:
         """
@@ -289,7 +289,7 @@ class AnswerMatchingService:
                 "ttl_seconds": self.cache_ttl_seconds,
                 "last_refresh": self.cache_timestamp
             },
-            "default_threshold": 85,
+            "default_threshold": 80,
             "fuzzy_matching_algorithm": "rapidfuzz.fuzz.ratio"
         }
 
