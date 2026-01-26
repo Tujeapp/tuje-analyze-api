@@ -298,7 +298,7 @@ async def get_matching_service_stats():
 async def test_matching_workflow(
     interaction_id: str,
     original_transcript: str,
-    threshold: int = 85,
+    threshold: int = 80,
     auto_adjust: bool = True
 ):
     """
