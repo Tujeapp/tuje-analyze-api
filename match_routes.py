@@ -34,7 +34,7 @@ class MatchAnswerRequest(BaseModel):
     """Request for matching user answer against expected answers"""
     interaction_id: str
     user_transcription: str
-    threshold: int = 85
+    threshold: int = 80
     auto_adjust: bool = True  # Enable/disable automatic transcription adjustment
     user_id: Optional[str] = None
 
@@ -237,7 +237,7 @@ async def match_answer_legacy(request: MatchAnswerRequest):
 async def test_match_with_adjustment(
     original_transcript: str,
     interaction_id: str,
-    threshold: int = 85,
+    threshold: int = 80,
     auto_adjust: bool = True
 ):
     """Test endpoint to see adjustment + matching in action"""
