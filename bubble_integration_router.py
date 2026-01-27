@@ -164,7 +164,7 @@ class BubbleMatchingRequest(BaseModel):
     """Bubble-optimized answer matching request"""
     interaction_id: str
     completed_transcript: str
-    threshold: int = 85
+    threshold: int = 80
     user_id: Optional[str] = None
     
     @validator('completed_transcript')
