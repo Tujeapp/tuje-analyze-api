@@ -11,7 +11,7 @@ class MatchAnswerRequest(BaseModel):
     """Request to match a completed transcript against interaction answers"""
     interaction_id: str
     completed_transcript: str
-    threshold: int = 85
+    threshold: int = 80
     user_id: Optional[str] = None
     
     @validator('interaction_id')
@@ -83,7 +83,7 @@ class CombinedAdjustmentAndMatchRequest(BaseModel):
     """
     interaction_id: str
     original_transcript: str  # Raw user transcript
-    threshold: int = 85
+    threshold: int = 80
     user_id: Optional[str] = None
     # Adjustment settings
     auto_adjust: bool = True
