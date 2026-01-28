@@ -193,6 +193,7 @@ class BubbleMatchingResponse(BaseModel):
     
     match_found: bool
     matched_answer_id: Optional[str] = None
+    matched_interaction_answer_id: Optional[str] = None
     similarity_score: Optional[float] = None
     expected_answer: Optional[str] = None
     
@@ -254,6 +255,7 @@ async def bubble_answer_matching(request: BubbleMatchingRequest):
             threshold=request.threshold,
             match_found=match_result.match_found,
             matched_answer_id=match_result.answer_id,
+            matched_interaction_answer_id=match_result.interaction_answer_id,
             similarity_score=match_result.similarity_score,
             expected_answer=match_result.expected_transcript,
             answer_french=match_result.answer_details.transcription_fr if match_result.answer_details else None,
