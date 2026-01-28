@@ -39,11 +39,21 @@ class TextCleaner:
         return result
     
     def remove_punctuation(self, text: str, keep_decimal_commas: bool = True) -> str:
-        """Remove punctuation, optionally keeping commas for decimals"""
+        """Remove punctuation, keeping commas ONLY between numbers/entityNumber"""
         if keep_decimal_commas:
-            return re.sub(r'[^\w\s,]', ' ', text)
-        else:
-            return re.sub(r'[^\w\s]', ' ', text)
+        # Step 1: Protect decimal commas (between digits or entityNumber)
+        protected = re.sub(
+            r'((?:entitynumber|\d)),(?=(?:entitynumber|\d))',
+            r'\1DECIMAL_COMMA_PLACEHOLDER',
+            text,
+            flags=re.IGNORECASE
+        )
+        # Step 2: Remove ALL punctuation (including regular commas)
+        cleaned = re.sub(r'[^\w\s]', ' ', protected)
+        # Step 3: Restore decimal commas
+        return cleaned.replace('DECIMAL_COMMA_PLACEHOLDER', ',')
+    else:
+        return re.sub(r'[^\w\s]', ' ', text)
     
     def normalize_whitespace(self, text: str) -> str:
         """Normalize all whitespace to single spaces"""
