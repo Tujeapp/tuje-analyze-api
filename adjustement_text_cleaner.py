@@ -39,8 +39,8 @@ class TextCleaner:
         return result
     
     def remove_punctuation(self, text: str, keep_decimal_commas: bool = True) -> str:
-        """Remove punctuation, keeping commas ONLY between numbers/entityNumber"""
-        if keep_decimal_commas:
+    """Remove punctuation, keeping commas ONLY between numbers/entityNumber"""
+    if keep_decimal_commas:
         # Step 1: Protect decimal commas (between digits or entityNumber)
         protected = re.sub(
             r'((?:entitynumber|\d)),(?=(?:entitynumber|\d))',
