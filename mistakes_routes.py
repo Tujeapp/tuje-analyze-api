@@ -97,47 +97,26 @@ class GetAnswerMistakesResponse(BaseModel):
 # ENDPOINT
 # ============================================================
 
-@router.post("/get-answer-mistakes", response_model=GetAnswerMistakesResponse)
-async def get_answer_mistakes(request: GetAnswerMistakesRequest):
+@router.get("/get-answer-mistakes/{interaction_answer_id}", response_model=GetAnswerMistakesResponse)
+async def get_answer_mistakes_by_id(interaction_answer_id: str):
     """
-    Get detailed mistake information for a matched answer.
+    Get full mistake details using interaction_answer_id.
     
-    This endpoint fetches all mistakes associated with a brain_interaction_answer
-    record and returns full details for each mistake.
+    **URL:** GET /api/bubble/get-answer-mistakes/INTANS202407190601
     
-    **Usage from Bubble:**
-    After answer matching, call this endpoint with either:
-    - The interaction_answer_id directly
-    - OR the interaction_id + answer_id combination
-    
-    **Response includes:**
-    - has_mistakes: boolean to quickly check if there are mistakes
-    - mistake_count: number of mistakes
-    - mistakes: array of full mistake details (name, description, type, etc.)
-    
-    **Example Request:**
-    ```json
-    {
-        "interaction_id": "INT202407190201",
-        "answer_id": "ANS202407190648"
-    }
-    ```
-    
-    **Example Response:**
+    **Response:**
     ```json
     {
         "success": true,
         "has_mistakes": true,
-        "mistake_count": 2,
+        "mistake_count": 1,
         "mistakes": [
             {
                 "id": "MIST202407271502",
                 "name_fr": "Accord du participe passé",
                 "name_en": "Past participle agreement",
-                "description_fr": "Le participe passé doit s'accorder...",
-                "description_en": "The past participle must agree...",
-                "type": "grammar",
-                "rule_code": "PP_AGREE_01"
+                "description_fr": "...",
+                "type": "grammar"
             }
         ]
     }
@@ -149,92 +128,55 @@ async def get_answer_mistakes(request: GetAnswerMistakesRequest):
         conn = await asyncpg.connect(DATABASE_URL)
         
         try:
-            # Step 1: Get the interaction_answer record with list_of_mistakes
-            if request.interaction_answer_id:
-                # Direct lookup by ID
-                ia_row = await conn.fetchrow("""
-                    SELECT id, interaction_id, answer_id, list_of_mistakes
-                    FROM brain_interaction_answer
-                    WHERE id = $1 AND live = TRUE
-                """, request.interaction_answer_id)
-                
-                if not ia_row:
-                    processing_time = round((time.time() - start_time) * 1000, 2)
-                    return GetAnswerMistakesResponse(
-                        success=False,
-                        processing_time_ms=processing_time,
-                        timestamp=datetime.now().isoformat(),
-                        interaction_answer_id=request.interaction_answer_id,
-                        has_mistakes=False,
-                        mistake_count=0,
-                        mistakes=[],
-                        error=f"Interaction-Answer record not found: {request.interaction_answer_id}"
-                    )
-            else:
-                # Lookup by interaction_id + answer_id combination
-                ia_row = await conn.fetchrow("""
-                    SELECT id, interaction_id, answer_id, list_of_mistakes
-                    FROM brain_interaction_answer
-                    WHERE interaction_id = $1 AND answer_id = $2 AND live = TRUE
-                """, request.interaction_id, request.answer_id)
-                
-                if not ia_row:
-                    processing_time = round((time.time() - start_time) * 1000, 2)
-                    return GetAnswerMistakesResponse(
-                        success=False,
-                        processing_time_ms=processing_time,
-                        timestamp=datetime.now().isoformat(),
-                        interaction_id=request.interaction_id,
-                        answer_id=request.answer_id,
-                        has_mistakes=False,
-                        mistake_count=0,
-                        mistakes=[],
-                        error=f"Interaction-Answer record not found for interaction={request.interaction_id}, answer={request.answer_id}"
-                    )
+            # Step 1: Get the interaction_answer record
+            ia_row = await conn.fetchrow("""
+                SELECT id, interaction_id, answer_id, list_of_mistakes
+                FROM brain_interaction_answer
+                WHERE id = $1 AND live = TRUE
+            """, interaction_answer_id.strip())
             
-            # Extract data from the found record
-            interaction_answer_id = ia_row['id']
-            interaction_id = ia_row['interaction_id']
-            answer_id = ia_row['answer_id']
+            if not ia_row:
+                processing_time = round((time.time() - start_time) * 1000, 2)
+                return GetAnswerMistakesResponse(
+                    success=False,
+                    processing_time_ms=processing_time,
+                    timestamp=datetime.now().isoformat(),
+                    interaction_answer_id=interaction_answer_id,
+                    has_mistakes=False,
+                    mistake_count=0,
+                    mistakes=[],
+                    error="Interaction-Answer record not found"
+                )
+            
             list_of_mistakes = ia_row['list_of_mistakes'] or []
             
-            logger.info(f"Found interaction_answer {interaction_answer_id} with {len(list_of_mistakes)} mistakes")
-            
-            # Step 2: If no mistakes, return early
-            if not list_of_mistakes or len(list_of_mistakes) == 0:
+            # Step 2: No mistakes = return early
+            if not list_of_mistakes:
                 processing_time = round((time.time() - start_time) * 1000, 2)
                 return GetAnswerMistakesResponse(
                     success=True,
                     processing_time_ms=processing_time,
                     timestamp=datetime.now().isoformat(),
-                    interaction_answer_id=interaction_answer_id,
-                    interaction_id=interaction_id,
-                    answer_id=answer_id,
+                    interaction_answer_id=ia_row['id'],
+                    interaction_id=ia_row['interaction_id'],
+                    answer_id=ia_row['answer_id'],
                     has_mistakes=False,
                     mistake_count=0,
                     mistakes=[],
                     mistake_ids=[]
                 )
             
-            # Step 3: Fetch full details for each mistake
+            # Step 3: Fetch full mistake details
             mistakes_rows = await conn.fetch("""
                 SELECT 
-                    id,
-                    name_fr,
-                    name_en,
-                    description_fr,
-                    description_en,
-                    type,
-                    rule_code,
-                    conditions
+                    id, name_fr, name_en,
+                    description_fr, description_en,
+                    type, rule_code, conditions
                 FROM brain_mistake
                 WHERE id = ANY($1::varchar[]) AND live = TRUE
-                ORDER BY 
-                    CASE WHEN type IS NOT NULL THEN 0 ELSE 1 END,
-                    name_fr ASC
+                ORDER BY name_fr ASC
             """, list_of_mistakes)
             
-            # Convert to MistakeDetail objects
             mistakes = [
                 MistakeDetail(
                     id=row['id'],
@@ -249,23 +191,16 @@ async def get_answer_mistakes(request: GetAnswerMistakesRequest):
                 for row in mistakes_rows
             ]
             
-            # Log if some mistakes weren't found (data integrity check)
-            found_ids = {row['id'] for row in mistakes_rows}
-            missing_ids = set(list_of_mistakes) - found_ids
-            if missing_ids:
-                logger.warning(f"Some mistake IDs not found in brain_mistake: {missing_ids}")
-            
             processing_time = round((time.time() - start_time) * 1000, 2)
-            
             logger.info(f"✅ Retrieved {len(mistakes)} mistakes in {processing_time}ms")
             
             return GetAnswerMistakesResponse(
                 success=True,
                 processing_time_ms=processing_time,
                 timestamp=datetime.now().isoformat(),
-                interaction_answer_id=interaction_answer_id,
-                interaction_id=interaction_id,
-                answer_id=answer_id,
+                interaction_answer_id=ia_row['id'],
+                interaction_id=ia_row['interaction_id'],
+                answer_id=ia_row['answer_id'],
                 has_mistakes=len(mistakes) > 0,
                 mistake_count=len(mistakes),
                 mistakes=mistakes,
@@ -275,20 +210,6 @@ async def get_answer_mistakes(request: GetAnswerMistakesRequest):
         finally:
             await conn.close()
             
-    except ValueError as ve:
-        # Validation error
-        processing_time = round((time.time() - start_time) * 1000, 2)
-        logger.error(f"Validation error: {ve}")
-        return GetAnswerMistakesResponse(
-            success=False,
-            processing_time_ms=processing_time,
-            timestamp=datetime.now().isoformat(),
-            has_mistakes=False,
-            mistake_count=0,
-            mistakes=[],
-            error=str(ve)
-        )
-        
     except Exception as e:
         processing_time = round((time.time() - start_time) * 1000, 2)
         logger.error(f"❌ Error fetching mistakes: {e}")
@@ -296,9 +217,7 @@ async def get_answer_mistakes(request: GetAnswerMistakesRequest):
             success=False,
             processing_time_ms=processing_time,
             timestamp=datetime.now().isoformat(),
-            interaction_answer_id=request.interaction_answer_id,
-            interaction_id=request.interaction_id,
-            answer_id=request.answer_id,
+            interaction_answer_id=interaction_answer_id,
             has_mistakes=False,
             mistake_count=0,
             mistakes=[],
@@ -316,17 +235,29 @@ class CheckMistakesResponse(BaseModel):
     has_mistakes: bool
     mistake_count: int
     mistake_ids: List[str] = []
+    interaction_answer_id: Optional[str] = None
+    error: Optional[str] = None
 
 
-@router.get("/check-mistakes/{interaction_id}/{answer_id}", response_model=CheckMistakesResponse)
-async def check_mistakes(interaction_id: str, answer_id: str):
+@router.get("/check-mistakes/{interaction_answer_id}", response_model=CheckMistakesResponse)
+async def check_mistakes(interaction_answer_id: str):
     """
-    Quick check if an answer has associated mistakes.
+    Quick check if an answer has mistakes (without full details).
     
-    Lightweight endpoint - returns only IDs, not full details.
-    Use this for conditional UI logic before fetching full details.
+    Uses the interaction_answer_id directly from the matching process result.
     
-    **Usage:** GET /api/bubble/check-mistakes/INT202407190201/ANS202407190648
+    **URL:** GET /api/bubble/check-mistakes/INTANS202407190601
+    
+    **Response:**
+    ```json
+    {
+        "success": true,
+        "has_mistakes": true,
+        "mistake_count": 2,
+        "mistake_ids": ["MIST202407271502", "MIST202407271503"],
+        "interaction_answer_id": "INTANS202407190601"
+    }
+    ```
     """
     try:
         conn = await asyncpg.connect(DATABASE_URL)
@@ -335,14 +266,16 @@ async def check_mistakes(interaction_id: str, answer_id: str):
             row = await conn.fetchrow("""
                 SELECT list_of_mistakes
                 FROM brain_interaction_answer
-                WHERE interaction_id = $1 AND answer_id = $2 AND live = TRUE
-            """, interaction_id, answer_id)
+                WHERE id = $1 AND live = TRUE
+            """, interaction_answer_id.strip())
             
             if not row:
                 return CheckMistakesResponse(
                     success=False,
                     has_mistakes=False,
-                    mistake_count=0
+                    mistake_count=0,
+                    interaction_answer_id=interaction_answer_id,
+                    error="Interaction-Answer record not found"
                 )
             
             mistakes = row['list_of_mistakes'] or []
@@ -351,7 +284,8 @@ async def check_mistakes(interaction_id: str, answer_id: str):
                 success=True,
                 has_mistakes=len(mistakes) > 0,
                 mistake_count=len(mistakes),
-                mistake_ids=mistakes
+                mistake_ids=mistakes,
+                interaction_answer_id=interaction_answer_id
             )
             
         finally:
@@ -362,5 +296,7 @@ async def check_mistakes(interaction_id: str, answer_id: str):
         return CheckMistakesResponse(
             success=False,
             has_mistakes=False,
-            mistake_count=0
+            mistake_count=0,
+            interaction_answer_id=interaction_answer_id,
+            error=str(e)
         )
