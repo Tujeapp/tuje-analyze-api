@@ -24,6 +24,7 @@ from upload_answer_image import router as answer_image_router
 from upload_subtopic_media import router as subtopic_media_router
 from mistakes_routes import router as mistakes_router
 from routers.transcription_audio_router import router as transcription_audio_router
+from routers.complete_interaction_router import router as complete_interaction_router
 
 # BUBBLE ROUTER - Choose ONE of these options:
 
@@ -84,6 +85,7 @@ app.include_router(answer_image_router)
 app.include_router(subtopic_media_router)
 app.include_router(mistakes_router, prefix="/api/bubble", tags=["Bubble - Mistakes"])
 app.include_router(transcription_audio_router, prefix="/api", tags=["transcription"])
+app.include_router(complete_interaction_router, prefix="/api/session", tags=["session_management"])
 
 # Bubble Integration Router
 app.include_router(bubble_router, prefix="/api/bubble", tags=["bubble_integration"])
