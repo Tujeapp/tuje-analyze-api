@@ -31,7 +31,7 @@ async def complete_interaction(request: CompleteInteractionRequest):
     try:
         async with pool.acquire() as conn:
 
-            # 1. Mark current interaction complete + save score
+            # 1. Mark current interaction complete
             interaction_score = int(request.similarity_score)
             await conn.execute("""
                 UPDATE session_interaction
@@ -49,46 +49,58 @@ async def complete_interaction(request: CompleteInteractionRequest):
 
             # 3. Cycle complete after 7 interactions
             if completed_count >= 7:
+
                 # Mark cycle complete
                 await conn.execute("""
                     UPDATE session_cycle
-                    SET status = 'complete', updated_at = NOW()
-                    WHERE id = $1
-                """, request.cycle_id)
+                    SET status = 'complete',
+                        completed_at = NOW(),
+                        completed_interactions = $1
+                    WHERE id = $2
+                """, completed_count, request.cycle_id)
 
-                # Check if session is complete (3 cycles)
+                # Count completed cycles in session
                 completed_cycles = await conn.fetchval("""
                     SELECT COUNT(*) FROM session_cycle
                     WHERE session_id = $1 AND status = 'complete'
                 """, request.session_id)
 
                 if completed_cycles >= 3:
+                    # Mark session complete
                     await conn.execute("""
-                        UPDATE brain_session
-                        SET status = 'complete', updated_at = NOW()
-                        WHERE id = $1
-                    """, request.session_id)
+                        UPDATE session
+                        SET status = 'complete',
+                            completed_at = NOW(),
+                            completed_cycles = $1
+                        WHERE id = $2
+                    """, completed_cycles, request.session_id)
                     return CompleteInteractionResponse(
                         success=True,
                         session_complete=True
                     )
 
-                # Start new cycle — pick next subtopic
+                # Start new cycle
                 subtopic = await conn.fetchrow("""
                     SELECT id FROM brain_subtopic
                     WHERE live = TRUE
                     ORDER BY RANDOM() LIMIT 1
                 """)
 
+                if not subtopic:
+                    raise HTTPException(status_code=500, detail="No subtopics available")
+
                 new_cycle_id = f"CYCLE_{uuid.uuid4().hex[:16].upper()}"
+                cycle_number = await conn.fetchval("""
+                    SELECT COALESCE(MAX(cycle_number), 0) + 1
+                    FROM session_cycle WHERE session_id = $1
+                """, request.session_id)
+
                 await conn.execute("""
                     INSERT INTO session_cycle
-                    (id, session_id, cycle_number, status, created_at, updated_at)
-                    VALUES ($1, $2,
-                        (SELECT COALESCE(MAX(cycle_number),0)+1
-                         FROM session_cycle WHERE session_id = $3),
-                        'active', NOW(), NOW())
-                """, new_cycle_id, request.session_id, request.session_id)
+                    (id, session_id, subtopic_id, cycle_number, status, started_at)
+                    VALUES ($1, $2, $3, $4, 'active', NOW())
+                """, new_cycle_id, request.session_id,
+                    subtopic['id'], cycle_number)
 
                 # Pick first interaction for new cycle
                 next_interaction = await conn.fetchrow("""
@@ -106,12 +118,12 @@ async def complete_interaction(request: CompleteInteractionRequest):
                         success=True, session_complete=True
                     )
 
-                new_interaction_id = f"INT_ACT_{uuid.uuid4().hex[:12].upper()}"
+                new_interaction_id = f"SINT_{uuid.uuid4().hex[:12].upper()}"
                 await conn.execute("""
                     INSERT INTO session_interaction
                     (id, session_id, cycle_id, brain_interaction_id,
-                     interaction_number, status, created_at, updated_at)
-                    VALUES ($1, $2, $3, $4, 1, 'active', NOW(), NOW())
+                     interaction_number, status, started_at)
+                    VALUES ($1, $2, $3, $4, 1, 'active', NOW())
                 """, new_interaction_id, request.session_id,
                     new_cycle_id, next_interaction['id'])
 
@@ -137,16 +149,15 @@ async def complete_interaction(request: CompleteInteractionRequest):
                     success=True, session_complete=True
                 )
 
-            new_interaction_id = f"INT_ACT_{uuid.uuid4().hex[:12].upper()}"
+            new_interaction_id = f"SINT_{uuid.uuid4().hex[:12].upper()}"
             await conn.execute("""
                 INSERT INTO session_interaction
                 (id, session_id, cycle_id, brain_interaction_id,
-                 interaction_number, status, created_at, updated_at)
-                VALUES ($1, $2, $3, $4,
-                    $5, 'active', NOW(), NOW())
+                 interaction_number, status, started_at)
+                VALUES ($1, $2, $3, $4, $5, 'active', NOW())
             """, new_interaction_id, request.session_id,
                 request.cycle_id, next_interaction['id'],
-                completed_count + 1)
+                int(completed_count) + 1)
 
             return CompleteInteractionResponse(
                 success=True,
