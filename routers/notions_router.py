@@ -14,7 +14,7 @@ async def get_notions():
                 SELECT id, name_fr, name_en, description
                 FROM brain_notion
                 WHERE live = TRUE
-                ORDER BY name_fr ASC
+                ORDER BY rank ASC NULLS LAST
             """)
             return {
                 "success": True,
