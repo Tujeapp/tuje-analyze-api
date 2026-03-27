@@ -2,34 +2,32 @@ from fastapi import APIRouter, UploadFile, File, HTTPException
 from openai import AsyncOpenAI
 import os
 import tempfile
+import logging
 
 router = APIRouter()
 client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+logger = logging.getLogger(__name__)
 
 @router.post("/transcribe-audio")
 async def transcribe_audio(audio: UploadFile = File(...)):
-    """
-    Accepts an audio file, sends to Whisper, returns transcript.
-    Called by iOS app after recording.
-    """
     try:
-        # Save upload to temp file (Whisper needs a real file, not bytes)
         suffix = ".m4a"
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             content = await audio.read()
             tmp.write(content)
             tmp_path = tmp.name
 
-        # Call Whisper
         with open(tmp_path, "rb") as f:
             response = await client.audio.transcriptions.create(
                 model="whisper-1",
                 file=f,
-                language="fr"  # French — faster and more accurate
+                language="fr"
             )
 
-        # Clean up temp file
         os.unlink(tmp_path)
+
+        # Log BEFORE return
+        logger.info(f"✅ Whisper transcribed: '{response.text}' — duration charged: {len(content)/16000:.1f}s")
 
         return {
             "success": True,
