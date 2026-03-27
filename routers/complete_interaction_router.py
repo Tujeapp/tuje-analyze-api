@@ -32,14 +32,14 @@ async def complete_interaction(request: CompleteInteractionRequest):
         async with pool.acquire() as conn:
 
             # 1. Mark current interaction complete + save score
-            interaction_rate = request.similarity_score / 100.0
+            interaction_score = int(request.similarity_score)
             await conn.execute("""
                 UPDATE session_interaction
                 SET status = 'complete',
-                    interaction_rate = $1,
-                    updated_at = NOW()
+                    interaction_score = $1,
+                    completed_at = NOW()
                 WHERE id = $2
-            """, interaction_rate, request.interaction_id)
+            """, interaction_score, request.interaction_id)
 
             # 2. Count completed interactions in this cycle
             completed_count = await conn.fetchval("""
