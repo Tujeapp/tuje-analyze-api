@@ -28,6 +28,7 @@ from routers.complete_interaction_router import router as complete_interaction_r
 from routers.notions_router import router as notions_router
 from routers.content_router import router as content_router
 
+
 # BUBBLE ROUTER - Choose ONE of these options:
 
 # OPTION 1: Use your existing single-file router (recommended for now)
@@ -90,6 +91,7 @@ app.include_router(transcription_audio_router, prefix="/api", tags=["transcripti
 app.include_router(complete_interaction_router, prefix="/api/session", tags=["session_management"])
 app.include_router(notions_router, prefix="/api", tags=["notions"])
 app.include_router(content_router, prefix="/api", tags=["content"])
+app.include_router(gpt_fallback_router, prefix="/api/gpt", tags=["gpt_fallback"])
 
 # Bubble Integration Router
 app.include_router(bubble_router, prefix="/api/bubble", tags=["bubble_integration"])
