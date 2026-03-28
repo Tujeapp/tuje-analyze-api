@@ -28,7 +28,6 @@ from routers.complete_interaction_router import router as complete_interaction_r
 from routers.notions_router import router as notions_router
 from routers.content_router import router as content_router
 
-
 # BUBBLE ROUTER - Choose ONE of these options:
 
 # OPTION 1: Use your existing single-file router (recommended for now)
