@@ -423,23 +423,21 @@ async def get_interaction_available_intents(interaction_id: str):
 # -------------------------
 # Intent Interpret
 # -------------------------
-@router.post("/gpt-interpret")
-async def gpt_interpret_transcript(
-    interaction_id: str,
-    transcript: str,
+from pydantic import BaseModel
+
+class GPTInterpretRequest(BaseModel):
+    interaction_id: str
+    transcript: str
     interaction_context: str = ""
-):
-    """
-    Always calls GPT to interpret what the user said.
-    No intent matching — just free interpretation.
-    Used when no intents are configured or match fails.
-    """
+
+@router.post("/gpt-interpret")
+async def gpt_interpret_transcript(request: GPTInterpretRequest):
     try:
         from openai import AsyncOpenAI
         client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         
-        prompt = f"""A user is learning French. They were asked: "{interaction_context}"
-They responded: "{transcript}"
+        prompt = f"""A user is learning French. They were asked: "{request.interaction_context}"
+They responded: "{request.transcript}"
 
 In one short sentence, describe what the user said and whether it makes sense as a French response to the question. Be encouraging."""
 
@@ -454,7 +452,7 @@ In one short sentence, describe what the user said and whether it makes sense as
         
         return {
             "success": True,
-            "transcript": transcript,
+            "transcript": request.transcript,
             "interpretation": interpretation,
             "cost_usd": round(cost, 6)
         }
