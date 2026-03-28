@@ -27,6 +27,7 @@ from routers.transcription_audio_router import router as transcription_audio_rou
 from routers.complete_interaction_router import router as complete_interaction_router
 from routers.notions_router import router as notions_router
 from routers.content_router import router as content_router
+from routers.gpt_fallback_router import router as gpt_fallback_router
 
 # BUBBLE ROUTER - Choose ONE of these options:
 
