@@ -39,6 +39,7 @@ class CreateSessionResponse(BaseModel):
     expected_cycles: int
     expected_total_score: int
     status: str
+    rescue_level: float
 
 
 class StartCycleRequest(BaseModel):
@@ -112,13 +113,27 @@ async def create_session(request: CreateSessionRequest):
             
             # Get session details
             session = await session_service.get_session(session_id, pool)
-            
+
+            # Fetch or create user_behavior row to get rescue_level
+            async with pool.acquire() as conn:
+                rescue_level = await conn.fetchval("""
+                    SELECT rescue_level FROM user_behavior WHERE user_id = $1
+                """, request.user_id)
+
+                if rescue_level is None:
+                    await conn.execute("""
+                        INSERT INTO user_behavior (user_id, rescue_level)
+                        VALUES ($1, 0.50)
+                    """, request.user_id)
+                    rescue_level = 0.50
+
             return CreateSessionResponse(
                 session_id=session_id,
                 session_type=session['session_type'],
                 expected_cycles=session['expected_cycles'],
                 expected_total_score=session['expected_total_score'],
-                status=session['status']
+                status=session['status'],
+                rescue_level=float(rescue_level)
             )
             
         finally:
