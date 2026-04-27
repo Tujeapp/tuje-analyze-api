@@ -66,6 +66,7 @@ class StartInteractionResponse(BaseModel):
     interaction_number: int
     brain_interaction_id: str
     status: str
+    interaction_type_name: Optional[str] = None
 
 
 class SubmitAnswerRequest(BaseModel):
@@ -361,7 +362,8 @@ async def start_interaction(request: StartInteractionRequest):
                 interaction_id=interaction_id,
                 interaction_number=interaction['interaction_number'],
                 brain_interaction_id=interaction['brain_interaction_id'],
-                status=interaction['status']
+                status=interaction['status'],
+                interaction_type_name=interaction.get('interaction_type_name')
             )
             
         finally:
