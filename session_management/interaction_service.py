@@ -81,9 +81,12 @@ class InteractionService:
             row = await conn.fetchrow("""
                 SELECT si.*,
                     bi.transcription_fr,
-                    bi.transcription_en
+                    bi.transcription_en,
+                    bi.interaction_type_id,
+                    bit.name AS interaction_type_name
                 FROM session_interaction si
                 JOIN brain_interaction bi ON si.brain_interaction_id = bi.id
+                LEFT JOIN brain_interaction_type bit ON bi.interaction_type_id = bit.id
                 WHERE si.id = $1
             """, interaction_id)
             
