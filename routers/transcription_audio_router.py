@@ -22,7 +22,7 @@ HALLUCINATION_PATTERNS = [
     "sous-titrée par",
 ]
 
-MIN_AUDIO_DURATION_SECONDS = 0.5  # ignore recordings shorter than this
+MIN_AUDIO_DURATION_SECONDS = 1.0  # ignore recordings shorter than this
 
 @router.post("/transcribe-audio")
 async def transcribe_audio(audio: UploadFile = File(...)):
