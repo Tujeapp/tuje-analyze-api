@@ -440,8 +440,11 @@ async def submit_answer(request: SubmitAnswerRequest):
             result = await process_user_answer_complete(
                 interaction_id=request.interaction_id,
                 user_id=request.user_id,
+                db_pool=pool,
+                answer_mode_used=request.answer_mode_used,
                 original_transcript=request.original_transcript,
-                db_pool=pool
+                selected_answer_id=request.selected_answer_id,
+                tapped_at_seconds=request.tapped_at_seconds
             )
             
             return SubmitAnswerResponse(**result)
