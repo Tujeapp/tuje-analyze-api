@@ -515,7 +515,7 @@ SYNC_CONFIGS = {
         "table_name": "brain_answer",
         "airtable_table": "Answer",
         "columns": ["id", "transcription_fr", "transcription_en", "transcription_adjusted",
-                   "answer_optimum_level", "image_url",
+                   "answer_optimum_level", "image_url", "timer_seconds",
                    "airtable_record_id", "last_modified_time_ref", "created_at", "update_at", "live"]
     },
     "interaction": {
