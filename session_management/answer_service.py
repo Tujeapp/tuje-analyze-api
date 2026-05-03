@@ -19,8 +19,11 @@ class AnswerService:
         self,
         interaction_id: str,
         user_id: str,
-        original_transcript: str,
-        db_pool: asyncpg.Pool
+        db_pool: asyncpg.Pool,
+        answer_mode_used: str = "voice",
+        original_transcript: Optional[str] = None,
+        selected_answer_id: Optional[str] = None,
+        tapped_at_seconds: Optional[float] = None
     ) -> str:
         """
         Create new answer attempt
@@ -52,12 +55,14 @@ class AnswerService:
             await conn.execute("""
                 INSERT INTO session_answer (
                     id, session_id, interaction_id, user_id,
-                    attempt_number, original_transcript, created_at,
+                    attempt_number, answer_mode_used, original_transcript,
+                    selected_answer_id, tapped_at_seconds, created_at,
                     is_final_answer
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, NOW(), FALSE)
-            """, answer_id, session_id, interaction_id, user_id, 
-                attempt_number, original_transcript)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), FALSE)
+            """, answer_id, session_id, interaction_id, user_id,
+                attempt_number, answer_mode_used, original_transcript,
+                selected_answer_id, tapped_at_seconds)
         
         logger.info(f"✅ Answer created: {answer_id} (attempt #{attempt_number})")
         return answer_id
