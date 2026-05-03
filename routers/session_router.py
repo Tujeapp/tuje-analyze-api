@@ -72,7 +72,10 @@ class StartInteractionResponse(BaseModel):
 class SubmitAnswerRequest(BaseModel):
     interaction_id: str
     user_id: str
-    original_transcript: str
+    answer_mode_used: str
+    original_transcript: Optional[str] = None
+    selected_answer_id: Optional[str] = None
+    tapped_at_seconds: Optional[float] = None
 
 
 class SubmitAnswerResponse(BaseModel):
