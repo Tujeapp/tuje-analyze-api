@@ -177,7 +177,8 @@ class InteractionTypeEntry(BaseEntry):
     name: str
     boredom: float
     description: str
-    sessionMoodIds: List[str]  # ✅ Array of session mood IDs
+    sessionMoodIds: List[str]
+    answerMode: Optional[str] = "voice"
     
     @validator('name', 'description')
     def validate_text_fields(cls, v):
@@ -603,6 +604,7 @@ SYNC_CONFIGS = {
         "table_name": "brain_interaction_type",
         "airtable_table": "Type",
         "columns": ["id", "name", "boredom", "description", "session_mood_ids",
+                   "answer_mode",
                    "airtable_record_id", "last_modified_time_ref", 
                    "created_at", "update_at", "live"]
     },
