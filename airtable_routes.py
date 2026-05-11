@@ -83,6 +83,7 @@ class AnswerEntry(BaseEntry):
     transcriptionAdjusted: str
     answerOptimumLevel: Optional[int] = None
     imageUrl: Optional[str] = None
+    timerSeconds: Optional[float] = None
 
 class BonusMalusEntry(BaseEntry):
     nameFr: str
