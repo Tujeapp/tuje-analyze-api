@@ -83,7 +83,8 @@ class InteractionService:
                     bi.transcription_fr,
                     bi.transcription_en,
                     bi.interaction_type_id,
-                    bit.name AS interaction_type_name
+                    bit.name AS interaction_type_name,
+                    bit.answer_mode AS answer_mode
                 FROM session_interaction si
                 JOIN brain_interaction bi ON si.brain_interaction_id = bi.id
                 LEFT JOIN brain_interaction_type bit ON bi.interaction_type_id = bit.id
