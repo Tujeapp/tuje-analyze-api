@@ -711,6 +711,7 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "videoCoverUrl": "video_cover_url",
         "imageIconUrl": "image_icon_url", 
         "imageUrl": "image_url",
+        "answerMode": "answer_mode",
         "interactionId": "interaction_id",
         "answerId": "answer_id",
         "timerSeconds": "timer_seconds"
