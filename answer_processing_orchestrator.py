@@ -335,34 +335,33 @@ async def _complete_interaction(
     expected_seconds: Optional[float] = None
 ) -> Dict:
 
-if answer_mode_used == "multipleButtons":
-    interaction_score = await scoring_service.calculate_multiple_buttons_score(
-        interaction_id=interaction_id,
-        db_pool=db_pool
-    )
-elif answer_mode_used == "singleButton":
-    interaction_score = await scoring_service.calculate_single_button_score(
-        tapped_at_seconds=tapped_at_seconds or 0.0,
-        expected_seconds=expected_seconds or 0.0
-    )
-else:
-    # voice — existing logic
-    async with db_pool.acquire() as conn:
-        user_level = await conn.fetchval("""
-            SELECT sc.cycle_level
-            FROM session_interaction si
-            JOIN session_cycle sc ON si.cycle_id = sc.id
-            WHERE si.id = $1
-        """, interaction_id) or 100
+    if answer_mode_used == "multipleButtons":
+        interaction_score = await scoring_service.calculate_multiple_buttons_score(
+            interaction_id=interaction_id,
+            db_pool=db_pool
+        )
+    elif answer_mode_used == "singleButton":
+        interaction_score = await scoring_service.calculate_single_button_score(
+            tapped_at_seconds=tapped_at_seconds or 0.0,
+            expected_seconds=expected_seconds or 0.0
+        )
+    else:
+        async with db_pool.acquire() as conn:
+            user_level = await conn.fetchval("""
+                SELECT sc.cycle_level
+                FROM session_interaction si
+                JOIN session_cycle sc ON si.cycle_id = sc.id
+                WHERE si.id = $1
+            """, interaction_id) or 100
 
-    interaction_score = await scoring_service.calculate_interaction_score(
-        interaction_id=interaction_id,
-        matched_answer_id=matched_answer_id,
-        similarity_score=similarity_score,
-        user_id=user_id,
-        user_level=user_level,
-        db_pool=db_pool
-    )
+        interaction_score = await scoring_service.calculate_interaction_score(
+            interaction_id=interaction_id,
+            matched_answer_id=matched_answer_id,
+            similarity_score=similarity_score,
+            user_id=user_id,
+            user_level=user_level,
+            db_pool=db_pool
+        )
 
     await answer_service.mark_as_final_answer(
         answer_id=answer_id,
