@@ -81,16 +81,16 @@ class ScoringService:
                 logger.error(f"Cannot find interaction data for {interaction_id}")
                 return 0
             
-            interaction_optimum_level = interaction_data['interaction_optimum_level']
-            cycle_level = interaction_data['cycle_level']
+            interaction_optimum_level = float(interaction_data['interaction_optimum_level'] or 0)
+            cycle_level = float(interaction_data['cycle_level'] or 0)
             
             # Get answer optimum level (if we have a matched answer)
             if matched_answer_id:
-                answer_optimum_level = await conn.fetchval("""
+                answer_optimum_level = float(await conn.fetchval("""
                     SELECT answer_optimum_level 
                     FROM brain_answer 
                     WHERE id = $1
-                """, matched_answer_id)
+                """, matched_answer_id) or 0)
             else:
                 # No matched answer - use interaction level as default
                 answer_optimum_level = interaction_optimum_level
