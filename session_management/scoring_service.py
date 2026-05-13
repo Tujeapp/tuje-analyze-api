@@ -179,6 +179,60 @@ class ScoringService:
                     Score (0-100)
                 """
                 return int(round(min(100, max(0, similarity_score))))
+
+    async def calculate_multiple_buttons_score(
+        self,
+        interaction_id: str,
+        db_pool: asyncpg.Pool
+    ) -> int:
+        """
+        Score for multipleButtons mode.
+        Based purely on attempt count — binary correct/incorrect.
+        1st attempt → 100
+        2nd attempt → 70
+        3rd attempt → 50
+        4th+ attempt → 30
+        """
+        async with db_pool.acquire() as conn:
+            attempts = await conn.fetchval("""
+                SELECT attempts_count 
+                FROM session_interaction 
+                WHERE id = $1
+            """, interaction_id) or 1
+
+        score_map = {1: 100, 2: 70, 3: 50}
+        score = score_map.get(attempts, 30)
+
+        logger.info(f"📊 multipleButtons score: {score} (attempt #{attempts})")
+        return score
+
+
+    async def calculate_single_button_score(
+        self,
+        tapped_at_seconds: float,
+        expected_seconds: float
+    ) -> int:
+        """
+        Score for singleButton mode.
+        Based on timing accuracy vs expected timestamp.
+        Within ±1s → 100
+        Within ±2s → 75
+        Within ±3s → 50
+        Outside    → 0
+        """
+        delta = abs(tapped_at_seconds - expected_seconds)
+
+        if delta <= 1.0:
+            score = 100
+        elif delta <= 2.0:
+            score = 75
+        elif delta <= 3.0:
+            score = 50
+        else:
+            score = 0
+
+        logger.info(f"📊 singleButton score: {score} (delta: {delta:.2f}s)")
+        return score
     
     async def get_cycle_statistics(
         self,
