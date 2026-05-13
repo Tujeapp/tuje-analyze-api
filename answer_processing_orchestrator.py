@@ -210,7 +210,8 @@ async def _process_multiple_buttons_answer(
             similarity_score=100.0,
             method="multiple_buttons",
             cost_saved=0.002,
-            db_pool=db_pool
+            db_pool=db_pool,
+            answer_mode_used="multipleButtons"
         )
     else:
         await answer_service.update_answer_with_matching(
@@ -296,7 +297,10 @@ async def _process_single_button_answer(
             similarity_score=similarity,
             method="single_button",
             cost_saved=0.002,
-            db_pool=db_pool
+            db_pool=db_pool,
+            answer_mode_used="singleButton",
+            tapped_at_seconds=tapped_at_seconds,
+            expected_seconds=float(expected['timer_seconds'])
         )
     else:
         return {
@@ -325,9 +329,24 @@ async def _complete_interaction(
     similarity_score: float,
     method: str,
     cost_saved: float,
-    db_pool: asyncpg.Pool
+    db_pool: asyncpg.Pool,
+    answer_mode_used: str = "voice",
+    tapped_at_seconds: Optional[float] = None,
+    expected_seconds: Optional[float] = None
 ) -> Dict:
 
+if answer_mode_used == "multipleButtons":
+    interaction_score = await scoring_service.calculate_multiple_buttons_score(
+        interaction_id=interaction_id,
+        db_pool=db_pool
+    )
+elif answer_mode_used == "singleButton":
+    interaction_score = await scoring_service.calculate_single_button_score(
+        tapped_at_seconds=tapped_at_seconds or 0.0,
+        expected_seconds=expected_seconds or 0.0
+    )
+else:
+    # voice — existing logic
     async with db_pool.acquire() as conn:
         user_level = await conn.fetchval("""
             SELECT sc.cycle_level
