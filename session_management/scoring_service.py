@@ -69,7 +69,7 @@ class ScoringService:
             # Get interaction optimum level and cycle level
             interaction_data = await conn.fetchrow("""
                 SELECT 
-                    bi.level_from as interaction_optimum_level,
+                    bi.interaction_optimum_level,
                     sc.cycle_level
                 FROM session_interaction si
                 JOIN brain_interaction bi ON si.brain_interaction_id = bi.id
