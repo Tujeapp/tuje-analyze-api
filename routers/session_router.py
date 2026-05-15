@@ -40,6 +40,7 @@ class CreateSessionResponse(BaseModel):
     expected_total_score: int
     status: str
     rescue_level: float
+    always_silent: bool
 
 
 class StartCycleRequest(BaseModel):
@@ -121,16 +122,21 @@ async def create_session(request: CreateSessionRequest):
 
             # Fetch or create user_behavior row to get rescue_level
             async with pool.acquire() as conn:
-                rescue_level = await conn.fetchval("""
-                    SELECT rescue_level FROM user_behavior WHERE user_id = $1
+                behavior = await conn.fetchrow("""
+                    SELECT rescue_level, always_silent 
+                    FROM user_behavior WHERE user_id = $1
                 """, request.user_id)
 
-                if rescue_level is None:
+                if behavior is None:
                     await conn.execute("""
-                        INSERT INTO user_behavior (user_id, rescue_level)
-                        VALUES ($1, 0.50)
+                        INSERT INTO user_behavior (user_id, rescue_level, always_silent)
+                        VALUES ($1, 0.50, FALSE)
                     """, request.user_id)
                     rescue_level = 0.50
+                    always_silent = False
+                else:
+                    rescue_level = float(behavior['rescue_level'])
+                    always_silent = bool(behavior['always_silent'])
 
             return CreateSessionResponse(
                 session_id=session_id,
@@ -138,7 +144,8 @@ async def create_session(request: CreateSessionRequest):
                 expected_cycles=session['expected_cycles'],
                 expected_total_score=session['expected_total_score'],
                 status=session['status'],
-                rescue_level=float(rescue_level)
+                rescue_level=rescue_level,
+                always_silent=always_silent
             )
             
         finally:
@@ -150,6 +157,28 @@ async def create_session(request: CreateSessionRequest):
         logger.error(f"Failed to create session: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+class UpdateAlwaysSilentRequest(BaseModel):
+    user_id: str
+    always_silent: bool
+
+@router.post("/update-always-silent")
+async def update_always_silent(request: UpdateAlwaysSilentRequest):
+    """Update user's persistent always_silent preference"""
+    try:
+        pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=2)
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute("""
+                    UPDATE user_behavior
+                    SET always_silent = $2, updated_at = NOW()
+                    WHERE user_id = $1
+                """, request.user_id, request.always_silent)
+            return {"status": "success", "always_silent": request.always_silent}
+        finally:
+            await pool.close()
+    except Exception as e:
+        logger.error(f"Failed to update always_silent: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/session/{session_id}")
 async def get_session(session_id: str):
