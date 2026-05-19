@@ -84,6 +84,7 @@ class AnswerEntry(BaseEntry):
     answerOptimumLevel: Optional[int] = None
     imageUrl: Optional[str] = None
     timerSeconds: Optional[float] = None
+    displayReady: Optional[bool] = True
 
 class BonusMalusEntry(BaseEntry):
     nameFr: str
@@ -270,6 +271,7 @@ class InteractionEntry(BaseEntry):
     videoUrl: Optional[str] = None
     videoPosterUrl: Optional[str] = None
     speak: Optional[bool] = False
+    selectionMode: Optional[str] = "single"
     
     @validator('transcriptionFr', 'transcriptionEn')
     def validate_transcriptions(cls, v):
@@ -484,7 +486,8 @@ class SubtopicEntry(BaseEntry):
 class InteractionAnswerEntry(BaseEntry):
     interactionId: str
     answerId: str
-    listOfMistakes: Optional[List[str]] = None  # ⭐ ADD THIS
+    listOfMistakes: Optional[List[str]] = None
+    answerType: Optional[str] = None
     
     @validator('listOfMistakes', pre=True, always=True)
     def clean_list_of_mistakes(cls, v):
@@ -517,7 +520,7 @@ SYNC_CONFIGS = {
         "table_name": "brain_answer",
         "airtable_table": "Answer",
         "columns": ["id", "transcription_fr", "transcription_en", "transcription_adjusted",
-                   "answer_optimum_level", "image_url", "timer_seconds",
+                   "answer_optimum_level", "image_url", "timer_seconds", "display_ready",
                    "airtable_record_id", "last_modified_time_ref", "created_at", "update_at", "live"]
     },
     "interaction": {
@@ -530,7 +533,7 @@ SYNC_CONFIGS = {
             "hint_ids", "interaction_type_id",
             "interaction_optimum_level", "boredom",
             "airtable_record_id", "last_modified_time_ref",
-            "created_at", "update_at", "live", "video_url", "video_poster_url", "speak"
+            "created_at", "update_at", "live", "video_url", "video_poster_url", "speak", "selection_mode"
         ]
     },
     "vocab": {
@@ -566,7 +569,7 @@ SYNC_CONFIGS = {
     "interaction_answer": {
         "table_name": "brain_interaction_answer",
         "airtable_table": "Interaction-Answer",
-        "columns": ["id", "interaction_id", "answer_id", "list_of_mistakes", "airtable_record_id",
+        "columns": ["id", "interaction_id", "answer_id", "list_of_mistakes", "answer_type", "airtable_record_id",
                    "last_modified_time_ref", "created_at", "update_at", "live"]
     },
     "entity": {
@@ -714,7 +717,10 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "answerMode": "answer_mode",
         "interactionId": "interaction_id",
         "answerId": "answer_id",
-        "timerSeconds": "timer_seconds"
+        "timerSeconds": "timer_seconds",
+        "selectionMode": "selection_mode",
+        "displayReady": "display_ready",
+        "answerType": "answer_type"
     }
     
     for old_key, new_key in field_mappings.items():
