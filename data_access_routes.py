@@ -1276,7 +1276,7 @@ async def get_answers_by_interaction(
     interaction_id: str,
     user_level: int = 100,
     rescue_triggered: bool = False,
-    cycle_level_direction: int = 0
+    session_interaction_id: Optional[str] = None
 ):
     """
     Get selected answers for a multipleButtons interaction.
@@ -1289,15 +1289,28 @@ async def get_answers_by_interaction(
         pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=2)
 
         try:
-            # Fetch selection_mode from brain_interaction
             async with pool.acquire() as conn:
+                # Fetch selection_mode from brain_interaction
                 row = await conn.fetchrow("""
                     SELECT selection_mode
                     FROM brain_interaction
                     WHERE id = $1
                 """, interaction_id)
 
-            selection_mode = row['selection_mode'] if row else 'single'
+                selection_mode = row['selection_mode'] if row else 'single'
+
+                # Fetch cycle_level_direction from database
+                # Uses session_interaction_id if provided, otherwise defaults to 0
+                cycle_level_direction = 0
+                if session_interaction_id:
+                    direction_row = await conn.fetchrow("""
+                        SELECT sc.cycle_level_direction
+                        FROM session_interaction si
+                        JOIN session_cycle sc ON si.cycle_id = sc.id
+                        WHERE si.id = $1
+                    """, session_interaction_id)
+                    if direction_row:
+                        cycle_level_direction = direction_row['cycle_level_direction'] or 0
 
             result = await answer_selection_service.select_answers(
                 interaction_id=interaction_id,
