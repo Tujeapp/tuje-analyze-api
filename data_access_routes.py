@@ -1272,63 +1272,54 @@ async def get_session_moods():
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/answers-by-interaction/{interaction_id}")
-async def get_answers_by_interaction(interaction_id: str):
+async def get_answers_by_interaction(
+    interaction_id: str,
+    user_level: int = 100,
+    rescue_triggered: bool = False,
+    cycle_level_direction: int = 0
+):
     """
-    Get all answers linked to a specific interaction
-    
-    This endpoint fetches answers from brain_interaction_answer table
-    and joins with brain_answer to get the answer details.
-    
-    Returns 2-4 answers for multiple choice interactions.
+    Get selected answers for a multipleButtons interaction.
+    Uses the Answer Selection Engine to pick the right answers
+    based on difficulty, user level and cycle direction.
     """
     try:
-        conn = await asyncpg.connect(DATABASE_URL)
-        
-        # Get answers linked to this interaction through brain_interaction_answer
-        rows = await conn.fetch("""
-            SELECT 
-                a.id,
-                a.transcription_fr,
-                a.transcription_en,
-                a.transcription_adjusted,
-                a.answer_optimum_level,
-                a.image_url,
-                ia.interaction_id
-            FROM brain_interaction_answer ia
-            JOIN brain_answer a ON ia.answer_id = a.id
-            WHERE ia.interaction_id = $1 
-              AND a.live = TRUE
-            ORDER BY a.created_at ASC
-            LIMIT 4
-        """, interaction_id)
-        
-        await conn.close()
-        
-        if not rows:
+        from answer_selection_service import answer_selection_service
+
+        pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=2)
+
+        try:
+            # Fetch selection_mode from brain_interaction
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow("""
+                    SELECT selection_mode
+                    FROM brain_interaction
+                    WHERE id = $1
+                """, interaction_id)
+
+            selection_mode = row['selection_mode'] if row else 'single'
+
+            result = await answer_selection_service.select_answers(
+                interaction_id=interaction_id,
+                user_level=user_level,
+                db_pool=pool,
+                rescue_triggered=rescue_triggered,
+                cycle_level_direction=cycle_level_direction,
+                selection_mode=selection_mode
+            )
+
             return {
                 "interaction_id": interaction_id,
-                "count": 0,
-                "answers": []
+                "count": len(result['answers']),
+                "answers": result['answers'],
+                "selection_mode": result['selection_mode'],
+                "correct_count": result['correct_count'],
+                "difficulty": result['difficulty']
             }
-        
-        answers = [
-            {
-                "id": row["id"],
-                "transcription_fr": row["transcription_fr"],
-                "transcription_en": row["transcription_en"],
-                "transcription_adjusted": row["transcription_adjusted"],
-                "answer_optimum_level": float(row["answer_optimum_level"]) if row["answer_optimum_level"] else None,
-                "image_url": row["image_url"]
-            }
-            for row in rows
-        ]
-        
-        return {
-            "interaction_id": interaction_id,
-            "count": len(answers),
-            "answers": answers
-        }
-        
+
+        finally:
+            await pool.close()
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
