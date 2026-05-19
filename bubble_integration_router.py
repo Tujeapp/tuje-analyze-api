@@ -429,6 +429,7 @@ class BubbleInteractionResponse(BaseModel):
     interaction_type_id: Optional[str] = None
     interaction_type_name: Optional[str] = None
     answer_mode: Optional[str] = "voice"
+    selection_mode: Optional[str] = "single"
     
     # Metrics (numeric fields)
     interaction_optimum_level: Optional[float] = None
@@ -507,6 +508,7 @@ async def bubble_get_interaction(interaction_id: str):
                 bi.interaction_type_id,
                 bit.name as interaction_type_name,
                 bit.answer_mode as answer_mode,
+                bi.selection_mode as selection_mode,
                 
                 -- Numeric metrics
                 bi.interaction_optimum_level,
@@ -581,6 +583,7 @@ async def bubble_get_interaction(interaction_id: str):
                     interaction_type_id=data.get('interaction_type_id'),
                     interaction_type_name=data.get('interaction_type_name'),
                     answer_mode=data.get('answer_mode', 'voice'),
+                    selection_mode=data.get('selection_mode', 'single'),
                     
                     # Metrics
                     interaction_optimum_level=float(data['interaction_optimum_level']) if data.get('interaction_optimum_level') else None,
