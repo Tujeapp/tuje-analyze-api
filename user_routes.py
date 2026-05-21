@@ -73,7 +73,7 @@ class SocialAuthLogin(BaseModel):
 
 class UserProfile(BaseModel):
     id: UUID
-    email: str
+    email: Optional[str]  # Now optional — anonymous users have no email
     username: Optional[str]
     display_name: Optional[str]
     first_name: Optional[str]
@@ -89,8 +89,10 @@ class UserProfile(BaseModel):
     longest_streak_days: int
     total_sessions_completed: int
     total_interactions_completed: int
-    is_premium: bool
-    subscription_status: str
+    subscription_tier: str  # 'free', 'basic', or 'pro'
+    subscription_status: str  # 'never_subscribed', 'active', 'grace_period', 'expired'
+    is_anonymous: bool
+    onboarding_phase: str  # 'not_started', 'phase_1_in_progress', etc.
     created_at: datetime
 
 
@@ -504,8 +506,10 @@ async def get_my_profile(current_user: dict = Depends(get_current_user)):
         longest_streak_days=current_user["longest_streak_days"],
         total_sessions_completed=current_user["total_sessions_completed"],
         total_interactions_completed=current_user["total_interactions_completed"],
-        is_premium=current_user["is_premium"],
-        subscription_status=current_user["subscription_status"],
+        subscription_tier=current_user.get("subscription_tier", "free"),
+        subscription_status=current_user.get("subscription_status", "never_subscribed"),
+        is_anonymous=current_user.get("is_anonymous", False),
+        onboarding_phase=current_user.get("onboarding_phase", "not_started"),
         created_at=current_user["created_at"]
     )
 
