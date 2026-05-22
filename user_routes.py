@@ -7,6 +7,7 @@ import asyncpg
 import os
 import bcrypt
 import jwt
+import re
 from uuid import UUID
 
 router = APIRouter()
@@ -100,6 +101,13 @@ class UserProfile(BaseModel):
     created_at: datetime
 
 
+class UpgradeAnonymousRequest(BaseModel):
+    """Payload for upgrading an anonymous user to a permanent account."""
+    email: EmailStr
+    password: str
+    username: str
+
+
 class UserUpdate(BaseModel):
     username: Optional[str] = None
     display_name: Optional[str] = None
@@ -132,6 +140,42 @@ def verify_password(password: str, hashed: str) -> bool:
     """Verify password against hash"""
     return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
 
+
+def validate_password_strength(password: str) -> Optional[str]:
+    """Validate password meets minimum security requirements.
+
+    Returns None if valid, or an error message string if invalid.
+    Rules: 8+ characters, at least 1 letter, at least 1 number.
+    """
+    if len(password) < 8:
+        return "Password must be at least 8 characters long"
+
+    has_letter = any(c.isalpha() for c in password)
+    has_number = any(c.isdigit() for c in password)
+
+    if not has_letter:
+        return "Password must contain at least one letter"
+    if not has_number:
+        return "Password must contain at least one number"
+
+    return None
+
+
+def validate_username(username: str) -> Optional[str]:
+    """Validate username format.
+
+    Returns None if valid, or an error message string if invalid.
+    Rules: 3-30 characters, alphanumeric + underscore + hyphen only.
+    """
+    if len(username) < 3:
+        return "Username must be at least 3 characters long"
+    if len(username) > 30:
+        return "Username must be 30 characters or fewer"
+    if not re.match(r'^[a-zA-Z0-9_-]+$', username):
+        return "Username can only contain letters, numbers, underscores, and hyphens"
+
+    return None
+    
 
 def create_access_token(user_id: str, email: Optional[str], expiration_hours: Optional[int] = None) -> str:
     """Create JWT access token.
@@ -411,6 +455,151 @@ async def create_anonymous_user(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create anonymous user: {str(e)}"
+        )
+
+
+@router.post("/auth/upgrade-anonymous")
+async def upgrade_anonymous_user(
+    upgrade_data: UpgradeAnonymousRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Convert an anonymous user to a permanent account, preserving user_id.
+
+    Called by iOS during Phase 2 of onboarding when the user fills out
+    the account creation form. The same brain_user row is updated in place —
+    all session data and behavior signals automatically belong to the new account.
+
+    Requires:
+    - Caller must be authenticated as an anonymous user (is_anonymous=true)
+    - Email must not already be taken by another user
+    - Password must meet strength requirements
+    - Username must meet format requirements
+    """
+    # Validate caller is actually anonymous
+    if not current_user.get("is_anonymous"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This account is already a permanent account"
+        )
+
+    # Validate password strength
+    password_error = validate_password_strength(upgrade_data.password)
+    if password_error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=password_error
+        )
+
+    # Validate username format
+    username_error = validate_username(upgrade_data.username)
+    if username_error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=username_error
+        )
+
+    # Normalize email (lowercase, strip whitespace)
+    email_normalized = upgrade_data.email.lower().strip()
+    username_normalized = upgrade_data.username.strip()
+
+    try:
+        conn = await asyncpg.connect(DATABASE_URL)
+
+        # Check email is not already in use by ANOTHER user
+        existing_email = await conn.fetchrow(
+            "SELECT id FROM brain_user WHERE LOWER(email) = $1 AND id != $2",
+            email_normalized,
+            current_user["id"]
+        )
+        if existing_email:
+            await conn.close()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This email is already registered. Please log in instead."
+            )
+
+        # Check username is not already in use by ANOTHER user
+        existing_username = await conn.fetchrow(
+            "SELECT id FROM brain_user WHERE LOWER(username) = LOWER($1) AND id != $2",
+            username_normalized,
+            current_user["id"]
+        )
+        if existing_username:
+            await conn.close()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This username is already taken. Please choose another."
+            )
+
+        # Hash the password
+        password_hash = hash_password(upgrade_data.password)
+
+        # Update the existing brain_user row in place
+        # - Preserves user_id (critical for data continuity)
+        # - Switches is_anonymous to false
+        # - Sets account_created_at = NOW() (drives 14-day interstitial suppression)
+        # - Switches auth_provider from 'anonymous' to 'email'
+        # - Advances onboarding_phase to 'phase_2_in_progress'
+        # - Sets display_name to username by default (user can change later)
+        updated_user = await conn.fetchrow("""
+            UPDATE brain_user
+            SET email = $1,
+                username = $2,
+                display_name = $2,
+                password_hash = $3,
+                is_anonymous = false,
+                account_created_at = NOW(),
+                auth_provider = 'email',
+                onboarding_phase = 'phase_2_in_progress',
+                updated_at = NOW()
+            WHERE id = $4
+            RETURNING id, email, username, display_name, level, role,
+                      is_anonymous, subscription_tier, subscription_status,
+                      onboarding_phase, is_email_verified, created_at, account_created_at
+        """, email_normalized, username_normalized, password_hash, current_user["id"])
+
+        await conn.close()
+
+        # TODO (Phase A.5): Send verification email via magic link
+        # send_verification_email(email_normalized, str(updated_user["id"]))
+        # For now, is_email_verified stays false; user can still use the app.
+
+        # Issue a new JWT with regular (7-day) expiration since user is no longer anonymous
+        new_access_token = create_access_token(
+            user_id=str(updated_user["id"]),
+            email=updated_user["email"],
+            # expiration_hours omitted → defaults to JWT_EXPIRATION_HOURS (7 days)
+        )
+
+        return {
+            "message": "Account created successfully",
+            "access_token": new_access_token,
+            "token_type": "bearer",
+            "is_new_user": False,  # not "new" — they existed as anonymous
+            "user": {
+                "id": str(updated_user["id"]),
+                "email": updated_user["email"],
+                "username": updated_user["username"],
+                "display_name": updated_user["display_name"],
+                "level": updated_user["level"],
+                "cefr_level": level_to_cefr(updated_user["level"]),
+                "role": updated_user["role"],
+                "is_anonymous": updated_user["is_anonymous"],
+                "subscription_tier": updated_user["subscription_tier"],
+                "subscription_status": updated_user["subscription_status"],
+                "onboarding_phase": updated_user["onboarding_phase"],
+                "is_email_verified": updated_user["is_email_verified"],
+                "created_at": updated_user["created_at"],
+                "account_created_at": updated_user["account_created_at"],
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to upgrade account: {str(e)}"
         )
 
 
