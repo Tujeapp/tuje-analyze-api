@@ -101,6 +101,7 @@ class UserProfile(BaseModel):
     cefr_level: str  # Computed from level
     role: str
     goal_id: Optional[str]
+    initial_level_bucket: Optional[int] = None
     interest_ids: List[str]
     current_streak_days: int
     longest_streak_days: int
@@ -359,8 +360,9 @@ async def register(user_data: UserRegistration):
                 auth_provider
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'email')
-            RETURNING id, email, username, display_name, level, role, created_at
-        """, 
+            RETURNING id, email, username, display_name, level, role,
+                      goal_id, initial_level_bucket, created_at
+        """,
             user_data.email,
             user_data.username,
             password_hash,
@@ -388,10 +390,12 @@ async def register(user_data: UserRegistration):
                 "level": user["level"],
                 "cefr_level": level_to_cefr(user["level"]),
                 "role": user["role"],
+                "goal_id": user["goal_id"],
+                "initial_level_bucket": user["initial_level_bucket"],
                 "created_at": user["created_at"]
             }
         }
-        
+
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -429,7 +433,8 @@ async def create_anonymous_user(
             )
             VALUES ('anonymous', true, NOW(), 'phase_1_in_progress')
             RETURNING id, email, username, display_name, level, role,
-                      is_anonymous, subscription_tier, onboarding_phase, created_at
+                      is_anonymous, subscription_tier, onboarding_phase,
+                      goal_id, initial_level_bucket, created_at
         """)
 
         await conn.close()
@@ -457,6 +462,8 @@ async def create_anonymous_user(
                 "is_anonymous": new_user["is_anonymous"],
                 "subscription_tier": new_user["subscription_tier"],
                 "onboarding_phase": new_user["onboarding_phase"],
+                "goal_id": new_user["goal_id"],
+                "initial_level_bucket": new_user["initial_level_bucket"],
                 "created_at": new_user["created_at"]
             }
         }
@@ -567,7 +574,8 @@ async def upgrade_anonymous_user(
             WHERE id = $4
             RETURNING id, email, username, display_name, level, role,
                       is_anonymous, subscription_tier, subscription_status,
-                      onboarding_phase, is_email_verified, created_at, account_created_at
+                      onboarding_phase, is_email_verified,
+                      goal_id, initial_level_bucket, created_at, account_created_at
         """, email_normalized, username_normalized, password_hash, current_user["id"])
 
         await conn.close()
@@ -601,6 +609,8 @@ async def upgrade_anonymous_user(
                 "subscription_status": updated_user["subscription_status"],
                 "onboarding_phase": updated_user["onboarding_phase"],
                 "is_email_verified": updated_user["is_email_verified"],
+                "goal_id": updated_user["goal_id"],
+                "initial_level_bucket": updated_user["initial_level_bucket"],
                 "created_at": updated_user["created_at"],
                 "account_created_at": updated_user["account_created_at"],
             }
@@ -623,7 +633,8 @@ async def login(credentials: UserLogin):
         
         # Get user by email
         user = await conn.fetchrow("""
-            SELECT id, email, password_hash, username, display_name, level, role, is_active
+            SELECT id, email, password_hash, username, display_name, level, role,
+                   is_active, goal_id, initial_level_bucket
             FROM brain_user
             WHERE email = $1 AND deleted_at IS NULL
         """, credentials.email)
@@ -672,10 +683,12 @@ async def login(credentials: UserLogin):
                 "display_name": user["display_name"],
                 "level": user["level"],
                 "cefr_level": level_to_cefr(user["level"]),
-                "role": user["role"]
+                "role": user["role"],
+                "goal_id": user["goal_id"],
+                "initial_level_bucket": user["initial_level_bucket"],
             }
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -693,7 +706,8 @@ async def social_auth(social_data: SocialAuthLogin):
         
         # Check if user exists with this social auth
         user = await conn.fetchrow("""
-            SELECT id, email, username, display_name, level, role, is_active
+            SELECT id, email, username, display_name, level, role,
+                   is_active, goal_id, initial_level_bucket
             FROM brain_user
             WHERE auth_provider = $1 AND auth_provider_id = $2 AND deleted_at IS NULL
         """, social_data.auth_provider, social_data.auth_provider_id)
@@ -730,7 +744,9 @@ async def social_auth(social_data: SocialAuthLogin):
                     "display_name": user["display_name"],
                     "level": user["level"],
                     "cefr_level": level_to_cefr(user["level"]),
-                    "role": user["role"]
+                    "role": user["role"],
+                    "goal_id": user["goal_id"],
+                    "initial_level_bucket": user["initial_level_bucket"],
                 }
             }
         else:
@@ -755,7 +771,8 @@ async def social_auth(social_data: SocialAuthLogin):
                     is_email_verified, email_verified_at
                 )
                 VALUES ($1, $2, $3, $4, $5, '', true, NOW())
-                RETURNING id, email, username, display_name, level, role, created_at
+                RETURNING id, email, username, display_name, level, role,
+                          goal_id, initial_level_bucket, created_at
             """,
                 social_data.email,
                 social_data.auth_provider,
@@ -781,10 +798,12 @@ async def social_auth(social_data: SocialAuthLogin):
                     "level": new_user["level"],
                     "cefr_level": level_to_cefr(new_user["level"]),
                     "role": new_user["role"],
+                    "goal_id": new_user["goal_id"],
+                    "initial_level_bucket": new_user["initial_level_bucket"],
                     "created_at": new_user["created_at"]
                 }
             }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -825,6 +844,7 @@ async def get_my_profile(current_user: dict = Depends(get_current_user)):
         cefr_level=level_to_cefr(current_user["level"]),
         role=current_user["role"],
         goal_id=current_user["goal_id"],
+        initial_level_bucket=current_user["initial_level_bucket"],
         interest_ids=current_user["interest_ids"] or [],
         current_streak_days=current_user["current_streak_days"],
         longest_streak_days=current_user["longest_streak_days"],
