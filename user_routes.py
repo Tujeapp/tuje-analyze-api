@@ -76,6 +76,18 @@ class SocialAuthLogin(BaseModel):
         return v.lower()
 
 
+class OnboardingPrefsRequest(BaseModel):
+    """Payload for the 2-question onboarding form."""
+    goal_id: str
+    initial_level_bucket: int  # 0, 1, or 2
+
+    @validator('initial_level_bucket')
+    def validate_bucket(cls, v):
+        if v not in (0, 1, 2):
+            raise ValueError('initial_level_bucket must be 0, 1, or 2')
+        return v
+        
+
 class UserProfile(BaseModel):
     id: UUID
     email: Optional[str]  # Now optional — anonymous users have no email
@@ -890,6 +902,65 @@ async def update_my_profile(
             detail=str(e)
         )
 
+
+@router.post("/users/me/onboarding-prefs")
+async def submit_onboarding_prefs(
+    prefs: OnboardingPrefsRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """Submit the 2-question onboarding form answers.
+
+    Writes goal_id and initial_level_bucket to brain_user, and advances
+    onboarding_phase from 'not_started' to 'phase_1_in_progress' if needed.
+
+    Idempotent — calling this multiple times overwrites previous answers.
+    """
+    try:
+        conn = await asyncpg.connect(DATABASE_URL)
+
+        # Verify the goal exists in brain_interest (foreign-key-ish validation).
+        # Use COUNT > 0 rather than fetchrow so we don't load any data.
+        goal_exists = await conn.fetchval(
+            "SELECT COUNT(*) FROM brain_interest WHERE id = $1 AND live = true",
+            prefs.goal_id
+        )
+        if not goal_exists:
+            await conn.close()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid goal_id — no matching live goal found"
+            )
+
+        # Update brain_user. We always advance onboarding_phase to phase_1_in_progress
+        # if the user is currently 'not_started'. Otherwise leave it alone
+        # (e.g. user already completed onboarding and is editing their prefs later).
+        await conn.execute("""
+            UPDATE brain_user
+            SET goal_id = $1,
+                initial_level_bucket = $2,
+                onboarding_phase = CASE
+                    WHEN onboarding_phase = 'not_started' THEN 'phase_1_in_progress'
+                    ELSE onboarding_phase
+                END,
+                updated_at = NOW()
+            WHERE id = $3
+        """, prefs.goal_id, prefs.initial_level_bucket, current_user["id"])
+
+        await conn.close()
+
+        return {
+            "message": "Onboarding preferences saved",
+            "goal_id": prefs.goal_id,
+            "initial_level_bucket": prefs.initial_level_bucket,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to save onboarding preferences: {str(e)}"
+        )
 
 @router.get("/users/{user_id}")
 async def get_user_public_profile(user_id: UUID):
