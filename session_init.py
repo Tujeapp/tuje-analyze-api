@@ -36,10 +36,7 @@ async def initialize_brand_new_user(
     session_type: str,
     session_mood: str,
     user_level: int,
-    db_pool: asyncpg.Pool,
-    is_initial_session: bool = False,
-    goal_id: Optional[str] = None,
-    initial_level_bucket: Optional[int] = None,
+    db_pool: asyncpg.Pool
 ) -> Dict[str, Any]:
     """
     Initialize session for brand new user (first session ever)
