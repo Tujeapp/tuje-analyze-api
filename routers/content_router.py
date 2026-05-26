@@ -89,9 +89,8 @@ async def get_goals(
         async with pool.acquire() as conn:
             rows = await conn.fetch("""
                 SELECT id, name
-                FROM brain_interest
-                WHERE live = TRUE
-                ORDER BY name ASC, id ASC
+                FROM brain_user_goal
+                ORDER BY id ASC
             """)
             return GoalsResponse(
                 success=True,

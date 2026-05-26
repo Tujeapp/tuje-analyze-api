@@ -918,13 +918,13 @@ async def submit_onboarding_prefs(
     try:
         conn = await asyncpg.connect(DATABASE_URL)
 
-        # Verify the goal exists in brain_interest (foreign-key-ish validation).
-        # Use COUNT > 0 rather than fetchrow so we don't load any data.
+        # Verify the goal exists in brain_user_goal.
+        # fetchval returns 1 if found, None if no row matches.
         goal_exists = await conn.fetchval(
-            "SELECT COUNT(*) FROM brain_interest WHERE id = $1 AND live = true",
+            "SELECT 1 FROM brain_user_goal WHERE id = $1",
             prefs.goal_id
         )
-        if not goal_exists:
+        if goal_exists is None:
             await conn.close()
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
