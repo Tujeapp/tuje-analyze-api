@@ -934,7 +934,9 @@ async def submit_onboarding_prefs(
         # Update brain_user. We always advance onboarding_phase to phase_1_in_progress
         # if the user is currently 'not_started'. Otherwise leave it alone
         # (e.g. user already completed onboarding and is editing their prefs later).
-        await conn.execute("""
+        # RETURNING onboarding_phase so the iOS client can update its local state
+        # without a separate /users/me round-trip.
+        updated = await conn.fetchrow("""
             UPDATE brain_user
             SET goal_id = $1,
                 initial_level_bucket = $2,
@@ -944,6 +946,7 @@ async def submit_onboarding_prefs(
                 END,
                 updated_at = NOW()
             WHERE id = $3
+            RETURNING onboarding_phase
         """, prefs.goal_id, prefs.initial_level_bucket, current_user["id"])
 
         await conn.close()
@@ -952,6 +955,7 @@ async def submit_onboarding_prefs(
             "message": "Onboarding preferences saved",
             "goal_id": prefs.goal_id,
             "initial_level_bucket": prefs.initial_level_bucket,
+            "onboarding_phase": updated["onboarding_phase"],
         }
 
     except HTTPException:
