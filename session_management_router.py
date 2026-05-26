@@ -48,9 +48,10 @@ if not DATABASE_URL:
 class StartSessionRequest(BaseModel):
     """Request to start a new session"""
     user_id: str
-    session_type: str  # "short", "medium", "long"
-    session_mood: str  # "effective", "playful", "cultural", "relax", "listening"
-    user_level: Optional[int] = None  # Required for brand new users (from onboarding)
+    session_type: str
+    session_mood: str
+    user_level: Optional[int] = None
+    is_initial_session: Optional[bool] = None
 
 
 class TopNotionInfo(BaseModel):
@@ -199,17 +200,42 @@ async def start_session_endpoint(request: StartSessionRequest):
         try:
             # Detect user state
             user_history = await detect_user_state(request.user_id, pool)
+
+            # Determine if this should be an initial (curated onboarding) session.
+            # Explicit flag wins; otherwise auto-detect from onboarding_phase.
+            is_initial_session = request.is_initial_session
+            user_goal_id = None
+            user_bucket = None
+
+            if user_history.state == UserState.BRAND_NEW:
+                # Fetch user's onboarding_phase, goal_id, initial_level_bucket from brain_user
+                async with pool.acquire() as conn:
+                    user_row = await conn.fetchrow("""
+                        SELECT onboarding_phase, goal_id, initial_level_bucket
+                        FROM brain_user
+                        WHERE id = $1
+                    """, request.user_id)
+
+                if user_row:
+                    user_goal_id = user_row["goal_id"]
+                    user_bucket = user_row["initial_level_bucket"]
+
+                    # Auto-detect if not explicitly set
+                    if is_initial_session is None:
+                        is_initial_session = (user_row["onboarding_phase"] == "phase_1_in_progress")
             
             # Initialize session based on user state
             if user_history.state == UserState.BRAND_NEW:
-                # Require user_level for brand new users
                 user_level = request.user_level if request.user_level is not None else 0
                 session_data = await initialize_brand_new_user(
-                    request.user_id, 
-                    request.session_type, 
-                    request.session_mood,
-                    user_level,
-                    pool
+                    user_id=request.user_id,
+                    session_type=request.session_type,
+                    session_mood=request.session_mood,
+                    user_level=user_level,
+                    db_pool=pool,
+                    is_initial_session=bool(is_initial_session),
+                    goal_id=user_goal_id,
+                    initial_level_bucket=user_bucket
                 )
                 
             elif user_history.state == UserState.RETURNING_USER:
