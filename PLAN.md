@@ -1,7 +1,7 @@
 # TuJe v1 — Onboarding & Session Architecture Plan
 
 **Status:** Living document. Updated as decisions evolve.
-**Last updated:** 2026-05-28
+**Last updated:** 2026-05-28 (Milestone 2 complete)
 **Owner:** Rémi
 **Goal:** Reach a solid v1 of TuJe with a complete, testable onboarding flow and a foundation we can sleep on.
 
@@ -110,26 +110,31 @@ Each milestone is self-contained, has clear verification criteria, and ends with
 - curl test: hit the new endpoint with a user who has `goal_id=GOAL3`, `initial_level_bucket=0` → response includes session_id, cycle_id, first interaction_id
 - TablePlus: confirm `session.is_initial_session = true`, `session_cycle.template_interaction_ids` contains the 7 IDs in order, `session_interaction` has one row with `interaction_number=1`
 
-### Milestone 2 — Execution engine cleanup & template-aware completion (~2-3 sessions)
+### Milestone 2 — Template-aware completion (initial-session path) ✅ COMPLETE (2026-05-28)
 
-**Goal:** The execution engine works deterministically for both initial and regular sessions, picking the next interaction correctly based on `session.is_initial_session`.
+**Goal (as achieved):** Initial sessions advance through their 7 templated interactions in order, and the single cycle completes correctly.
 
-**Work:**
-- Audit `routers/session_router.py`, `complete_interaction_router.py`, `answer_processing_orchestrator.py` for the latent bugs (status inconsistency, `completed_cycles` logic, phantom columns)
-- Decide canonical endpoint paths (might consolidate into one router file)
-- Fix `complete-interaction`:
-  - If `session.is_initial_session = true`: read `session_cycle.template_interaction_ids[next_position]`
-  - Else: keep existing random selection (regular session behavior, to be replaced later)
-- Normalize status values (`'completed'` everywhere)
-- Investigate and resolve phantom columns
-- Confirm scoring is properly invoked in `complete-interaction` (it might not be today — current code stores `int(similarity_score)` from iOS, not calculated server-side)
-- Confirm interaction-execution endpoints work identically for both session types
+**Status:** DONE for the initial-session path. Instead of modifying the shared (buggy) `complete_interaction_router.py`, we built a SEPARATE clean endpoint `POST /api/initial-session/complete-interaction` (decision D12). It only advances — submit-answer owns all scoring. Verified across four cases:
+- B1: advance interaction 1→2 → served template position 2 ✅
+- B2: advance interaction 6→7 → served template position 7 ✅
+- A: cycle completed → session marked complete (no hardcoded "3 cycles" bug) ✅
+- C: bad cycle status → 409 cycle_not_active ✅
 
-**Verification:**
-- curl walkthrough: start initial session → submit answer for interaction 1 → complete interaction → verify interaction 2 is the templated next one (not random)
-- Run through all 7 interactions of a cycle → cycle marked complete
-- Run through 3 cycles → session marked complete
-- All status values are `'completed'`, all counters consistent
+**What changed vs. the original plan:** The original M2 bundled regular-session cleanup (status normalization, counter logic, phantom columns, scoring verification) with template-aware completion. By building a separate initial-session endpoint, we sidestepped all the regular-session cleanup — those items are now purely regular-session concerns, moved to the regular-session work (separate conversation). The initial-session v1 path needed none of them.
+
+**iOS flow for initial sessions (no start-interaction calls):**
+1. `/api/initial-session/start` creates session + first interaction row, returns interaction_id + brain_interaction_id
+2. iOS fetches video for brain_interaction_id, plays it
+3. User answers → iOS calls `/api/session/submit-answer` (shared engine — scores + marks complete)
+4. iOS calls `/api/initial-session/complete-interaction` (advances) → returns next interaction_id + next_brain_interaction_id, OR session_complete: true
+5. Repeat through interaction 7
+
+**Deferred to regular-session work (NOT v1 initial-session blockers):**
+- Status string normalization (`'complete'` vs `'completed'`) in the OLD router
+- `completed_cycles` increment-vs-absolute logic
+- Phantom columns (`session_cycle.user_id`, `cycle_level_direction`)
+- The regular `complete-interaction` score-overwrite bug (see TODO bank)
+- Hardcoded `3` cycles in the OLD router
 
 ### Milestone 3 — Level estimation (~1 session)
 
@@ -220,6 +225,8 @@ Choices we've made, in chronological order. Don't relitigate without strong reas
 
 **D11: Initial session creation is atomic.** The three INSERTs (session, cycle, first interaction) are wrapped in a single `conn.transaction()`. If any fails, all roll back — no orphan rows possible. Reason: solid-foundation discipline; a half-created session is worse than a clean failure.
 
+**D12: Separate initial-session completion endpoint (not modifying the shared handler).** Initial sessions use their own `POST /api/initial-session/complete-interaction`, which ONLY advances — reads `template_interaction_ids`, creates the next interaction row, or marks the session complete. It does NOT score or re-mark interactions; `submit-answer` (shared engine) owns all of that. Regular sessions keep the existing `complete_interaction_router.py` untouched. Reason: matches D1 ("Continue is where the two systems diverge"); avoids inheriting the OLD router's three bugs (hardcoded `3` cycles, mislabeled `next_interaction_id`, `'complete'` vs `'completed'` status); keeps regular sessions safe from changes made for initial sessions. The shared piece is interaction *execution* (start/submit/score); the divergent piece is *what comes next*.
+
 ---
 
 ## 5. TODO bank
@@ -232,12 +239,9 @@ Organized by whether they block the milestones above or are independent.
 - [x] **Schema:** Add `session_cycle.template_interaction_ids TEXT[]` nullable (M1) ✅ 2026-05-28
 - [x] **Backend:** New `/api/initial-session/start` endpoint (M1) ✅ 2026-05-28
 - [x] **Backend:** Template lookup logic with fallback handling (M1) ✅ 2026-05-28 (fail-fast: 400 onboarding_incomplete, 422 template_incomplete; plan-B similar-interaction fallback deferred to interaction-engine work)
-- [ ] **Backend:** Fix `'complete'` vs `'completed'` status inconsistency (M2)
-- [ ] **Backend:** Unify `completed_cycles` increment vs absolute logic (M2)
-- [ ] **Backend:** Investigate phantom `session_cycle.user_id`, `session_cycle.cycle_level_direction` — confirm existence in DB, then decide to write or drop (M2)
-- [ ] **Backend:** Make `complete-interaction` consult `template_interaction_ids` when `is_initial_session=true` (M2)
-- [ ] **Backend:** ⚠️ M2 CARRY-FORWARD CAUTION — the validators in `session_service.py` (create-session) and `helpers.py` (validate_session_mood / session_type validation) REJECT any `session_type` they don't recognize, including `"initial"`. M2's execution engine must NEVER route an initial session through a regular-session validator, or it will 400. Initial sessions have their own creation endpoint; keep them out of the OLD router's create/validate paths.
-- [ ] **Backend:** Verify scoring is properly invoked in `complete-interaction` flow (M2)
+- [x] **Backend:** Make initial-session completion serve templated interactions in order (M2) ✅ 2026-05-28 — built as separate endpoint `/api/initial-session/complete-interaction` (D12), tested 4 cases (B1, B2, A, C)
+- [x] **Backend:** ⚠️ M2 CARRY-FORWARD CAUTION (RESOLVED) — confirmed `submit-answer` has ZERO `session_type` branching and never calls the validators, so it's safe for `session_type='initial'`. The advance endpoint is separate and never touches regular-session validators. Initial sessions stay clear of all OLD-router create/validate paths. ✅
+- [x] **Backend:** Verify scoring invocation (M2) ✅ 2026-05-28 — confirmed `submit-answer` does all scoring correctly (full bonus-malus); the initial-session advance endpoint does NOT score (by design).
 - [ ] **Backend:** Implement level estimation: score-buckets → `brain_user.level` (M3)
 - [ ] **iOS:** New `InitialSessionService` (M4)
 - [ ] **iOS:** Remove hardcoded `subtopic_id` in `startCycle` (M4)
@@ -253,7 +257,19 @@ Organized by whether they block the milestones above or are independent.
 - [ ] **Backend:** Resolve `main.py` import collision (lines 20-21, 83-84). Even if we don't mount the NEW router, the duplicate `include_router` is confusing.
 - [ ] **D9 normalization (regular-session milestone):** Update both CHECK constraints (`check_session_type_cycles`, `session_session_type_check`) to the `initial`/`regular` model — drop `short`/`medium`/`long`, add `regular` (3 cycles). Update OLD router `create-session` to always use 3 cycles. Update iOS to send `"regular"` (or let backend default). Note: constraints currently allow `initial` as a stopgap (added 2026-05-28). Existing test data has deprecated `short` rows — harmless, but note for analytics.
 
-### Medium-priority
+### Regular session work (SEPARATE conversation — not v1 initial-session blockers)
+
+These were originally bundled into M2 but were sidestepped by building a separate initial-session completion endpoint (D12). They are all about the OLD router / regular-session execution engine and will be tackled when regular sessions are built.
+
+- [ ] **Backend:** Fix `'complete'` vs `'completed'` status inconsistency in `complete_interaction_router.py` (writes `'complete'`, everything else uses `'completed'`).
+- [ ] **Backend:** Unify `completed_cycles` increment-vs-absolute logic (OLD router writes absolute; NEW router increments).
+- [ ] **Backend:** Investigate phantom `session_cycle.user_id`, `session_cycle.cycle_level_direction` — confirm existence in DB, then decide to write or drop.
+- [ ] **Backend:** Hardcoded `3` cycles in `complete_interaction_router.py:68` (`if completed_cycles >= 3`) — should read `expected_cycles` or branch on session type.
+- [ ] **Backend (data-degradation bug):** The regular `complete-interaction` DESTRUCTIVELY overwrites submit-answer's good score. submit-answer writes the full bonus-malus `interaction_score` + `status='completed'`; then complete-interaction overwrites with `int(similarity_score)` (cruder) + `status='complete'` (buggy). The worse score wins because it runs second. Fix when reworking the regular execution engine.
+- [ ] **Backend:** Mislabeled `next_interaction_id` in `complete_interaction_router.py` — returns a `brain_interaction.id`, not the `session_interaction.id`. (The initial-session endpoint already returns both IDs correctly.)
+- [ ] **Decide:** whether regular sessions keep the OLD router, revive the parked NEW router, or get a fresh clean endpoint (like we did for initial sessions).
+
+
 
 - [ ] **iOS:** `StartCycleResponse` only decodes `cycle_id`; backend already returns more.
 - [ ] **iOS:** Debug `print()` calls in `APIService.perform()` logging auth tokens to console ("REMOVE AFTER TESTING").
