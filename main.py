@@ -27,6 +27,7 @@ from routers.transcription_audio_router import router as transcription_audio_rou
 from routers.complete_interaction_router import router as complete_interaction_router
 from routers.notions_router import router as notions_router
 from routers.content_router import router as content_router
+from routers.initial_session_router import router as initial_session_router
 
 # BUBBLE ROUTER - Choose ONE of these options:
 
@@ -93,6 +94,9 @@ app.include_router(content_router, prefix="/api", tags=["content"])
 
 # Bubble Integration Router
 app.include_router(bubble_router, prefix="/api/bubble", tags=["bubble_integration"])
+
+# Initial Session Router (Milestone 1 — template-driven onboarding session)
+app.include_router(initial_session_router, prefix="/api/initial-session", tags=["initial_session"])
 
 # =====================================
 # ROOT ENDPOINT
