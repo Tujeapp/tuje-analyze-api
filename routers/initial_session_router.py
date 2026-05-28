@@ -45,7 +45,7 @@ async def start_initial_session(current_user: dict = Depends(get_current_user)):
                                    IDs returned so iOS can play immediately without a
                                    separate start-interaction call
     """
-    user_id = current_user["id"]
+    user_id = str(current_user["id"])
     goal_id = current_user["goal_id"]
     initial_level_bucket = current_user["initial_level_bucket"]
 
