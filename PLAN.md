@@ -1,7 +1,7 @@
 # TuJe v1 — Onboarding & Session Architecture Plan
 
 **Status:** Living document. Updated as decisions evolve.
-**Last updated:** 2026-05-27
+**Last updated:** 2026-05-28
 **Owner:** Rémi
 **Goal:** Reach a solid v1 of TuJe with a complete, testable onboarding flow and a foundation we can sleep on.
 
@@ -90,9 +90,11 @@ TuJe has two distinct session experiences that share an execution engine but hav
 
 Each milestone is self-contained, has clear verification criteria, and ends with a clean stopping point. Estimated effort is in focused sessions (~90 min each).
 
-### Milestone 1 — Initial session backend foundation (~2 sessions)
+### Milestone 1 — Initial session backend foundation ✅ COMPLETE (2026-05-28)
 
 **Goal:** Backend can create an initial session that loads 7 templated interactions in order.
+
+**Status:** DONE. `POST /api/initial-session/start` is built, deployed on Render, and verified end-to-end. All three paths tested: onboarding-incomplete (400), happy path (200, DB rows confirmed), template-incomplete (422). Creation is atomic (transaction-wrapped). Schema columns added. See decisions D9-D11.
 
 **Work:**
 - Design new endpoint(s): `POST /api/initial-session/start` (and any necessary supporting endpoints — TBD during planning)
@@ -210,6 +212,14 @@ Choices we've made, in chronological order. Don't relitigate without strong reas
 
 **D8: iOS git setup.** iOS project versioned at `https://github.com/Tujeapp/tuje-ios`. Reason: foundational hygiene.
 
+### 2026-05-28
+
+**D9: `session_type` normalized to `initial`/`regular`.** Every regular session is exactly 3 cycles. The old `short`/`medium`/`long` model (3/5/7 cycles) is deprecated. If a user wants more practice, they start another session. **Implementation of the regular-session side is deferred** to the regular-session milestone — only `"initial"` is used in M1. As a stopgap, the two CHECK constraints on `session` were extended to allow `('initial' AND cycles=1)` while keeping short/medium/long. Full normalization (remove short/medium/long, add regular) happens later.
+
+**D10: `session.user_id` is TEXT, but `brain_user.id` is UUID.** `get_current_user` returns `id` as a Python UUID object; the session tables' `user_id` is TEXT. The initial-session endpoint casts with `str(current_user["id"])` at the boundary. This is a schema-level type mismatch papered over at the application layer — noted, not resolved. Any future code joining `brain_user.id = session.user_id` will require a cast.
+
+**D11: Initial session creation is atomic.** The three INSERTs (session, cycle, first interaction) are wrapped in a single `conn.transaction()`. If any fails, all roll back — no orphan rows possible. Reason: solid-foundation discipline; a half-created session is worse than a clean failure.
+
 ---
 
 ## 5. TODO bank
@@ -218,14 +228,15 @@ Organized by whether they block the milestones above or are independent.
 
 ### Blocks a milestone (high-priority, in scope for v1)
 
-- [ ] **Schema:** Add `session.is_initial_session BOOLEAN NOT NULL DEFAULT FALSE` (M1)
-- [ ] **Schema:** Add `session_cycle.template_interaction_ids TEXT[]` nullable (M1)
-- [ ] **Backend:** New `/api/initial-session/start` endpoint (M1)
-- [ ] **Backend:** Template lookup logic with fallback handling (M1)
+- [x] **Schema:** Add `session.is_initial_session BOOLEAN NOT NULL DEFAULT FALSE` (M1) ✅ 2026-05-28
+- [x] **Schema:** Add `session_cycle.template_interaction_ids TEXT[]` nullable (M1) ✅ 2026-05-28
+- [x] **Backend:** New `/api/initial-session/start` endpoint (M1) ✅ 2026-05-28
+- [x] **Backend:** Template lookup logic with fallback handling (M1) ✅ 2026-05-28 (fail-fast: 400 onboarding_incomplete, 422 template_incomplete; plan-B similar-interaction fallback deferred to interaction-engine work)
 - [ ] **Backend:** Fix `'complete'` vs `'completed'` status inconsistency (M2)
 - [ ] **Backend:** Unify `completed_cycles` increment vs absolute logic (M2)
 - [ ] **Backend:** Investigate phantom `session_cycle.user_id`, `session_cycle.cycle_level_direction` — confirm existence in DB, then decide to write or drop (M2)
 - [ ] **Backend:** Make `complete-interaction` consult `template_interaction_ids` when `is_initial_session=true` (M2)
+- [ ] **Backend:** ⚠️ M2 CARRY-FORWARD CAUTION — the validators in `session_service.py` (create-session) and `helpers.py` (validate_session_mood / session_type validation) REJECT any `session_type` they don't recognize, including `"initial"`. M2's execution engine must NEVER route an initial session through a regular-session validator, or it will 400. Initial sessions have their own creation endpoint; keep them out of the OLD router's create/validate paths.
 - [ ] **Backend:** Verify scoring is properly invoked in `complete-interaction` flow (M2)
 - [ ] **Backend:** Implement level estimation: score-buckets → `brain_user.level` (M3)
 - [ ] **iOS:** New `InitialSessionService` (M4)
@@ -240,6 +251,7 @@ Organized by whether they block the milestones above or are independent.
 - [ ] **Backend addendum part 2:** `/auth/login` and `/auth/register` should also return `is_anonymous`, `onboarding_phase`, `subscription_tier`. Then tighten iOS `User` model to non-Optional for those three fields.
 - [ ] **Unify the networking layer (iOS):** `GoalsService` and `OnboardingService` should route through `APIService.perform()` for consistent 401 recovery via `.anonymousTokenInvalid` notification.
 - [ ] **Backend:** Resolve `main.py` import collision (lines 20-21, 83-84). Even if we don't mount the NEW router, the duplicate `include_router` is confusing.
+- [ ] **D9 normalization (regular-session milestone):** Update both CHECK constraints (`check_session_type_cycles`, `session_session_type_check`) to the `initial`/`regular` model — drop `short`/`medium`/`long`, add `regular` (3 cycles). Update OLD router `create-session` to always use 3 cycles. Update iOS to send `"regular"` (or let backend default). Note: constraints currently allow `initial` as a stopgap (added 2026-05-28). Existing test data has deprecated `short` rows — harmless, but note for analytics.
 
 ### Medium-priority
 
@@ -267,6 +279,7 @@ Organized by whether they block the milestones above or are independent.
 - [ ] **Backend:** `update_always_silent` silent failure — UPDATE with no INSERT fallback, returns 200 even if 0 rows affected.
 - [ ] **Backend:** `bonus_malus_service._check_hint_malus` mutates cached object — subsequent reads within 300s TTL get the mutated value.
 - [ ] **Backend:** `calculate_simple_score` in `scoring_service.py` is dead code (defined after `return` statement).
+- [ ] **Backend:** Schema type smell — `brain_user.id` is UUID, but session tables' `user_id` and FKs are TEXT. Currently papered over with `str()` at the boundary (see D10). Consider normalizing types in a future schema pass so joins don't require casts.
 
 ### Parked indefinitely (not relevant unless product direction changes)
 
