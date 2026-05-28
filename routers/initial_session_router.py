@@ -21,6 +21,7 @@ import os
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from user_routes import get_current_user
 from helpers import generate_id
@@ -28,6 +29,12 @@ from helpers import generate_id
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+class CompleteInitialInteractionRequest(BaseModel):
+    session_id: str
+    cycle_id: str
+    interaction_id: str  # accepted for logging; submit-answer already completed this row
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -190,6 +197,160 @@ async def start_initial_session(current_user: dict = Depends(get_current_user)):
 
     except Exception as e:
         logger.error(f"❌ Initial session start failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await pool.close()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# POST /api/initial-session/complete-interaction
+# ──────────────────────────────────────────────────────────────────────────────
+
+@router.post("/complete-interaction")
+async def complete_initial_interaction(
+    request: CompleteInitialInteractionRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Advance an initial session to the next templated interaction.
+
+    Submit-answer already handles all scoring and marks the current interaction
+    'completed'. This endpoint reads the post-submit-answer state and either:
+      A) Marks the session complete (when the single cycle finished after interaction 7).
+      B) Creates the next session_interaction row from template_interaction_ids.
+      C) Returns 409 if the cycle is in an unexpected state.
+
+    Does NOT touch: interaction_score, completed_interactions, cycle data, or
+    the just-completed interaction row (request.interaction_id). Submit-answer
+    owns all of that.
+    """
+    pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=2)
+    try:
+        async with pool.acquire() as conn:
+
+            # ── READ CYCLE STATE ───────────────────────────────────────────────
+            # By the time iOS calls this, submit-answer has already:
+            #   - set session_interaction.status = 'completed'
+            #   - recounted session_cycle.completed_interactions
+            #   - if interaction 7: set session_cycle.status = 'completed' + cycle_score etc.
+            cycle = await conn.fetchrow(
+                """
+                SELECT status, completed_interactions, template_interaction_ids
+                FROM session_cycle
+                WHERE id = $1
+                """,
+                request.cycle_id,
+            )
+
+            if cycle is None:
+                return JSONResponse(
+                    status_code=404,
+                    content={"success": False, "error": "cycle_not_found"},
+                )
+
+            cycle_status = cycle["status"]
+            completed_interactions = cycle["completed_interactions"] or 0
+            template_ids = cycle["template_interaction_ids"]
+
+            logger.info(
+                f"📋 Advance requested: cycle={request.cycle_id} "
+                f"status={cycle_status} completed={completed_interactions} "
+                f"last_interaction={request.interaction_id}"
+            )
+
+            # ── CASE A: CYCLE COMPLETE — initial session is finished ───────────
+            # An initial session has exactly 1 cycle. When the cycle is 'completed'
+            # (set by submit-answer after interaction 7), the whole session is done.
+            if cycle_status == "completed":
+                await conn.execute(
+                    """
+                    UPDATE session
+                    SET status = 'completed',
+                        completed_at = NOW(),
+                        last_activity_at = NOW()
+                    WHERE id = $1
+                    """,
+                    request.session_id,
+                )
+                logger.info(f"✅ Initial session complete: {request.session_id}")
+                return {
+                    "success": True,
+                    "session_complete": True,
+                    "next_interaction_id": None,
+                    "next_brain_interaction_id": None,
+                    "interaction_number": None,
+                }
+
+            # ── CASE C: UNEXPECTED CYCLE STATUS ───────────────────────────────
+            if cycle_status != "active":
+                return JSONResponse(
+                    status_code=409,
+                    content={
+                        "success": False,
+                        "error": "cycle_not_active",
+                        "detail": f"Cycle status is '{cycle_status}'",
+                    },
+                )
+
+            # ── CASE B: CYCLE ACTIVE — create next templated interaction ───────
+            # completed_interactions is 0-based index of the next template entry:
+            # if 3 interactions are done, index 3 in template_ids is the next one.
+            next_index = completed_interactions
+
+            # Defensive guard: should never trigger if submit-answer closed the
+            # cycle correctly at 7, but protects against inconsistent state.
+            if template_ids is None or next_index >= len(template_ids) or next_index >= 7:
+                logger.error(
+                    f"❌ Template exhausted: cycle={request.cycle_id} "
+                    f"next_index={next_index} "
+                    f"template_len={len(template_ids) if template_ids else 0}"
+                )
+                return JSONResponse(
+                    status_code=500,
+                    content={"success": False, "error": "template_exhausted"},
+                )
+
+            next_brain_interaction_id = template_ids[next_index]
+            new_interaction_id = generate_id("INT")
+            interaction_number = completed_interactions + 1  # 1-based position for iOS
+
+            await conn.execute(
+                """
+                INSERT INTO session_interaction (
+                    id, session_id, cycle_id, brain_interaction_id,
+                    interaction_number, status, started_at
+                )
+                VALUES ($1, $2, $3, $4, $5, 'active', NOW())
+                """,
+                new_interaction_id,
+                request.session_id,
+                request.cycle_id,
+                next_brain_interaction_id,
+                interaction_number,
+            )
+
+            await conn.execute(
+                """
+                UPDATE session SET last_activity_at = NOW() WHERE id = $1
+                """,
+                request.session_id,
+            )
+
+            logger.info(
+                f"✅ Advanced to interaction {interaction_number}: "
+                f"{new_interaction_id} → {next_brain_interaction_id}"
+            )
+
+            return {
+                "success": True,
+                "session_complete": False,
+                "next_interaction_id": new_interaction_id,       # session_interaction PK for submit/complete calls
+                "next_brain_interaction_id": next_brain_interaction_id,  # brain_interaction id for video fetch
+                "interaction_number": interaction_number,
+            }
+
+    except Exception as e:
+        logger.error(f"❌ Initial session complete-interaction failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         await pool.close()
