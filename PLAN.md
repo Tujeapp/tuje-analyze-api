@@ -1,7 +1,7 @@
 # TuJe v1 — Onboarding & Session Architecture Plan
 
 **Status:** Living document. Updated as decisions evolve.
-**Last updated:** 2026-05-28 (Milestone 2 complete)
+**Last updated:** 2026-05-29 (Milestone 3 complete)
 **Owner:** Rémi
 **Goal:** Reach a solid v1 of TuJe with a complete, testable onboarding flow and a foundation we can sleep on.
 
@@ -136,19 +136,27 @@ Each milestone is self-contained, has clear verification criteria, and ends with
 - The regular `complete-interaction` score-overwrite bug (see TODO bank)
 - Hardcoded `3` cycles in the OLD router
 
-### Milestone 3 — Level estimation (~1 session)
+### Milestone 3 — Session score (initial session) ✅ COMPLETE (2026-05-29)
 
-**Goal:** At the end of the initial session, calculate and store the user's estimated level.
+**Goal (as achieved):** At the end of the initial session, compute and store the `session_score` (rounded average of the 7 `interaction_score` values, 0–100).
 
-**Work:**
-- Implement score-bucket → level mapping (per spec: 0-210 → level 0, 211-385 → 50, etc.)
-- Trigger at end of session 7 (or as part of session completion)
-- Write to `brain_user.level`
-- Return level via API response so iOS can display it
+**Status:** DONE. Folded into Case A of `/api/initial-session/complete-interaction` — when the session is being marked complete, the same atomic UPDATE also writes `session.session_score = ROUND(AVG(interaction_score))`. Returned in the response so iOS can use it.
 
-**Verification:**
-- Complete a full initial session via curl → check `brain_user.level` reflects the score buckets correctly
-- Verify the API response includes the estimated level
+**What changed vs. the original plan:** The original M3 was scoped as "score-bucket → CEFR level mapping, write to brain_user.level." That was based on an outdated spec. The corrected spec (Point D from the user) clarified:
+- The 0–100 number computed at session end is the **session score**, not a user level
+- The CEFR user level (0–400) is updated by notion validation (regular-session machinery, deferred)
+- Initial session does NOT write to `brain_user.level`
+- The session_score → CEFR interpretation is the **feedback step**, deferred to M5 (not yet designed)
+
+So M3 became much smaller: just compute an average and store it. Took ~30 minutes of work.
+
+**Implementation details:**
+- `session_score` column already existed on `session` (integer, nullable, default 0). No schema change needed.
+- SQL: `SELECT ROUND(AVG(interaction_score))::INTEGER FROM session_interaction WHERE session_id = $1 AND status = 'completed'`
+- NULL guard: if AVG returns NULL (no rows), defaults to 0.
+- Verified with a 7-row seed: scores 80/90/70/85/75/95/65 → average 80 → DB confirms `session_score = 80`.
+
+**Out of scope for M3 (handled in M5):** the score → CEFR level interpretation, the feedback screen design, whether to update `brain_user.level` based on this. See decision D13.
 
 ### Milestone 4 — iOS integration: trigger and run initial session (~2 sessions)
 
@@ -169,16 +177,17 @@ Each milestone is self-contained, has clear verification criteria, and ends with
 
 ### Milestone 5 — iOS level estimation feedback screen (~1 session)
 
-**Goal:** Beautiful, brand-appropriate feedback screen showing the user's estimated level after initial session.
+**Goal:** Beautiful, brand-appropriate feedback screen that interprets the user's `session_score` (computed in M3) into a CEFR-aligned verdict, considering what they self-reported at onboarding.
 
 **Work:**
-- Design the screen (copy, visuals, level naming per spec)
+- Decide the interpretation logic (product/UX): given `session_score` (0–100) and `initial_level_bucket` (0/1/2), what does the screen say? Per Point D: it might confirm the user's self-report, suggest they're higher/lower, or flag "needs clarification in a first regular session."
+- Design the screen (copy, visuals, CEFR naming — A0.0 / A0.5 / A1.0 etc. per Point A)
 - SwiftUI implementation
 - "Save your progress" CTA → routes back to onboarding flow (or to ContentView for now)
 
 **Verification:**
 - End-to-end flow on simulator: launch → onboarding form → initial session → feedback screen → tap CTA → land on next state
-- Multiple test runs with different goal/level combos → feedback adapts
+- Multiple test runs with different goal/level combos and different score outcomes (high/low/mid) → feedback adapts appropriately
 
 ### Milestone 6 — Cleanup & v1 readiness checklist (~1 session)
 
@@ -227,6 +236,10 @@ Choices we've made, in chronological order. Don't relitigate without strong reas
 
 **D12: Separate initial-session completion endpoint (not modifying the shared handler).** Initial sessions use their own `POST /api/initial-session/complete-interaction`, which ONLY advances — reads `template_interaction_ids`, creates the next interaction row, or marks the session complete. It does NOT score or re-mark interactions; `submit-answer` (shared engine) owns all of that. Regular sessions keep the existing `complete_interaction_router.py` untouched. Reason: matches D1 ("Continue is where the two systems diverge"); avoids inheriting the OLD router's three bugs (hardcoded `3` cycles, mislabeled `next_interaction_id`, `'complete'` vs `'completed'` status); keeps regular sessions safe from changes made for initial sessions. The shared piece is interaction *execution* (start/submit/score); the divergent piece is *what comes next*.
 
+### 2026-05-29
+
+**D13: Session score vs. user level — two distinct concepts.** The number computed at the end of an initial session is the **session score** (0–100), the rounded average of the 7 interaction scores. It is NOT the user's CEFR level (0–400, A0.0–B2.0). The user's CEFR level is independent infrastructure updated by notion validation (regular-session work, deferred). The initial session writes only to `session.session_score`, never to `brain_user.level`. The score → CEFR interpretation (e.g. "your session score of 65 suggests you're around A0.5, consistent with what you reported") is the **feedback step** — Milestone 5 — and is product/UX work, not backend logic. M3 stops at "compute and store the number"; M5 takes it from there.
+
 ---
 
 ## 5. TODO bank
@@ -242,7 +255,7 @@ Organized by whether they block the milestones above or are independent.
 - [x] **Backend:** Make initial-session completion serve templated interactions in order (M2) ✅ 2026-05-28 — built as separate endpoint `/api/initial-session/complete-interaction` (D12), tested 4 cases (B1, B2, A, C)
 - [x] **Backend:** ⚠️ M2 CARRY-FORWARD CAUTION (RESOLVED) — confirmed `submit-answer` has ZERO `session_type` branching and never calls the validators, so it's safe for `session_type='initial'`. The advance endpoint is separate and never touches regular-session validators. Initial sessions stay clear of all OLD-router create/validate paths. ✅
 - [x] **Backend:** Verify scoring invocation (M2) ✅ 2026-05-28 — confirmed `submit-answer` does all scoring correctly (full bonus-malus); the initial-session advance endpoint does NOT score (by design).
-- [ ] **Backend:** Implement level estimation: score-buckets → `brain_user.level` (M3)
+- [x] **Backend:** Compute and store `session_score` (rounded avg of interaction scores, 0–100) on initial-session completion (M3) ✅ 2026-05-29 — folded into Case A of `/api/initial-session/complete-interaction`. Scope corrected per D13: this writes `session.session_score`, NOT `brain_user.level`. CEFR interpretation deferred to M5.
 - [ ] **iOS:** New `InitialSessionService` (M4)
 - [ ] **iOS:** Remove hardcoded `subtopic_id` in `startCycle` (M4)
 - [ ] **iOS:** Remove hardcoded fallback `firstInteractionId` (M4)
