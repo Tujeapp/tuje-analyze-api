@@ -1,7 +1,7 @@
 # TuJe v1 — Onboarding & Session Architecture Plan
 
 **Status:** Living document. Updated as decisions evolve.
-**Last updated:** 2026-05-29 (Milestone 3 complete)
+**Last updated:** 2026-05-29 (M4 part 1 complete; M4 part 2 newly scoped)
 **Owner:** Rémi
 **Goal:** Reach a solid v1 of TuJe with a complete, testable onboarding flow and a foundation we can sleep on.
 
@@ -158,22 +158,81 @@ So M3 became much smaller: just compute an average and store it. Took ~30 minute
 
 **Out of scope for M3 (handled in M5):** the score → CEFR level interpretation, the feedback screen design, whether to update `brain_user.level` based on this. See decision D13.
 
-### Milestone 4 — iOS integration: trigger and run initial session (~2 sessions)
+### Milestone 4 part 1 — iOS components for initial sessions ✅ COMPLETE (2026-05-29)
 
-**Goal:** iOS app, after form submission, runs the initial session end-to-end using the new endpoints.
+**Goal (as achieved):** Build the iOS code paths needed to run an initial session against the new backend endpoints. Compiles cleanly. Functional verification deferred to M4 part 2 (blocked on routing architecture, see below).
 
-**Work:**
-- New iOS service: `InitialSessionService` (parallel to existing `APIService`)
-- After form submission, trigger `POST /api/initial-session/start`
-- New iOS view: `InitialSessionView` (or reuse `SessionView` with a mode flag — TBD)
-- Connect to the execution engine endpoints (which are already used by regular sessions, just need updated request/response models)
-- Handle session completion → fetch level estimation
-- Remove iOS hardcoded values (`subtopic_id`, fallback `firstInteractionId`)
+**Approach used:** Option 1 (branch SessionViewModel with `isInitialSession` flag) — chosen after discovery revealed Option 3 (separate views) would require duplicating most of SessionView's UI machinery since the regular-session features (pre-prompt, rescue, answer modes) are all valid for initial sessions too. See decision D14.
 
-**Verification:**
-- Cold launch on simulator → form → tap Continue → see initial session video play → interact with all 7 → see cycle progress → complete 3 cycles → land on level estimation screen
-- TablePlus: full session/cycle/interaction tree exists with correct data
-- No crashes, no error messages on screen
+**Files created:**
+- `TuJe/Models/InitialSessionModels.swift` — Codable models for `/start` and `/complete-interaction`
+- `TuJe/Services/InitialSessionService.swift` — singleton wrapping the two endpoint calls, typed errors (`onboardingIncomplete`, `templateIncomplete`, etc.)
+- `TuJe/Views/Components/InitialPreSessionPromptView.swift` — dedicated pre-session prompt with explanatory copy ("Are you ready to speak, or would you prefer a silent session?" / "To use TuJe, you'll need to speak into your microphone sometimes.")
+
+**Files modified:**
+- `TuJe/ViewModels/SessionViewModel.swift` — added 7 initial-session properties; `loadInteractionForPlayback(id:)` (variant of `fetchInteraction` that skips `startInteraction`); `startInitialSession()`; `continueAfterInitialPrompt[Silent]()`; `completeInitialInteractionAndAdvance()`; 3-line early return in `onFeedbackContinue()`. All regular-session methods untouched.
+- `TuJe/Views/SessionView.swift` — extended init with `isInitialSession`, `userToken`, two closures (`onInitialSessionComplete`, `onOnboardingIncomplete`); progress pill at top-center (conditional on `interactionTotal`); InitialPreSessionPromptView overlay; branched `.onAppear`; two `.onChange` handlers; hid always-silent persistent toggle and session picker button during initial sessions.
+- `TuJe/Views/Onboarding/OnboardingView.swift` — replaced `.initialSession` stub with configured `SessionView`.
+- `TuJe/ViewModels/OnboardingCoordinator.swift` — added `goBackToForm()` method.
+
+**Verified:**
+- Clean build in Xcode (no errors, no warnings).
+- Backend endpoints reachable (curl health check).
+- Scope respected: no changes to `APIService`, `FeedbackSheetView`, `MultipleButtonsAnswerView`, `VideoPlayerView`, `AudioService`, regular-session methods in SessionViewModel, hardcoded regular-session values, or existing debug `print()` statements.
+
+**Blocked from end-to-end verification:** Simulator test revealed `TuJeApp.swift`'s routing condition (`if user.goalId == nil → OnboardingView else ContentView`) is too crude. After the form submits and sets `goalId`, the app immediately graduates the user to `ContentView`, bypassing the remaining onboarding stubs (`.transition`, `.micPermission`, `.conditions`, `.initialSession`, `.feedback`). The `.initialSession` step we built is structurally unreachable today. This bug pre-dates M4 (the stubs were already unreachable in production), but M4 surfaced it. Resolution: M4 part 2 (below).
+
+### Milestone 4 part 2 — Onboarding phase architecture (NEW, ~2-3 sessions)
+
+**Goal:** Establish a proper `onboarding_phase` lifecycle as the source of truth for routing, so users progress correctly through onboarding (including the initial session) and can resume mid-flow if they quit.
+
+**Phase lifecycle (10 phases — see D15):**
+1. `not_started` — splash + intro screens
+2. `home_first_view` — user landed on home for the first time
+3. `goal_selected` — user picked goal
+4. `level_selected` — user picked level (today: both set together via the form; future: separate screens)
+5. `speaking_or_silent_selected` — recorded as session metadata, not routed on (Path B per D16)
+6. `mic_authorized` — user granted mic access
+7. `disclaimer_confirmed` — user saw wifi/quiet/headphones screen
+8. `initial_session_started` — initial session began
+9. `initial_session_completed` — all 7 interactions done
+10. `onboarding_completed` — feedback acknowledged
+
+**Pragmatic mapping of current stubs to phases (M4-pragmatism per D17):**
+
+| Current stub view | Phase set when leaving it |
+|---|---|
+| `accountCheck` | (vestigial, ignore) |
+| `parisianTeaser` | `home_first_view` |
+| `tryFirstSessionCTA` | (skip — transitional UI) |
+| `twoQuestionForm` (real form) | `level_selected` (jumps over `goal_selected`; will split later when form becomes two screens) |
+| `transition` | (skip — transitional UI) |
+| `micPermission` | `mic_authorized` |
+| `conditions` | `disclaimer_confirmed` |
+| `initialSession` (M4 part 1 work) | `initial_session_started` (set by backend on `/start`); `initial_session_completed` (set by backend on session complete) |
+| `feedback` (M5) | `onboarding_completed` (set on CTA tap) |
+
+**Backend work:**
+- Update `onboarding_phase` CHECK constraint to include all 10 phase values
+- New endpoint `POST /users/me/advance-onboarding-phase` body `{ "to_phase": "..." }` — validates forward-only transitions, returns updated user
+- Modify `/api/initial-session/start` to atomically advance phase to `initial_session_started`
+- Modify `/api/initial-session/complete-interaction` (Case A only) to atomically advance phase to `initial_session_completed`
+
+**iOS work:**
+- Refactor `TuJeApp.swift` routing: phase-based, not `goalId`-based
+  - Phases `not_started` → `disclaimer_confirmed` → `OnboardingView`
+  - Phase `initial_session_started` → `SessionView(isInitialSession: true)` (resume support)
+  - Phase `initial_session_completed` → feedback view (M5 stub for now)
+  - Phase `onboarding_completed` → `ContentView` (HomeView)
+- Each stub's "Next →" button calls `advance-onboarding-phase` then advances coordinator step
+- Handle resume: user reopening app mid-onboarding lands on the right screen based on stored phase
+- Form submit endpoint should set phase to `level_selected` (M4 pragmatism)
+
+**Verification (the original M4 verification, now in M4 part 2):**
+- Delete app, reinstall, complete full flow → land on HomeView with phase `onboarding_completed`
+- Quit mid-flow at various phases, reopen → resume at correct screen
+- TablePlus: phase advances correctly through the sequence
+- Initial session DB rows created (session, cycle, 7 interactions, session_score) per M1-M3 work
 
 ### Milestone 5 — iOS level estimation feedback screen (~1 session)
 
@@ -240,6 +299,14 @@ Choices we've made, in chronological order. Don't relitigate without strong reas
 
 **D13: Session score vs. user level — two distinct concepts.** The number computed at the end of an initial session is the **session score** (0–100), the rounded average of the 7 interaction scores. It is NOT the user's CEFR level (0–400, A0.0–B2.0). The user's CEFR level is independent infrastructure updated by notion validation (regular-session work, deferred). The initial session writes only to `session.session_score`, never to `brain_user.level`. The score → CEFR interpretation (e.g. "your session score of 65 suggests you're around A0.5, consistent with what you reported") is the **feedback step** — Milestone 5 — and is product/UX work, not backend logic. M3 stops at "compute and store the number"; M5 takes it from there.
 
+**D14: M4 iOS — Option 1 (branch SessionViewModel), not Option 3 (separate views).** Initially leaned toward separate Views to quarantine regular-session bugs, but discovery revealed initial sessions need essentially the same UI machinery (pre-session prompt, rescue, answer modes — all interaction-driven, not session-type-driven). Building a parallel View would mean duplicating ~80% of SessionView's UI. Branching at the API-call level (where the bugs live) is cleaner: regular-session API calls stay untouched and buggy; initial-session API calls go through new clean `InitialSessionService`. The pre-session prompt is the one exception — it gets its own `InitialPreSessionPromptView` because the copy is materially different, and the dismiss handler routes to different code paths.
+
+**D15: `onboarding_phase` becomes the source of truth for routing.** Currently `TuJeApp.swift` routes based on `goalId == nil` (form filled = graduated). This is too crude and made the multi-step onboarding stubs unreachable. Replace with phase-based routing using a 10-phase lifecycle (see M4 part 2). Backend is the source of truth; iOS reads and acts on `brain_user.onboarding_phase`. Resume-on-reopen falls out for free.
+
+**D16: `speaking_or_silent_selected` is implicit, not a routed phase.** Although the lifecycle technically has 10 phases, the speaking/silent choice happens via the `InitialPreSessionPromptView` AFTER the session has already started (the prompt is shown inside SessionView, after `/api/initial-session/start` runs). Routing only honors 9 phases; the speaking/silent state is recorded as session metadata (`isSilentSession`), not as a phase the router cares about. Future product redesign could split the prompt out as a standalone onboarding screen, but that would require restructuring the session-start sequence.
+
+**D17: Goal+level form stays single-screen for now, advances two phases on submit.** Rémi's product vision wants separate screens for goal selection and level selection ("one screen, one task"), but redesigning is deferred. M4 pragmatism: the existing single-screen form submits and advances phase from `home_first_view` to `level_selected` in one step, skipping the intermediate `goal_selected`. When the form is split into two screens later, we'll add the missing `goal_selected` transition between them.
+
 ---
 
 ## 5. TODO bank
@@ -256,11 +323,23 @@ Organized by whether they block the milestones above or are independent.
 - [x] **Backend:** ⚠️ M2 CARRY-FORWARD CAUTION (RESOLVED) — confirmed `submit-answer` has ZERO `session_type` branching and never calls the validators, so it's safe for `session_type='initial'`. The advance endpoint is separate and never touches regular-session validators. Initial sessions stay clear of all OLD-router create/validate paths. ✅
 - [x] **Backend:** Verify scoring invocation (M2) ✅ 2026-05-28 — confirmed `submit-answer` does all scoring correctly (full bonus-malus); the initial-session advance endpoint does NOT score (by design).
 - [x] **Backend:** Compute and store `session_score` (rounded avg of interaction scores, 0–100) on initial-session completion (M3) ✅ 2026-05-29 — folded into Case A of `/api/initial-session/complete-interaction`. Scope corrected per D13: this writes `session.session_score`, NOT `brain_user.level`. CEFR interpretation deferred to M5.
-- [ ] **iOS:** New `InitialSessionService` (M4)
-- [ ] **iOS:** Remove hardcoded `subtopic_id` in `startCycle` (M4)
-- [ ] **iOS:** Remove hardcoded fallback `firstInteractionId` (M4)
-- [ ] **iOS:** Decode `first_interaction_id` from start-cycle response (M4)
-- [ ] **iOS:** Initial session UI flow (M4)
+- [x] **iOS:** New `InitialSessionService` (M4 part 1) ✅ 2026-05-29
+- [x] **iOS:** Initial session UI flow — SessionView branching, progress pill, dedicated pre-prompt (M4 part 1) ✅ 2026-05-29
+- [x] **iOS:** SessionViewModel branching with `isInitialSession`, `loadInteractionForPlayback`, `startInitialSession`, `completeInitialInteractionAndAdvance` (M4 part 1) ✅ 2026-05-29
+- [x] **iOS:** OnboardingView wires `.initialSession` case to SessionView with closures (M4 part 1) ✅ 2026-05-29
+- [ ] ⚠️ **iOS:** Hardcoded `subtopic_id`, fallback `firstInteractionId`, hardcoded `session_type "short"` — DEFERRED. These remain in the regular-session paths in SessionViewModel/APIService. They are NOT in the initial-session path (which uses our new clean code). Cleanup is regular-session conversation work.
+- [ ] ⚠️ **iOS:** Decode full `start-cycle` response (currently only `cycle_id`) — DEFERRED. Regular-session API issue, not in the initial-session path.
+
+### M4 part 2 — Onboarding phase architecture (new milestone)
+
+- [ ] **Backend:** Update `brain_user.onboarding_phase` CHECK constraint to allow all 10 phase values per D15.
+- [ ] **Backend:** New endpoint `POST /users/me/advance-onboarding-phase` body `{ "to_phase": "..." }` — validates forward-only transitions.
+- [ ] **Backend:** Modify `/api/initial-session/start` to atomically advance phase to `initial_session_started` (single transaction with the session/cycle/interaction creates).
+- [ ] **Backend:** Modify `/api/initial-session/complete-interaction` (Case A — session-complete branch only) to atomically advance phase to `initial_session_completed`.
+- [ ] **iOS:** Refactor `TuJeApp.swift` routing — phase-based, not `goalId == nil`. 4 routes: Onboarding (phases 1-7), SessionView for initial (phase 8), feedback (phase 9), ContentView (phase 10).
+- [ ] **iOS:** Each onboarding stub (`transition`, `micPermission`, `conditions`, etc.) "Next →" button calls `advance-onboarding-phase` before advancing coordinator.
+- [ ] **iOS:** Form submit advances phase to `level_selected` (M4 pragmatism per D17).
+- [ ] **iOS:** Test resume — quit mid-onboarding, reopen, verify lands at correct screen for each phase.
 - [ ] **iOS:** Level estimation feedback screen (M5)
 
 ### High-priority, independent of milestones
