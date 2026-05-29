@@ -262,23 +262,41 @@ async def complete_initial_interaction(
             # An initial session has exactly 1 cycle. When the cycle is 'completed'
             # (set by submit-answer after interaction 7), the whole session is done.
             if cycle_status == "completed":
+                # Compute session score from the 7 completed interaction rows.
+                # AVG(INTEGER) returns NUMERIC in Postgres; cast to INTEGER after ROUND.
+                # submit-answer has already written bonus-malus-adjusted scores to all rows.
+                session_score = await conn.fetchval(
+                    """
+                    SELECT ROUND(AVG(interaction_score))::INTEGER
+                    FROM session_interaction
+                    WHERE session_id = $1 AND status = 'completed'
+                    """,
+                    request.session_id,
+                )
+                # Guard: AVG returns NULL if no rows match — shouldn't happen here, but defensive.
+                if session_score is None:
+                    session_score = 0
+
                 await conn.execute(
                     """
                     UPDATE session
                     SET status = 'completed',
                         completed_at = NOW(),
-                        last_activity_at = NOW()
+                        last_activity_at = NOW(),
+                        session_score = $2
                     WHERE id = $1
                     """,
                     request.session_id,
+                    session_score,
                 )
-                logger.info(f"✅ Initial session complete: {request.session_id}")
+                logger.info(f"✅ Initial session complete: {request.session_id} (session_score={session_score})")
                 return {
                     "success": True,
                     "session_complete": True,
                     "next_interaction_id": None,
                     "next_brain_interaction_id": None,
                     "interaction_number": None,
+                    "session_score": session_score,
                 }
 
             # ── CASE C: UNEXPECTED CYCLE STATUS ───────────────────────────────
