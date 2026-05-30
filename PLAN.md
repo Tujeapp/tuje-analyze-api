@@ -1,7 +1,7 @@
 # TuJe v1 — Onboarding & Session Architecture Plan
 
 **Status:** Living document. Updated as decisions evolve.
-**Last updated:** 2026-05-30 (Onboarding architecture aligned with original product vision: two-phase model, 15 phases)
+**Last updated:** 2026-05-30 (M4 part 2 backend complete; iOS side remains)
 **Owner:** Rémi
 **Goal:** Reach a solid v1 of TuJe with a complete, testable onboarding flow and a foundation we can sleep on.
 
@@ -182,9 +182,13 @@ So M3 became much smaller: just compute an average and store it. Took ~30 minute
 
 **Blocked from end-to-end verification:** Simulator test revealed `TuJeApp.swift`'s routing condition (`if user.goalId == nil → OnboardingView else ContentView`) is too crude. After the form submits and sets `goalId`, the app immediately graduates the user to `ContentView`, bypassing the remaining onboarding stubs (`.transition`, `.micPermission`, `.conditions`, `.initialSession`, `.feedback`). The `.initialSession` step we built is structurally unreachable today. This bug pre-dates M4 (the stubs were already unreachable in production), but M4 surfaced it. Resolution: M4 part 2 (below).
 
-### Milestone 4 part 2 — Onboarding phase architecture (~3 sessions, REVISED 2026-05-30)
+### Milestone 4 part 2 — Onboarding phase architecture (BACKEND COMPLETE 2026-05-30, iOS PENDING)
 
 **Goal:** Establish a proper `onboarding_phase` lifecycle as the source of truth for routing. Build phase 1 (sequential, pre-account) of the two-phase onboarding model. Phase 2 (account creation + tier selection) is M7+.
+
+**Backend status:** ✅ COMPLETE 2026-05-30. Tested with 9 distinct curl + TablePlus verifications covering the new endpoint's 5 behaviors and the 4 modified endpoints' phase advances.
+
+**iOS status:** ⬜ PENDING. The routing refactor, form split, and accountCheck screen still need to be built. See "iOS work" below.
 
 **Big-picture context — two-phase onboarding (D18):**
 
@@ -233,12 +237,28 @@ PHASE 2 — sequential, account-required (M7+ work, NOT M4 part 2):
 | `initialSession` | `disclaimer_confirmed → initial_session_started → initial_session_completed` | KEEP — M4 part 1 work. Backend advances phases atomically (already designed). |
 | `feedback` | `initial_session_completed → feedback_acknowledged` | M5 work. User dismisses → lands on HomeView in `feedback_acknowledged` state → bridge to Phase 2 (M7+). |
 
-**Backend work (M4 part 2):**
-- Update `brain_user.onboarding_phase` CHECK constraint to allow all 15 phase values
-- New endpoint `POST /users/me/advance-onboarding-phase` body `{ "to_phase": "..." }` — validates forward-only transitions, idempotent (advancing to the current phase is a no-op), rejects backward and skip-too-far jumps
-- Modify `/api/initial-session/start` to atomically advance phase to `initial_session_started` (single transaction with session/cycle/interaction creates from M1)
-- Modify `/api/initial-session/complete-interaction` (Case A only) to atomically advance phase to `initial_session_completed`
-- Define which transitions are valid (forward-only with skip rules — TBD during implementation discovery)
+**Backend work (M4 part 2) — ✅ ALL COMPLETE 2026-05-30:**
+- ✅ Updated `brain_user.onboarding_phase` CHECK constraint to allow all 15 phase values. Pre-existing constraint named `check_onboarding_phase` was dropped; new constraint `brain_user_onboarding_phase_check` added.
+- ✅ Data migration: 12 rows at `phase_1_in_progress` → `level_selected`; 0 rows at `phase_2_in_progress`; 3 rows at `not_started` (unchanged).
+- ✅ New endpoint `POST /users/me/advance-onboarding-phase` body `{ "to_phase": "..." }` — strict forward-only: `to_phase = current_phase` returns 200 no-op; `to_phase = current_phase + 1` advances; anything else 400. Distinct error fields: `invalid_phase` for unknown values, `invalid_transition` for skip/backward.
+- ✅ `/auth/anonymous` modified — writes `'not_started'` (was `'phase_1_in_progress'`)
+- ✅ `/users/me/onboarding-prefs` modified — writes `'level_selected'` with don't-go-backward guard (also fixes a pre-existing bug: file used `logger` references without importing logging; now fixed at the top of `user_routes.py`)
+- ✅ `/auth/upgrade-anonymous` modified — writes `'account_credentials_entered'` (was `'phase_2_in_progress'`). Not directly tested but structurally identical change to `/auth/anonymous` (Test 6); will get exercised in M7+ work.
+- ✅ `/api/initial-session/start` modified — inside the existing atomic transaction, advances phase to `'initial_session_started'` (with guard)
+- ✅ `/api/initial-session/complete-interaction` Case A modified — wraps session UPDATE + phase UPDATE in a new transaction, advances to `'initial_session_completed'` (with guard)
+- ✅ All three embedded guards (`onboarding-prefs`, `initial-session/start`, `initial-session/complete-interaction` Case A) handle corrupt phases consistently: log an error and skip the phase update without breaking the primary operation.
+- ✅ All three embedded guards have explicit code comments documenting the D17/D19 transitional permissiveness (forward-skip allowed until form splits into two screens).
+
+**Backend verification — all 9 tests passed:**
+- Test 6 (early): `/auth/anonymous` writes `not_started` ✅
+- A1: new endpoint no-op (already at target) → 200 `changed: false` ✅
+- A2: new endpoint valid forward-by-one → 200 `changed: true`, DB confirms ✅
+- A3: new endpoint rejects forward skip → 400 `invalid_transition` ✅
+- A4: new endpoint rejects backward → 400 `invalid_transition` ✅
+- A5: new endpoint rejects unknown phase value → 400 `invalid_phase` ✅
+- Test 7: `/users/me/onboarding-prefs` writes `level_selected` ✅
+- Test 8: `/api/initial-session/start` writes `initial_session_started` (atomic with session/cycle/interaction creates) ✅
+- Test 9: `/api/initial-session/complete-interaction` Case A writes `initial_session_completed` (atomic with session UPDATE + session_score computation = 80) ✅
 
 **iOS work (M4 part 2):**
 - Refactor `TuJeApp.swift` routing — phase-based, not `goalId == nil`:
@@ -387,11 +407,12 @@ Organized by whether they block the milestones above or are independent.
 
 REVISED 2026-05-30: phase model expanded from 10 to 15 phases (per D18), form will be split into two screens (per D19), HomeView is placeholder for now (per D20).
 
-- [ ] **Backend:** Update `brain_user.onboarding_phase` CHECK constraint to allow all 15 phase values (1-10 are M4 part 2 work; 11-15 are M7+ work but the constraint should accept them now).
-- [ ] **Backend:** Define valid phase transitions (forward-only with skip rules) and document the matrix.
-- [ ] **Backend:** New endpoint `POST /users/me/advance-onboarding-phase` body `{ "to_phase": "..." }` — validates forward-only transitions, idempotent for current phase, rejects invalid jumps.
-- [ ] **Backend:** Modify `/api/initial-session/start` to atomically advance phase to `initial_session_started` (single transaction with the session/cycle/interaction creates).
-- [ ] **Backend:** Modify `/api/initial-session/complete-interaction` (Case A — session-complete branch only) to atomically advance phase to `initial_session_completed`.
+- [x] **Backend:** Update `brain_user.onboarding_phase` CHECK constraint to allow all 15 phase values ✅ 2026-05-30 — dropped pre-existing `check_onboarding_phase`, added `brain_user_onboarding_phase_check`. Migrated 12 rows `phase_1_in_progress` → `level_selected`.
+- [x] **Backend:** Define valid phase transitions (forward-only with skip rules) ✅ 2026-05-30 — strict forward-only-by-one for the new endpoint; existing endpoints (form submit, initial-session start/complete) allow forward-skip transitionally per D17/D19 (documented in code comments).
+- [x] **Backend:** New endpoint `POST /users/me/advance-onboarding-phase` ✅ 2026-05-30 — all 5 behaviors tested (no-op, valid advance, forward-skip rejection, backward rejection, invalid phase rejection).
+- [x] **Backend:** Modify `/api/initial-session/start` to atomically advance phase to `initial_session_started` ✅ 2026-05-30
+- [x] **Backend:** Modify `/api/initial-session/complete-interaction` (Case A only) to atomically advance phase to `initial_session_completed` ✅ 2026-05-30
+- [x] **Backend bonus:** Fix latent `logger` undefined bug in `user_routes.py` ✅ 2026-05-30 — added `import logging` + module-level logger; file had 6 `logger` references but no logger defined (would have crashed at runtime if hit).
 - [ ] **iOS:** Refactor `TuJeApp.swift` routing — phase-based, not `goalId == nil`. Routes per phase (see M4 part 2 section for the table).
 - [ ] **iOS:** Each onboarding stub's "Next →" button calls `advance-onboarding-phase` then re-renders based on new phase.
 - [ ] **iOS:** Split `TwoQuestionFormView` into `GoalSelectionView.swift` and `LevelSelectionView.swift` (per D19).
