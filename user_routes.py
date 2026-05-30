@@ -4,11 +4,14 @@ from pydantic import BaseModel, EmailStr, validator
 from typing import Optional, List
 from datetime import datetime, timedelta
 import asyncpg
+import logging
 import os
 import bcrypt
 import jwt
 import re
 from uuid import UUID
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 security = HTTPBearer()
@@ -21,6 +24,26 @@ JWT_EXPIRATION_HOURS_ANONYMOUS = 24 * 30  # 30 days for anonymous users — matc
 # iOS app identity constants — for /auth/anonymous abuse protection
 IOS_BUNDLE_ID = "com.remi.TuJe"
 IOS_CLIENT_PLATFORM = "ios"
+
+# Ordered onboarding phase lifecycle — index determines valid transitions.
+# advance-onboarding-phase allows: to_phase == current (no-op) OR to_phase == current + 1.
+ONBOARDING_PHASES = [
+    "not_started",
+    "account_checked",
+    "home_first_view",
+    "goal_selected",
+    "level_selected",
+    "mic_authorized",
+    "disclaimer_confirmed",
+    "initial_session_started",
+    "initial_session_completed",
+    "feedback_acknowledged",
+    "account_creation_started",
+    "account_credentials_entered",
+    "account_verified",
+    "plan_tier_selected",
+    "onboarding_completed",
+]
 
 if not DATABASE_URL:
     raise RuntimeError("Missing required environment variable: DATABASE_URL")
@@ -86,7 +109,12 @@ class OnboardingPrefsRequest(BaseModel):
         if v not in (0, 1, 2):
             raise ValueError('initial_level_bucket must be 0, 1, or 2')
         return v
-        
+
+
+class AdvanceOnboardingPhaseRequest(BaseModel):
+    """Payload for POST /users/me/advance-onboarding-phase."""
+    to_phase: str
+
 
 class UserProfile(BaseModel):
     id: UUID
@@ -423,7 +451,7 @@ async def create_anonymous_user(
         # - is_anonymous=true, anonymous_created_at=now (set explicitly for clarity)
         # - email, username, password_hash all NULL
         # - subscription_tier defaults to 'free'
-        # - onboarding_phase set to 'phase_1_in_progress' (they're about to start)
+        # - onboarding_phase set to 'not_started' (user hasn't done anything yet)
         new_user = await conn.fetchrow("""
             INSERT INTO brain_user (
                 auth_provider,
@@ -431,7 +459,7 @@ async def create_anonymous_user(
                 anonymous_created_at,
                 onboarding_phase
             )
-            VALUES ('anonymous', true, NOW(), 'phase_1_in_progress')
+            VALUES ('anonymous', true, NOW(), 'not_started')
             RETURNING id, email, username, display_name, level, role,
                       is_anonymous, subscription_tier, onboarding_phase,
                       goal_id, initial_level_bucket, created_at
@@ -558,7 +586,7 @@ async def upgrade_anonymous_user(
         # - Switches is_anonymous to false
         # - Sets account_created_at = NOW() (drives 14-day interstitial suppression)
         # - Switches auth_provider from 'anonymous' to 'email'
-        # - Advances onboarding_phase to 'phase_2_in_progress'
+        # - Advances onboarding_phase to 'account_credentials_entered'
         # - Sets display_name to username by default (user can change later)
         updated_user = await conn.fetchrow("""
             UPDATE brain_user
@@ -569,7 +597,7 @@ async def upgrade_anonymous_user(
                 is_anonymous = false,
                 account_created_at = NOW(),
                 auth_provider = 'email',
-                onboarding_phase = 'phase_2_in_progress',
+                onboarding_phase = 'account_credentials_entered',
                 updated_at = NOW()
             WHERE id = $4
             RETURNING id, email, username, display_name, level, role,
@@ -951,23 +979,37 @@ async def submit_onboarding_prefs(
                 detail="Invalid goal_id — no matching live goal found"
             )
 
-        # Update brain_user. We always advance onboarding_phase to phase_1_in_progress
-        # if the user is currently 'not_started'. Otherwise leave it alone
-        # (e.g. user already completed onboarding and is editing their prefs later).
+        # Update brain_user. Advance onboarding_phase to 'level_selected' (the user
+        # just answered both goal + level questions). Don't move backward — if the
+        # user is already past level_selected (e.g. re-submitting prefs mid-session),
+        # leave the phase unchanged.
+        # NOTE: This guard allows forward-skip (e.g., not_started → level_selected
+        # in one form submit). This is intentional for the current single-screen form
+        # (D17). When the form is split into two screens (D19, M4 part 2 iOS work),
+        # change `<` to `== target_idx - 1` for strict one-step.
         # RETURNING onboarding_phase so the iOS client can update its local state
         # without a separate /users/me round-trip.
+        current_phase = current_user.get("onboarding_phase", "not_started")
+        target_phase = "level_selected"
+        user_id = str(current_user["id"])
+
+        if current_phase not in ONBOARDING_PHASES:
+            logger.error(f"❌ Corrupt onboarding_phase '{current_phase}' for user {user_id}; skipping phase update")
+            new_phase = current_phase
+        elif ONBOARDING_PHASES.index(current_phase) < ONBOARDING_PHASES.index(target_phase):
+            new_phase = target_phase
+        else:
+            new_phase = current_phase
+
         updated = await conn.fetchrow("""
             UPDATE brain_user
             SET goal_id = $1,
                 initial_level_bucket = $2,
-                onboarding_phase = CASE
-                    WHEN onboarding_phase = 'not_started' THEN 'phase_1_in_progress'
-                    ELSE onboarding_phase
-                END,
+                onboarding_phase = $3,
                 updated_at = NOW()
-            WHERE id = $3
+            WHERE id = $4
             RETURNING onboarding_phase
-        """, prefs.goal_id, prefs.initial_level_bucket, current_user["id"])
+        """, prefs.goal_id, prefs.initial_level_bucket, new_phase, current_user["id"])
 
         await conn.close()
 
@@ -985,6 +1027,110 @@ async def submit_onboarding_prefs(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to save onboarding preferences: {str(e)}"
         )
+
+
+@router.post("/users/me/advance-onboarding-phase")
+async def advance_onboarding_phase(
+    request: AdvanceOnboardingPhaseRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Advance the user's onboarding phase by exactly one step.
+
+    Strict forward-only validation:
+    - to_phase == current phase  → 200 no-op (idempotent)
+    - to_phase == current + 1    → advance + 200
+    - anything else              → 400 invalid_transition
+    """
+    user_id = str(current_user["id"])
+    current_phase = current_user.get("onboarding_phase", "not_started")
+    to_phase = request.to_phase
+
+    # Validate current phase is in the lifecycle (corrupt state if not)
+    try:
+        current_index = ONBOARDING_PHASES.index(current_phase)
+    except ValueError:
+        logger.error(
+            f"❌ Corrupt onboarding_phase '{current_phase}' for user {user_id}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Corrupt onboarding_phase: '{current_phase}' is not a recognized phase",
+        )
+
+    # Validate requested phase exists
+    try:
+        to_index = ONBOARDING_PHASES.index(to_phase)
+    except ValueError:
+        logger.warning(
+            f"⚠️ Invalid phase '{to_phase}' requested by user {user_id}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "success": False,
+                "error": "invalid_phase",
+                "detail": f"'{to_phase}' is not a recognized onboarding phase",
+            },
+        )
+
+    # No-op: already at the requested phase
+    if to_index == current_index:
+        logger.info(
+            f"🔄 No-op phase advance for user {user_id}: already at '{current_phase}'"
+        )
+        return {"success": True, "phase": to_phase, "changed": False}
+
+    # Valid advance: exactly one step forward
+    if to_index == current_index + 1:
+        try:
+            conn = await asyncpg.connect(DATABASE_URL)
+            await conn.execute(
+                """
+                UPDATE brain_user
+                SET onboarding_phase = $1, updated_at = NOW()
+                WHERE id = $2
+                """,
+                to_phase,
+                current_user["id"],
+            )
+            await conn.close()
+
+            logger.info(
+                f"✅ Phase advanced for user {user_id}: '{current_phase}' → '{to_phase}'"
+            )
+            return {"success": True, "phase": to_phase, "changed": True}
+
+        except Exception as e:
+            logger.error(
+                f"❌ Failed to advance phase for user {user_id}: {e}"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to advance onboarding phase: {str(e)}",
+            )
+
+    # Invalid transition: skip or backward
+    next_phase = ONBOARDING_PHASES[current_index + 1] if current_index + 1 < len(ONBOARDING_PHASES) else None
+    allowed = f"'{current_phase}' (no-op)"
+    if next_phase:
+        allowed += f" or '{next_phase}'"
+
+    logger.warning(
+        f"⚠️ Invalid transition for user {user_id}: "
+        f"'{current_phase}' → '{to_phase}' (allowed: {allowed})"
+    )
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail={
+            "success": False,
+            "error": "invalid_transition",
+            "detail": (
+                f"Cannot transition from '{current_phase}' to '{to_phase}'. "
+                f"Allowed: {allowed}."
+            ),
+        },
+    )
+
 
 @router.get("/users/{user_id}")
 async def get_user_public_profile(user_id: UUID):

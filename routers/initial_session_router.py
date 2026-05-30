@@ -23,7 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from user_routes import get_current_user
+from user_routes import get_current_user, ONBOARDING_PHASES
 from helpers import generate_id
 
 logger = logging.getLogger(__name__)
@@ -185,6 +185,33 @@ async def start_initial_session(current_user: dict = Depends(get_current_user)):
                     f"✅ First interaction created: {interaction_id} → {first_brain_interaction_id}"
                 )
 
+                # ── ADVANCE ONBOARDING PHASE ──────────────────────────────────
+                # Only move forward — if user is already past this phase, leave it.
+                # NOTE: This guard allows forward-skip (e.g., not_started →
+                # initial_session_started). This is intentional for the current
+                # single-screen form (D17). When the form is split into two screens
+                # (D19, M4 part 2 iOS work), change `<` to `== target_idx - 1`
+                # for strict one-step.
+                current_phase = current_user.get("onboarding_phase", "not_started")
+                target_phase = "initial_session_started"
+                if current_phase not in ONBOARDING_PHASES:
+                    logger.error(
+                        f"❌ Corrupt onboarding_phase '{current_phase}' for user {user_id}; skipping phase update"
+                    )
+                elif ONBOARDING_PHASES.index(current_phase) < ONBOARDING_PHASES.index(target_phase):
+                    await conn.execute(
+                        """
+                        UPDATE brain_user
+                        SET onboarding_phase = $1, updated_at = NOW()
+                        WHERE id = $2
+                        """,
+                        target_phase,
+                        user_id,
+                    )
+                    logger.info(
+                        f"✅ Phase advanced: '{current_phase}' → '{target_phase}' for user {user_id}"
+                    )
+
         # ── SUCCESS RESPONSE ───────────────────────────────────────────────────
         return {
             "success": True,
@@ -277,18 +304,48 @@ async def complete_initial_interaction(
                 if session_score is None:
                     session_score = 0
 
-                await conn.execute(
-                    """
-                    UPDATE session
-                    SET status = 'completed',
-                        completed_at = NOW(),
-                        last_activity_at = NOW(),
-                        session_score = $2
-                    WHERE id = $1
-                    """,
-                    request.session_id,
-                    session_score,
-                )
+                # Atomic: mark session complete + advance onboarding phase together
+                # NOTE: This guard allows forward-skip (e.g., level_selected →
+                # initial_session_completed). This is intentional for the current
+                # single-screen form (D17). When the form is split into two screens
+                # (D19, M4 part 2 iOS work), change `<` to `== target_idx - 1`
+                # for strict one-step.
+                user_id = str(current_user["id"])
+                current_phase = current_user.get("onboarding_phase", "not_started")
+                target_phase = "initial_session_completed"
+
+                async with conn.transaction():
+                    await conn.execute(
+                        """
+                        UPDATE session
+                        SET status = 'completed',
+                            completed_at = NOW(),
+                            last_activity_at = NOW(),
+                            session_score = $2
+                        WHERE id = $1
+                        """,
+                        request.session_id,
+                        session_score,
+                    )
+
+                    if current_phase not in ONBOARDING_PHASES:
+                        logger.error(
+                            f"❌ Corrupt onboarding_phase '{current_phase}' for user {user_id}; skipping phase update"
+                        )
+                    elif ONBOARDING_PHASES.index(current_phase) < ONBOARDING_PHASES.index(target_phase):
+                        await conn.execute(
+                            """
+                            UPDATE brain_user
+                            SET onboarding_phase = $1, updated_at = NOW()
+                            WHERE id = $2
+                            """,
+                            target_phase,
+                            current_user["id"],
+                        )
+                        logger.info(
+                            f"✅ Phase advanced: '{current_phase}' → '{target_phase}' for user {user_id}"
+                        )
+
                 logger.info(f"✅ Initial session complete: {request.session_id} (session_score={session_score})")
                 return {
                     "success": True,
