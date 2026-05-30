@@ -31,6 +31,7 @@ ONBOARDING_PHASES = [
     "not_started",
     "account_checked",
     "home_first_view",
+    "cta_tapped",
     "goal_selected",
     "level_selected",
     "mic_authorized",
@@ -44,6 +45,13 @@ ONBOARDING_PHASES = [
     "plan_tier_selected",
     "onboarding_completed",
 ]
+
+# Explicit whitelist of allowed backward phase transitions.
+# revert-onboarding-phase only permits these (current_phase, to_phase) pairs.
+ALLOWED_REVERTS = {
+    ("goal_selected", "cta_tapped"),
+    ("level_selected", "goal_selected"),
+}
 
 if not DATABASE_URL:
     raise RuntimeError("Missing required environment variable: DATABASE_URL")
@@ -113,6 +121,16 @@ class OnboardingPrefsRequest(BaseModel):
 
 class AdvanceOnboardingPhaseRequest(BaseModel):
     """Payload for POST /users/me/advance-onboarding-phase."""
+    to_phase: str
+
+
+class OnboardingPrefsGoalRequest(BaseModel):
+    """Payload for POST /users/me/onboarding-prefs/goal (goal-only submit)."""
+    goal_id: str
+
+
+class RevertOnboardingPhaseRequest(BaseModel):
+    """Payload for POST /users/me/revert-onboarding-phase."""
     to_phase: str
 
 
@@ -1029,6 +1047,87 @@ async def submit_onboarding_prefs(
         )
 
 
+@router.post("/users/me/onboarding-prefs/goal")
+async def submit_onboarding_goal(
+    prefs: OnboardingPrefsGoalRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Submit the goal selection (first of two split onboarding questions).
+
+    Writes goal_id to brain_user and advances onboarding_phase to 'goal_selected'
+    if the user is not already at or past that phase.
+    """
+    user_id = str(current_user["id"])
+
+    if not prefs.goal_id.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="goal_id must not be empty",
+        )
+
+    try:
+        conn = await asyncpg.connect(DATABASE_URL)
+
+        # Verify the goal exists in brain_user_goal.
+        goal_exists = await conn.fetchval(
+            "SELECT 1 FROM brain_user_goal WHERE id = $1",
+            prefs.goal_id,
+        )
+        if goal_exists is None:
+            await conn.close()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid goal_id — no matching goal found",
+            )
+
+        # Save goal_id and conditionally advance phase.
+        # NOTE: This guard allows forward-skip (e.g., not_started → goal_selected
+        # in one call). This is intentional for the current single-screen form
+        # (D17). When the form is split into two screens (D19, M4 part 2 iOS work),
+        # change `<` to `== target_idx - 1` for strict one-step.
+        current_phase = current_user.get("onboarding_phase", "not_started")
+        target_phase = "goal_selected"
+
+        if current_phase not in ONBOARDING_PHASES:
+            logger.error(f"❌ Corrupt onboarding_phase '{current_phase}' for user {user_id}; skipping phase update")
+            new_phase = current_phase
+        elif ONBOARDING_PHASES.index(current_phase) < ONBOARDING_PHASES.index(target_phase):
+            new_phase = target_phase
+        else:
+            new_phase = current_phase
+
+        updated = await conn.fetchrow("""
+            UPDATE brain_user
+            SET goal_id = $1,
+                onboarding_phase = $2,
+                updated_at = NOW()
+            WHERE id = $3
+            RETURNING onboarding_phase
+        """, prefs.goal_id, new_phase, current_user["id"])
+
+        await conn.close()
+
+        logger.info(
+            f"✅ Goal saved for user {user_id}: goal_id={prefs.goal_id}, "
+            f"phase: '{current_phase}' → '{updated['onboarding_phase']}'"
+        )
+
+        return {
+            "success": True,
+            "goal_id": prefs.goal_id,
+            "onboarding_phase": updated["onboarding_phase"],
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Failed to save goal for user {user_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to save goal: {str(e)}",
+        )
+
+
 @router.post("/users/me/advance-onboarding-phase")
 async def advance_onboarding_phase(
     request: AdvanceOnboardingPhaseRequest,
@@ -1130,6 +1229,76 @@ async def advance_onboarding_phase(
             ),
         },
     )
+
+
+@router.post("/users/me/revert-onboarding-phase")
+async def revert_onboarding_phase(
+    request: RevertOnboardingPhaseRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Revert the user's onboarding phase to a previous step.
+
+    Only explicitly whitelisted (current_phase, to_phase) pairs are allowed.
+    All other transitions are rejected with 400 invalid_revert.
+    """
+    user_id = str(current_user["id"])
+    current_phase = current_user.get("onboarding_phase", "not_started")
+    to_phase = request.to_phase
+
+    # Check against the explicit whitelist
+    if (current_phase, to_phase) not in ALLOWED_REVERTS:
+        # Build a helpful error message
+        allowed_from_current = [
+            target for source, target in ALLOWED_REVERTS if source == current_phase
+        ]
+        if allowed_from_current:
+            detail = (
+                f"Cannot revert from '{current_phase}' to '{to_phase}'. "
+                f"Allowed revert(s) from '{current_phase}': {allowed_from_current}."
+            )
+        else:
+            detail = f"No reverts are allowed from '{current_phase}'."
+
+        logger.warning(
+            f"⚠️ Invalid revert for user {user_id}: "
+            f"'{current_phase}' → '{to_phase}'"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "success": False,
+                "error": "invalid_revert",
+                "detail": detail,
+            },
+        )
+
+    # Valid revert — update the phase
+    try:
+        conn = await asyncpg.connect(DATABASE_URL)
+        await conn.execute(
+            """
+            UPDATE brain_user
+            SET onboarding_phase = $1, updated_at = NOW()
+            WHERE id = $2
+            """,
+            to_phase,
+            current_user["id"],
+        )
+        await conn.close()
+
+        logger.info(
+            f"✅ Phase reverted for user {user_id}: '{current_phase}' → '{to_phase}'"
+        )
+        return {"success": True, "phase": to_phase, "changed": True}
+
+    except Exception as e:
+        logger.error(
+            f"❌ Failed to revert phase for user {user_id}: {e}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to revert onboarding phase: {str(e)}",
+        )
 
 
 @router.get("/users/{user_id}")
