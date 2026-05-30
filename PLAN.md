@@ -1,7 +1,7 @@
 # TuJe v1 — Onboarding & Session Architecture Plan
 
 **Status:** Living document. Updated as decisions evolve.
-**Last updated:** 2026-05-29 (M4 part 1 complete; M4 part 2 newly scoped)
+**Last updated:** 2026-05-30 (Onboarding architecture aligned with original product vision: two-phase model, 15 phases)
 **Owner:** Rémi
 **Goal:** Reach a solid v1 of TuJe with a complete, testable onboarding flow and a foundation we can sleep on.
 
@@ -182,84 +182,123 @@ So M3 became much smaller: just compute an average and store it. Took ~30 minute
 
 **Blocked from end-to-end verification:** Simulator test revealed `TuJeApp.swift`'s routing condition (`if user.goalId == nil → OnboardingView else ContentView`) is too crude. After the form submits and sets `goalId`, the app immediately graduates the user to `ContentView`, bypassing the remaining onboarding stubs (`.transition`, `.micPermission`, `.conditions`, `.initialSession`, `.feedback`). The `.initialSession` step we built is structurally unreachable today. This bug pre-dates M4 (the stubs were already unreachable in production), but M4 surfaced it. Resolution: M4 part 2 (below).
 
-### Milestone 4 part 2 — Onboarding phase architecture (NEW, ~2-3 sessions)
+### Milestone 4 part 2 — Onboarding phase architecture (~3 sessions, REVISED 2026-05-30)
 
-**Goal:** Establish a proper `onboarding_phase` lifecycle as the source of truth for routing, so users progress correctly through onboarding (including the initial session) and can resume mid-flow if they quit.
+**Goal:** Establish a proper `onboarding_phase` lifecycle as the source of truth for routing. Build phase 1 (sequential, pre-account) of the two-phase onboarding model. Phase 2 (account creation + tier selection) is M7+.
 
-**Phase lifecycle (10 phases — see D15):**
-1. `not_started` — splash + intro screens
-2. `home_first_view` — user landed on home for the first time
-3. `goal_selected` — user picked goal
-4. `level_selected` — user picked level (today: both set together via the form; future: separate screens)
-5. `speaking_or_silent_selected` — recorded as session metadata, not routed on (Path B per D16)
+**Big-picture context — two-phase onboarding (D18):**
+
+The original product vision (recovered 2026-05-30) is a two-phase onboarding:
+- **Phase 1 = "Taste the product" (anonymous, fast):** Account check → HomeView teaser → goal/level selection → initial session → feedback → brief visual reward on HomeView → account creation gate triggers.
+- **Phase 2 = "Commit" (gated):** Account creation → email/phone verification → plan tier selection → fully committed user.
+
+Phase 2 is mandatory but is triggered from the post-initial-session HomeView (not the moment the initial session ends). The user briefly sees the HomeView with subtle visual changes, then a tap (or a timer-driven prompt) opens account creation. The user cannot do anything else with the app until they complete Phase 2.
+
+M4 part 2 builds **Phase 1 only** through phase `feedback_acknowledged`. Phase 2 work is M7+ (see below).
+
+**Full phase lifecycle (15 phases — see D18):**
+
+PHASE 1 — sequential, anonymous:
+1. `not_started` — app just installed, splash screen
+2. `account_checked` — user answered "no account, continue as new"
+3. `home_first_view` — user saw dormant HomeView placeholder, tapped "Try first session"
+4. `goal_selected` — user picked goal (own screen, one task one screen per D19)
+5. `level_selected` — user picked level (own screen)
 6. `mic_authorized` — user granted mic access
 7. `disclaimer_confirmed` — user saw wifi/quiet/headphones screen
-8. `initial_session_started` — initial session began
-9. `initial_session_completed` — all 7 interactions done
-10. `onboarding_completed` — feedback acknowledged
+8. `initial_session_started` — initial session began (set by backend on `/start`)
+9. `initial_session_completed` — 7 interactions done (set by backend on session complete)
 
-**Pragmatic mapping of current stubs to phases (M4-pragmatism per D17):**
+BRIDGE — feedback shown:
+10. `feedback_acknowledged` — user dismissed feedback screen, briefly sees modified HomeView; account creation gate is now armed
 
-| Current stub view | Phase set when leaving it |
-|---|---|
-| `accountCheck` | (vestigial, ignore) |
-| `parisianTeaser` | `home_first_view` |
-| `tryFirstSessionCTA` | (skip — transitional UI) |
-| `twoQuestionForm` (real form) | `level_selected` (jumps over `goal_selected`; will split later when form becomes two screens) |
-| `transition` | (skip — transitional UI) |
-| `micPermission` | `mic_authorized` |
-| `conditions` | `disclaimer_confirmed` |
-| `initialSession` (M4 part 1 work) | `initial_session_started` (set by backend on `/start`); `initial_session_completed` (set by backend on session complete) |
-| `feedback` (M5) | `onboarding_completed` (set on CTA tap) |
+PHASE 2 — sequential, account-required (M7+ work, NOT M4 part 2):
+11. `account_creation_started` — user tapped (or accepted prompt); account creation modal opened
+12. `account_credentials_entered` — user entered email/phone + password + profile info
+13. `account_verified` — confirmed email/phone via code
+14. `plan_tier_selected` — chose Free / Basic / Pro
+15. `onboarding_completed` — user lands on HomeView, fully committed and functional
 
-**Backend work:**
-- Update `onboarding_phase` CHECK constraint to include all 10 phase values
-- New endpoint `POST /users/me/advance-onboarding-phase` body `{ "to_phase": "..." }` — validates forward-only transitions, returns updated user
-- Modify `/api/initial-session/start` to atomically advance phase to `initial_session_started`
+**Stub mapping (current OnboardingView stubs → new phase model):**
+
+| Current stub view | Phase set when leaving it | Action |
+|---|---|---|
+| `accountCheck` | `not_started → account_checked` | KEEP — was wrongly marked vestigial before. Two-button screen ("I have an account" / "I'm new"). For "new" → continue. For "have an account" → login flow (separate, not part of onboarding). |
+| `parisianTeaser` | `account_checked → home_first_view` | KEEP — shows the placeholder HomeView, dormant state. Tapping "Try first session" CTA on HomeView advances. |
+| `tryFirstSessionCTA` | (no phase change — UI within HomeView itself) | REMOVE as standalone stub — fold into `home_first_view` HomeView |
+| `twoQuestionForm` (real form) | `home_first_view → goal_selected → level_selected` | **SPLIT** into two screens: `GoalSelectionView` and `LevelSelectionView`. Per D19, "one screen, one task." Replaces D17's M4-pragmatism. |
+| `transition` | (no phase change — transitional UI) | KEEP as transitional screen ("Now we'll do a quick session") — brief screen with Continue, no phase advancement. |
+| `micPermission` | `level_selected → mic_authorized` | KEEP — real OS-level permission request. |
+| `conditions` | `mic_authorized → disclaimer_confirmed` | KEEP — wifi/quiet/headphones disclaimer screen. |
+| `initialSession` | `disclaimer_confirmed → initial_session_started → initial_session_completed` | KEEP — M4 part 1 work. Backend advances phases atomically (already designed). |
+| `feedback` | `initial_session_completed → feedback_acknowledged` | M5 work. User dismisses → lands on HomeView in `feedback_acknowledged` state → bridge to Phase 2 (M7+). |
+
+**Backend work (M4 part 2):**
+- Update `brain_user.onboarding_phase` CHECK constraint to allow all 15 phase values
+- New endpoint `POST /users/me/advance-onboarding-phase` body `{ "to_phase": "..." }` — validates forward-only transitions, idempotent (advancing to the current phase is a no-op), rejects backward and skip-too-far jumps
+- Modify `/api/initial-session/start` to atomically advance phase to `initial_session_started` (single transaction with session/cycle/interaction creates from M1)
 - Modify `/api/initial-session/complete-interaction` (Case A only) to atomically advance phase to `initial_session_completed`
+- Define which transitions are valid (forward-only with skip rules — TBD during implementation discovery)
 
-**iOS work:**
-- Refactor `TuJeApp.swift` routing: phase-based, not `goalId`-based
-  - Phases `not_started` → `disclaimer_confirmed` → `OnboardingView`
-  - Phase `initial_session_started` → `SessionView(isInitialSession: true)` (resume support)
+**iOS work (M4 part 2):**
+- Refactor `TuJeApp.swift` routing — phase-based, not `goalId == nil`:
+  - Phase `not_started` → `accountCheck` screen
+  - Phase `account_checked` → `parisianTeaser` (placeholder HomeView with "Try first session" CTA)
+  - Phase `home_first_view` → `GoalSelectionView`
+  - Phase `goal_selected` → `LevelSelectionView`
+  - Phase `level_selected` → `transition` screen
+  - Phase `mic_authorized` → `conditions` screen
+  - Phase `disclaimer_confirmed` → `SessionView(isInitialSession: true)` (M4 part 1)
+  - Phase `initial_session_started` → `SessionView(isInitialSession: true)` (resume mid-session if quit)
   - Phase `initial_session_completed` → feedback view (M5 stub for now)
-  - Phase `onboarding_completed` → `ContentView` (HomeView)
-- Each stub's "Next →" button calls `advance-onboarding-phase` then advances coordinator step
-- Handle resume: user reopening app mid-onboarding lands on the right screen based on stored phase
-- Form submit endpoint should set phase to `level_selected` (M4 pragmatism)
+  - Phase `feedback_acknowledged` → HomeView placeholder (clickable but currently leads nowhere — M7+ adds the account creation gate)
+- Each stub's "Next →" button calls `advance-onboarding-phase` then advances coordinator step (or the routing re-renders automatically based on the new phase)
+- Split the existing single-screen form into `GoalSelectionView.swift` and `LevelSelectionView.swift` (D19)
+- Handle resume: user reopening app mid-onboarding lands on the correct screen based on stored phase
+- `tryFirstSessionCTA` stub is removed/folded into the placeholder HomeView
 
-**Verification (the original M4 verification, now in M4 part 2):**
-- Delete app, reinstall, complete full flow → land on HomeView with phase `onboarding_completed`
+**M4 part 2 deferred to Phase 2 / M7+:**
+- The post-feedback gate behavior (timer + tap → account creation modal). For M4 part 2, the HomeView placeholder shown at phase `feedback_acknowledged` is just a placeholder — clickable but the click leads nowhere (or shows a "Coming soon" message). The full gate is M7 work.
+
+**Verification (M4 part 2):**
+- Delete app, reinstall, complete Phase 1 → land on HomeView placeholder at phase `feedback_acknowledged`
 - Quit mid-flow at various phases, reopen → resume at correct screen
-- TablePlus: phase advances correctly through the sequence
+- TablePlus: phase advances correctly through phases 1-10 in order
 - Initial session DB rows created (session, cycle, 7 interactions, session_score) per M1-M3 work
+- "I have an account" branch on the accountCheck screen routes to a (stubbed-for-now) login flow
 
-### Milestone 5 — iOS level estimation feedback screen (~1 session)
+### Milestone 5 — Feedback screen (~1 session, slightly revised 2026-05-30)
 
-**Goal:** Beautiful, brand-appropriate feedback screen that interprets the user's `session_score` (computed in M3) into a CEFR-aligned verdict, considering what they self-reported at onboarding.
+**Goal:** Beautiful, brand-appropriate feedback screen that interprets the user's `session_score` (computed in M3) into a CEFR-aligned verdict, considering what they self-reported at onboarding. On dismiss, lands the user on the HomeView placeholder.
 
 **Work:**
-- Decide the interpretation logic (product/UX): given `session_score` (0–100) and `initial_level_bucket` (0/1/2), what does the screen say? Per Point D: it might confirm the user's self-report, suggest they're higher/lower, or flag "needs clarification in a first regular session."
+- Decide the interpretation logic (product/UX): given `session_score` (0–100) and `initial_level_bucket` (0/1/2), what does the screen say? Per Point D, it might confirm/adjust the user's self-report, or flag "needs clarification in a first regular session."
 - Design the screen (copy, visuals, CEFR naming — A0.0 / A0.5 / A1.0 etc. per Point A)
 - SwiftUI implementation
-- "Save your progress" CTA → routes back to onboarding flow (or to ContentView for now)
+- Dismiss action advances phase to `feedback_acknowledged` and routes to HomeView placeholder
 
 **Verification:**
-- End-to-end flow on simulator: launch → onboarding form → initial session → feedback screen → tap CTA → land on next state
 - Multiple test runs with different goal/level combos and different score outcomes (high/low/mid) → feedback adapts appropriately
+- On dismiss, user lands on HomeView placeholder with phase `feedback_acknowledged`
 
-### Milestone 6 — Cleanup & v1 readiness checklist (~1 session)
+### Milestone 6 — Phase 1 v1 readiness (~1 session, revised 2026-05-30)
 
-**Goal:** Ship-ready state. No known bugs, no dead code in critical paths, full documentation.
+**Goal:** Phase 1 of v1 is ship-ready. Full simulator test from cold launch through `feedback_acknowledged`. No known bugs, no dead code in the Phase 1 path, full documentation. The placeholder HomeView is clickable but doesn't yet trigger account creation — that's M7+.
 
-**Work:**
-- Walk the TODO bank below, decide what blocks v1
-- Fix anything that blocks
-- Update PLAN.md with current state
-- Tag v1 release in git
+**Note:** v1 cannot fully ship without Phase 2 (M7+) because account creation is mandatory. But Phase 1 being verifiably complete is the foundation for everything that follows. M6 establishes that foundation.
 
-**Verification:**
-- Fresh simulator install → complete onboarding flow on iPhone (not simulator) → no surprises
+### Milestone 7+ — Phase 2: account creation + tier selection (NEW, multi-session, ~4-6 sessions)
+
+**Goal:** Build the gated Phase 2 onboarding — account creation, email/phone verification, plan tier selection. The bridge from `feedback_acknowledged` (Phase 1 done, anonymous user) to `onboarding_completed` (fully committed user).
+
+**Likely milestone breakdown (subject to revision when we get there):**
+- **M7:** The HomeView gate behavior — timer + tap → account creation modal. Phase advancement to `account_creation_started`.
+- **M8:** Account creation form — backend `/auth/upgrade-anonymous` already exists; iOS wraps it. Phases `account_creation_started → account_credentials_entered`.
+- **M9:** Email/phone verification — requires choosing a provider (Twilio for SMS? SES for email?), code generation and validation endpoints, iOS verification screen. Phases `account_credentials_entered → account_verified`.
+- **M10:** Plan tier selection UI — Free/Basic/Pro presentation, persistence to `brain_user.subscription_tier`. Phase `account_verified → plan_tier_selected`. NOTE: StoreKit 2 integration (real subscriptions, App Store Server Notifications V2, receipt validation) likely deferred to a v1.1 unless mandatory for v1.
+- **M11:** Final transition + v1 polish — landing on the (committed) HomeView, phase `onboarding_completed`, full end-to-end test.
+
+These milestones are placeholders. We'll scope each properly when we reach them. M7-M11 numbering may shift.
 
 ---
 
@@ -305,7 +344,21 @@ Choices we've made, in chronological order. Don't relitigate without strong reas
 
 **D16: `speaking_or_silent_selected` is implicit, not a routed phase.** Although the lifecycle technically has 10 phases, the speaking/silent choice happens via the `InitialPreSessionPromptView` AFTER the session has already started (the prompt is shown inside SessionView, after `/api/initial-session/start` runs). Routing only honors 9 phases; the speaking/silent state is recorded as session metadata (`isSilentSession`), not as a phase the router cares about. Future product redesign could split the prompt out as a standalone onboarding screen, but that would require restructuring the session-start sequence.
 
-**D17: Goal+level form stays single-screen for now, advances two phases on submit.** Rémi's product vision wants separate screens for goal selection and level selection ("one screen, one task"), but redesigning is deferred. M4 pragmatism: the existing single-screen form submits and advances phase from `home_first_view` to `level_selected` in one step, skipping the intermediate `goal_selected`. When the form is split into two screens later, we'll add the missing `goal_selected` transition between them.
+**D17: Goal+level form stays single-screen for now, advances two phases on submit.** Rémi's product vision wants separate screens for goal selection and level selection ("one screen, one task"), but redesigning is deferred. M4 pragmatism: the existing single-screen form submits and advances phase from `home_first_view` to `level_selected` in one step, skipping the intermediate `goal_selected`. When the form is split into two screens later, we'll add the missing `goal_selected` transition between them. **SUPERSEDED by D19 (2026-05-30): form will be split into two screens as part of M4 part 2.**
+
+### 2026-05-30
+
+**D18: Two-phase onboarding architecture (recovered from original product vision).** Onboarding is two distinct phases with different purposes:
+- **Phase 1 (anonymous, fast):** Get the user to taste the product with minimum friction. Account check → HomeView teaser → goal/level selection (two screens) → initial session → feedback → brief visual reward on HomeView → account creation gate triggers.
+- **Phase 2 (gated, mandatory):** Account creation → email/phone verification → plan tier selection → fully committed user.
+
+The user remains anonymous throughout Phase 1 (the `brain_user` row exists with `is_anonymous=true`). At the moment they trigger the Phase 2 gate (tapping HomeView post-feedback, or accepting the timer-prompted CTA), the account creation modal opens. Phase 2 is mandatory — the user cannot use the app freely without completing it. But Phase 1 gets them to value first before any commitment is asked. The same `brain_user.id` carries forward from anonymous to permanent (`/auth/upgrade-anonymous` already exists in the backend). 
+
+This is a 15-phase lifecycle (full list in M4 part 2 section). Phase 1 (phases 1-10) is M4 part 2 + M5 + M6. Phase 2 (phases 11-15) is M7+. SUPERSEDES the simpler 10-phase model in D15 — that model missed Phase 2 entirely.
+
+**D19: Form splits into two screens — `GoalSelectionView` and `LevelSelectionView`.** Replaces D17's M4-pragmatism. The original product vision is "one screen, one task" — we should not carry incorrect product behavior forward into M4 part 2 when correcting it costs ~1 extra session of iOS work. The current `TwoQuestionFormView` gets replaced with two dedicated views, each advancing phase atomically on submit.
+
+**D20: HomeView during onboarding = clickable placeholder, no artistic work.** For v1, HomeView (the Parisian view) is a routing destination. Visual design (dormant/awakening/alive states, Blender renders, CoreMotion tilt, layered compositing) is its own conversation, deferred indefinitely. M4 part 2's HomeView at `feedback_acknowledged` is a placeholder that is clickable but currently does nothing on click. M7 adds the account creation gate behavior.
 
 ---
 
@@ -330,17 +383,31 @@ Organized by whether they block the milestones above or are independent.
 - [ ] ⚠️ **iOS:** Hardcoded `subtopic_id`, fallback `firstInteractionId`, hardcoded `session_type "short"` — DEFERRED. These remain in the regular-session paths in SessionViewModel/APIService. They are NOT in the initial-session path (which uses our new clean code). Cleanup is regular-session conversation work.
 - [ ] ⚠️ **iOS:** Decode full `start-cycle` response (currently only `cycle_id`) — DEFERRED. Regular-session API issue, not in the initial-session path.
 
-### M4 part 2 — Onboarding phase architecture (new milestone)
+### M4 part 2 — Onboarding phase architecture (Phase 1 only)
 
-- [ ] **Backend:** Update `brain_user.onboarding_phase` CHECK constraint to allow all 10 phase values per D15.
-- [ ] **Backend:** New endpoint `POST /users/me/advance-onboarding-phase` body `{ "to_phase": "..." }` — validates forward-only transitions.
+REVISED 2026-05-30: phase model expanded from 10 to 15 phases (per D18), form will be split into two screens (per D19), HomeView is placeholder for now (per D20).
+
+- [ ] **Backend:** Update `brain_user.onboarding_phase` CHECK constraint to allow all 15 phase values (1-10 are M4 part 2 work; 11-15 are M7+ work but the constraint should accept them now).
+- [ ] **Backend:** Define valid phase transitions (forward-only with skip rules) and document the matrix.
+- [ ] **Backend:** New endpoint `POST /users/me/advance-onboarding-phase` body `{ "to_phase": "..." }` — validates forward-only transitions, idempotent for current phase, rejects invalid jumps.
 - [ ] **Backend:** Modify `/api/initial-session/start` to atomically advance phase to `initial_session_started` (single transaction with the session/cycle/interaction creates).
 - [ ] **Backend:** Modify `/api/initial-session/complete-interaction` (Case A — session-complete branch only) to atomically advance phase to `initial_session_completed`.
-- [ ] **iOS:** Refactor `TuJeApp.swift` routing — phase-based, not `goalId == nil`. 4 routes: Onboarding (phases 1-7), SessionView for initial (phase 8), feedback (phase 9), ContentView (phase 10).
-- [ ] **iOS:** Each onboarding stub (`transition`, `micPermission`, `conditions`, etc.) "Next →" button calls `advance-onboarding-phase` before advancing coordinator.
-- [ ] **iOS:** Form submit advances phase to `level_selected` (M4 pragmatism per D17).
-- [ ] **iOS:** Test resume — quit mid-onboarding, reopen, verify lands at correct screen for each phase.
-- [ ] **iOS:** Level estimation feedback screen (M5)
+- [ ] **iOS:** Refactor `TuJeApp.swift` routing — phase-based, not `goalId == nil`. Routes per phase (see M4 part 2 section for the table).
+- [ ] **iOS:** Each onboarding stub's "Next →" button calls `advance-onboarding-phase` then re-renders based on new phase.
+- [ ] **iOS:** Split `TwoQuestionFormView` into `GoalSelectionView.swift` and `LevelSelectionView.swift` (per D19).
+- [ ] **iOS:** `accountCheck` becomes a real screen with two buttons ("I have an account" / "I'm new"). "I'm new" advances phase; "I have an account" stubs to login (separate flow).
+- [ ] **iOS:** `tryFirstSessionCTA` stub is removed; the CTA is folded into the placeholder HomeView shown at phase `account_checked`.
+- [ ] **iOS:** Test resume — quit mid-onboarding at each phase, reopen, verify lands at correct screen.
+
+### M5 — Feedback screen
+
+- [ ] **iOS:** Build the post-initial-session feedback screen — reads `session_score` and `initial_level_bucket`, renders interpretation, dismiss advances phase to `feedback_acknowledged` and routes to HomeView placeholder.
+
+### M6 — Phase 1 v1 readiness
+
+- [ ] Full end-to-end simulator test of Phase 1 (cold launch through `feedback_acknowledged`). Document any remaining issues.
+
+### M7+ — Phase 2: account + tier (multi-session, see PLAN section 3)
 
 ### High-priority, independent of milestones
 
