@@ -1,7 +1,7 @@
 # TuJe v1 — Onboarding & Session Architecture Plan
 
 **Status:** Living document. Updated as decisions evolve.
-**Last updated:** 2026-05-30 (M4 part 2 piece 2 complete, end-to-end verified; piece 3 next)
+**Last updated:** 2026-05-30 (M4 part 2 piece 3 backend complete; iOS piece 3 remains)
 **Owner:** Rémi
 **Goal:** Reach a solid v1 of TuJe with a complete, testable onboarding flow and a foundation we can sleep on.
 
@@ -182,21 +182,25 @@ So M3 became much smaller: just compute an average and store it. Took ~30 minute
 
 **Blocked from end-to-end verification:** Simulator test revealed `TuJeApp.swift`'s routing condition (`if user.goalId == nil → OnboardingView else ContentView`) is too crude. After the form submits and sets `goalId`, the app immediately graduates the user to `ContentView`, bypassing the remaining onboarding stubs (`.transition`, `.micPermission`, `.conditions`, `.initialSession`, `.feedback`). The `.initialSession` step we built is structurally unreachable today. This bug pre-dates M4 (the stubs were already unreachable in production), but M4 surfaced it. Resolution: M4 part 2 (below).
 
-### Milestone 4 part 2 — Onboarding phase architecture (BACKEND ✅, iOS PIECE 1 ✅, iOS PIECE 2 ✅, iOS PIECE 3 PENDING)
+### Milestone 4 part 2 — Onboarding phase architecture (BACKEND ✅, iOS PIECE 1 ✅, iOS PIECE 2 ✅, iOS PIECE 3 BACKEND ✅, iOS PIECE 3 IOS PENDING)
 
 **Goal:** Establish a proper `onboarding_phase` lifecycle as the source of truth for routing. Build phase 1 (sequential, pre-account) of the two-phase onboarding model. Phase 2 (account creation + tier selection) is M7+.
 
-**Backend status:** ✅ COMPLETE 2026-05-30. Tested with 9 distinct curl + TablePlus verifications.
+**Backend status:** ✅ COMPLETE 2026-05-30. M4 part 2 first batch + piece 3 additions tested with 18 total verifications (9 in initial round, 9 in piece 3 round for cta_tapped + new endpoints).
 
-**iOS piece 1 status:** ✅ COMPLETE 2026-05-30. Phase-based routing in TuJeApp + OnboardingView refactored to switch on phase + OnboardingCoordinator deleted. Build clean. End-to-end verified: brand-new anonymous user routes to accountCheck stub at phase `not_started`.
+**iOS piece 1 status:** ✅ COMPLETE 2026-05-30. Phase-based routing in TuJeApp + OnboardingView refactored to switch on phase + OnboardingCoordinator deleted. Build clean. End-to-end verified.
 
-**iOS piece 2 status:** ✅ COMPLETE 2026-05-30. Each stub's Next button wired to advance phase via `/users/me/advance-onboarding-phase` + local sync via `updateOnboardingPhase`. Mic permission gate at the transition stub: grant advances to `mic_authorized`, deny shows SwiftUI alert with Open Settings deep-link. End-to-end verified both paths in simulator.
+**iOS piece 2 status:** ✅ COMPLETE 2026-05-30. Each stub's Next button wired to advance phase via `/users/me/advance-onboarding-phase` + local sync. Mic permission gate at transition stub: grant advances to `mic_authorized`, deny shows alert with Open Settings deep-link. End-to-end verified both paths in simulator.
 
-**iOS piece 3 status:** ⬜ PENDING.
-- Split `TwoQuestionFormView` into `GoalSelectionView` + `LevelSelectionView`
-- Make `accountCheck` a real screen with two buttons ("I have an account" / "I'm new")
-- Add back buttons: level → goal, transition → level
-- Backend: new endpoint `POST /users/me/revert-onboarding-phase` with explicit allowed-reverts (per D-decision-TBD)
+**iOS piece 3 backend status:** ✅ COMPLETE 2026-05-30. Added `cta_tapped` phase (16 total), new endpoint `/users/me/onboarding-prefs/goal` (saves goal_id + advances to goal_selected with goal-existence validation), new endpoint `/users/me/revert-onboarding-phase` (explicit whitelist of 2 reverts: `goal_selected → cta_tapped` and `level_selected → goal_selected`). 9 tests passed.
+
+**iOS piece 3 iOS status:** ⬜ PENDING.
+- Add `submitOnboardingGoal` + `revertOnboardingPhase` methods to OnboardingService
+- Split TwoQuestionFormView into GoalSelectionView + LevelSelectionView
+- AccountCheckView as a real screen
+- HomeView placeholder with 3-second simulated load timer (per D-decision-TBD) + CTA
+- Re-map OnboardingView's switch for new screens + cta_tapped phase
+- Back buttons on LevelSelectionView and transition stub
 
 **Big-picture context — two-phase onboarding (D18):**
 
@@ -208,42 +212,48 @@ Phase 2 is mandatory but is triggered from the post-initial-session HomeView (no
 
 M4 part 2 builds **Phase 1 only** through phase `feedback_acknowledged`. Phase 2 work is M7+ (see below).
 
-**Full phase lifecycle (15 phases — see D18):**
+**Full phase lifecycle (16 phases — see D18 + cta_tapped addition):**
 
 PHASE 1 — sequential, anonymous:
 1. `not_started` — app just installed, splash screen
-2. `account_checked` — user answered "no account, continue as new"
-3. `home_first_view` — user saw dormant HomeView placeholder, tapped "Try first session"
-4. `goal_selected` — user picked goal (own screen, one task one screen per D19)
-5. `level_selected` — user picked level (own screen)
-6. `mic_authorized` — user granted mic access
-7. `disclaimer_confirmed` — user saw wifi/quiet/headphones screen
-8. `initial_session_started` — initial session began (set by backend on `/start`)
-9. `initial_session_completed` — 7 interactions done (set by backend on session complete)
+2. `account_checked` — user answered "no account, continue as new"; HomeView starts loading
+3. `home_first_view` — HomeView/Parisian-view scene has finished loading and is ready to be explored; CTA appears
+4. `cta_tapped` — user tapped "Try First Session"; first form screen now shown
+5. `goal_selected` — user picked goal (own screen per D19)
+6. `level_selected` — user picked level (own screen)
+7. `mic_authorized` — user granted mic access
+8. `disclaimer_confirmed` — user saw wifi/quiet/headphones screen
+9. `initial_session_started` — initial session began (set by backend on `/start`)
+10. `initial_session_completed` — 7 interactions done (set by backend on session complete)
 
 BRIDGE — feedback shown:
-10. `feedback_acknowledged` — user dismissed feedback screen, briefly sees modified HomeView; account creation gate is now armed
+11. `feedback_acknowledged` — user dismissed feedback screen, briefly sees modified HomeView; account creation gate is now armed
 
 PHASE 2 — sequential, account-required (M7+ work, NOT M4 part 2):
-11. `account_creation_started` — user tapped (or accepted prompt); account creation modal opened
-12. `account_credentials_entered` — user entered email/phone + password + profile info
-13. `account_verified` — confirmed email/phone via code
-14. `plan_tier_selected` — chose Free / Basic / Pro
-15. `onboarding_completed` — user lands on HomeView, fully committed and functional
+12. `account_creation_started` — user tapped (or accepted prompt); account creation modal opened
+13. `account_credentials_entered` — user entered email/phone + password + profile info
+14. `account_verified` — confirmed email/phone via code
+15. `plan_tier_selected` — chose Free / Basic / Pro
+16. `onboarding_completed` — user lands on HomeView, fully committed and functional
 
-**Stub mapping (current OnboardingView stubs → new phase model):**
+**Stub mapping (post piece 3 iOS work):**
 
-| Current stub view | Phase set when leaving it | Action |
+| Phase | Screen rendered | Action that advances |
 |---|---|---|
-| `accountCheck` | `not_started → account_checked` | KEEP — was wrongly marked vestigial before. Two-button screen ("I have an account" / "I'm new"). For "new" → continue. For "have an account" → login flow (separate, not part of onboarding). |
-| `parisianTeaser` | `account_checked → home_first_view` | KEEP — shows the placeholder HomeView, dormant state. Tapping "Try first session" CTA on HomeView advances. |
-| `tryFirstSessionCTA` | (no phase change — UI within HomeView itself) | REMOVE as standalone stub — fold into `home_first_view` HomeView |
-| `twoQuestionForm` (real form) | `home_first_view → goal_selected → level_selected` | **SPLIT** into two screens: `GoalSelectionView` and `LevelSelectionView`. Per D19, "one screen, one task." Replaces D17's M4-pragmatism. |
-| `transition` | (no phase change — transitional UI) | KEEP as transitional screen ("Now we'll do a quick session") — brief screen with Continue, no phase advancement. |
-| `micPermission` | `level_selected → mic_authorized` | KEEP — real OS-level permission request. |
-| `conditions` | `mic_authorized → disclaimer_confirmed` | KEEP — wifi/quiet/headphones disclaimer screen. |
-| `initialSession` | `disclaimer_confirmed → initial_session_started → initial_session_completed` | KEEP — M4 part 1 work. Backend advances phases atomically (already designed). |
-| `feedback` | `initial_session_completed → feedback_acknowledged` | M5 work. User dismisses → lands on HomeView in `feedback_acknowledged` state → bridge to Phase 2 (M7+). |
+| `not_started` | AccountCheckView (real screen, piece 3) | User taps "I'm new" → `account_checked` |
+| `account_checked` | HomeView placeholder, CTA hidden, 3-second load timer | Timer fires → `home_first_view` |
+| `home_first_view` | HomeView placeholder, CTA visible | User taps "Try First Session" CTA → `cta_tapped` |
+| `cta_tapped` | GoalSelectionView (split, piece 3) | User picks goal, submits → `goal_selected` |
+| `goal_selected` | LevelSelectionView (split, piece 3) | User picks level, submits (via existing /onboarding-prefs) → `level_selected` |
+| `level_selected` | Transition screen | User taps Continue → OS mic prompt → on grant → `mic_authorized` |
+| `mic_authorized` | Conditions/disclaimer screen | User taps Confirm → `disclaimer_confirmed` |
+| `disclaimer_confirmed` | SessionView (initial session) | Backend `/start` advances → `initial_session_started` |
+| `initial_session_started` | SessionView (resume) | Backend `/complete-interaction` Case A advances → `initial_session_completed` |
+| `initial_session_completed` | Feedback screen (M5) | User dismisses → `feedback_acknowledged` |
+
+Back buttons (piece 3 iOS):
+- LevelSelectionView has back → reverts `goal_selected → cta_tapped`
+- Transition screen has back → reverts `level_selected → goal_selected`
 
 **Backend work (M4 part 2) — ✅ ALL COMPLETE 2026-05-30:**
 - ✅ Updated `brain_user.onboarding_phase` CHECK constraint to allow all 15 phase values. Pre-existing constraint named `check_onboarding_phase` was dropped; new constraint `brain_user_onboarding_phase_check` added.
@@ -415,26 +425,32 @@ This is a 15-phase lifecycle (full list in M4 part 2 section). Phase 1 (phases 1
 **D20: HomeView during onboarding = clickable placeholder, no artistic work.** For v1, HomeView (the Parisian view) is a routing destination. Visual design (dormant/awakening/alive states, Blender renders, CoreMotion tilt, layered compositing) is its own conversation, deferred indefinitely. M4 part 2's HomeView at `feedback_acknowledged` is a placeholder that is clickable but currently does nothing on click. M7 adds the account creation gate behavior.
 
 **D21: Targeted back buttons in onboarding, NOT general "back from anywhere".** Per product spec, the user can revert two specific transitions only:
-- From LevelSelectionView → back to GoalSelectionView (revert phase `level_selected` → `home_first_view`, since level_selected is "user picked level" and going back means re-doing goal pick which was the screen rendered at home_first_view)
-- Wait, that's not quite right. Let me re-think after the form splits:
-  - GoalSelectionView is rendered at phase `home_first_view` (so user picks goal, submit → phase advances to `goal_selected`)
-  - LevelSelectionView is rendered at phase `goal_selected` (so user picks level, submit → phase advances to `level_selected`)
-  - Back from LevelSelectionView means going back to GoalSelectionView, i.e. revert phase from `goal_selected` to `home_first_view`
-- And the second back button: from transition stub (rendered at `level_selected`) → back to LevelSelectionView (rendered at `goal_selected`), i.e. revert phase from `level_selected` to `goal_selected`
-
-So the two allowed reverts are:
-1. `goal_selected → home_first_view` (back from level screen to goal screen)
-2. `level_selected → goal_selected` (back from transition to level screen)
+1. `goal_selected → cta_tapped` — back from LevelSelectionView to GoalSelectionView
+2. `level_selected → goal_selected` — back from transition screen to LevelSelectionView
 
 No other back transitions are allowed in the onboarding flow. Forward-only otherwise. This is intentionally minimal — onboarding is short, and "I picked wrong" is a rare-enough problem that we keep the surface area tiny.
 
-**D22: Backend revert endpoint with EXPLICIT allowed-reverts.** Instead of relaxing the `/users/me/advance-onboarding-phase` endpoint (which is strict forward-only-by-one and stays that way) OR managing back-state iOS-only (which would create state drift), we add a new endpoint `POST /users/me/revert-onboarding-phase` with body `{ "to_phase": "..." }`. The endpoint:
-- Validates the current_phase → to_phase pair against a hardcoded whitelist of allowed reverts (the two from D21).
+**D22: Backend revert endpoint with EXPLICIT allowed-reverts.** Instead of relaxing `/users/me/advance-onboarding-phase` (which stays strict forward-only-by-one) OR managing back-state iOS-only (which would create state drift), we added a new endpoint `POST /users/me/revert-onboarding-phase` with body `{ "to_phase": "..." }`. The endpoint:
+- Validates the `(current_phase, to_phase)` pair against a hardcoded whitelist (the two pairs from D21).
 - If the pair is in the whitelist: UPDATE brain_user, return 200 `{ success: true, phase: to_phase, changed: true }`.
-- If the pair is not in the whitelist: 400 `{ error: "invalid_revert", detail: "..." }`.
-- Same auth pattern (Depends(get_current_user)) and same error logging as advance-onboarding-phase.
+- If the pair is NOT in the whitelist: 400 `{ error: "invalid_revert", detail: "..." }`. Helpful detail distinguishes "wrong target from this current_phase" from "no reverts allowed from this current_phase".
 
-Backend stays single source of truth; iOS just calls the right endpoint depending on direction. Strict invariants preserved.
+Backend stays single source of truth; iOS just calls the right endpoint depending on direction. Strict invariants preserved. Verified working in M4 part 2 piece 3 backend testing (9 tests passed).
+
+**D23: 16th phase `cta_tapped` between `home_first_view` and `goal_selected`.** Originally we collapsed "user is exploring HomeView" and "user tapped CTA" into one phase. Rémi later clarified the intent: `account_checked → home_first_view → cta_tapped` are three distinct moments that all map to the HomeView area but represent different states:
+- `account_checked` — user just answered "I'm new"; HomeView starts loading
+- `home_first_view` — scene fully loaded, CTA appears
+- `cta_tapped` — user tapped CTA, transitioning to GoalSelectionView
+
+This lets us track drop-off in the HomeView experience (loaded but didn't tap? loaded and tapped?). Backend ALLOWED_REVERTS table updated accordingly (back from LevelSelectionView lands at cta_tapped, where GoalSelectionView lives).
+
+**D24: Trigger for `account_checked → home_first_view` advance = scene load completion.** Not a timer, not a gesture. The HomeView (eventually a Parisian video / layered render) takes time to load; when it's ready to be explored, the phase advances. This is deterministic (asset loaded or not), code-detectable, and matches the real product UX. For v1 placeholder (no real video yet), we simulate with a 3-second timer — when real video lands, the trigger becomes the video's `onReady` callback.
+
+**D25: New endpoint `POST /users/me/onboarding-prefs/goal`** — partial form save (goal_id only), separate from the existing onboarding-prefs (which saves both goal_id + initial_level_bucket). Reason: with the form split into two screens (D19), the goal pick happens BEFORE the level pick. If we only save goal_id to backend on form completion (level submit), the resume-flow would break (user quits at LevelSelectionView, reopens at goal_selected phase, but goal_id is NULL in DB). The new endpoint preserves the invariant that **phase advance happens AFTER the data it represents is persisted**.
+
+Endpoint also validates the goal_id exists in `brain_user_goal` (rejects unknown goal_ids with 400 + "Invalid goal_id — no matching goal found"). Defensive against iOS bugs or stale clients.
+
+Existing `/users/me/onboarding-prefs` endpoint is unchanged — it stays the "save both" endpoint, called by LevelSelectionView's submit.
 
 ---
 
@@ -478,14 +494,18 @@ REVISED 2026-05-30: phase model expanded from 10 to 15 phases (per D18), form wi
 - [x] **iOS Piece 2:** Transition stub mic-permission flow (grant advances, deny shows alert with Open Settings deep-link) ✅ 2026-05-30
 - [x] **iOS Piece 2:** Re-map: mic_authorized → conditions stub; combined disclaimer_confirmed + initial_session_started case with `.id("initial_session")` ✅ 2026-05-30
 
-- [ ] **Backend Piece 3:** New endpoint `POST /users/me/revert-onboarding-phase` with explicit allowed-reverts whitelist (per D22). Initially supports: `goal_selected → home_first_view` and `level_selected → goal_selected`. All other reverts return 400.
-- [ ] **iOS Piece 3:** Add `revertOnboardingPhase(toPhase:token:)` method to `OnboardingService.swift` (mirror the advance method's structure).
+- [x] **Backend Piece 3:** New endpoint `POST /users/me/revert-onboarding-phase` with explicit allowed-reverts whitelist (per D22) ✅ 2026-05-30. Whitelist: `goal_selected → cta_tapped`, `level_selected → goal_selected`.
+- [x] **Backend Piece 3:** New endpoint `POST /users/me/onboarding-prefs/goal` (saves goal_id + advances to goal_selected with goal-existence validation, per D25) ✅ 2026-05-30.
+- [x] **Backend Piece 3:** Add `cta_tapped` phase to lifecycle (16 phases total, per D23) ✅ 2026-05-30. SQL constraint updated, ONBOARDING_PHASES list updated.
+- [ ] **iOS Piece 3:** Add `submitOnboardingGoal(goalId:token:)` to `OnboardingService.swift` — calls new `/users/me/onboarding-prefs/goal` endpoint.
+- [ ] **iOS Piece 3:** Add `revertOnboardingPhase(toPhase:token:)` to `OnboardingService.swift` — calls `/users/me/revert-onboarding-phase`.
 - [ ] **iOS Piece 3:** Split `TwoQuestionFormView` into `GoalSelectionView.swift` and `LevelSelectionView.swift` (per D19).
-- [ ] **iOS Piece 3:** Re-map OnboardingView's switch: `home_first_view` → GoalSelectionView; `goal_selected` → LevelSelectionView (currently both map to TwoQuestionFormView in piece 1/2).
-- [ ] **iOS Piece 3:** Add back button on LevelSelectionView → calls revert to home_first_view.
+- [ ] **iOS Piece 3:** GoalSelectionView submits via the new `/onboarding-prefs/goal` endpoint; LevelSelectionView submits via the existing `/onboarding-prefs` endpoint (which has both fields by then).
+- [ ] **iOS Piece 3:** AccountCheckView as a real screen with two buttons ("I have an account" / "I'm new"). "I'm new" advances phase; "I have an account" stubs to login (separate flow).
+- [ ] **iOS Piece 3:** HomeView placeholder view shown at `account_checked` + `home_first_view`. At `account_checked`, 3-second simulated load timer auto-advances to `home_first_view` (per D24); CTA only visible at `home_first_view`. CTA tap advances to `cta_tapped`.
+- [ ] **iOS Piece 3:** Re-map OnboardingView's switch — add cta_tapped case rendering GoalSelectionView; goal_selected case renders LevelSelectionView (was TwoQuestionFormView for both home_first_view and goal_selected in piece 2).
+- [ ] **iOS Piece 3:** Add back button on LevelSelectionView → calls revert to cta_tapped.
 - [ ] **iOS Piece 3:** Add back button on transition stub → calls revert to goal_selected.
-- [ ] **iOS Piece 3:** `accountCheck` becomes a real screen with two buttons ("I have an account" / "I'm new"). "I'm new" advances phase; "I have an account" stubs to login (separate flow).
-- [ ] **iOS Piece 3:** `tryFirstSessionCTA` stub is removed; the CTA is folded into the placeholder HomeView shown at phase `account_checked`.
 - [ ] **iOS Piece 3:** Test resume — quit mid-onboarding at each phase, reopen, verify lands at correct screen.
 
 ### M5 — Feedback screen
