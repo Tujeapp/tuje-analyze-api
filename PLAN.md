@@ -1,7 +1,7 @@
 # TuJe v1 — Onboarding & Session Architecture Plan
 
 **Status:** Living document. Updated as decisions evolve.
-**Last updated:** 2026-05-30 (M4 part 2 backend complete; iOS side remains)
+**Last updated:** 2026-05-30 (M4 part 2 backend complete; iOS piece 1 complete; iOS pieces 2-3 remain)
 **Owner:** Rémi
 **Goal:** Reach a solid v1 of TuJe with a complete, testable onboarding flow and a foundation we can sleep on.
 
@@ -182,13 +182,17 @@ So M3 became much smaller: just compute an average and store it. Took ~30 minute
 
 **Blocked from end-to-end verification:** Simulator test revealed `TuJeApp.swift`'s routing condition (`if user.goalId == nil → OnboardingView else ContentView`) is too crude. After the form submits and sets `goalId`, the app immediately graduates the user to `ContentView`, bypassing the remaining onboarding stubs (`.transition`, `.micPermission`, `.conditions`, `.initialSession`, `.feedback`). The `.initialSession` step we built is structurally unreachable today. This bug pre-dates M4 (the stubs were already unreachable in production), but M4 surfaced it. Resolution: M4 part 2 (below).
 
-### Milestone 4 part 2 — Onboarding phase architecture (BACKEND COMPLETE 2026-05-30, iOS PENDING)
+### Milestone 4 part 2 — Onboarding phase architecture (BACKEND COMPLETE, iOS PIECE 1 COMPLETE, iOS PIECES 2-3 REMAIN)
 
 **Goal:** Establish a proper `onboarding_phase` lifecycle as the source of truth for routing. Build phase 1 (sequential, pre-account) of the two-phase onboarding model. Phase 2 (account creation + tier selection) is M7+.
 
-**Backend status:** ✅ COMPLETE 2026-05-30. Tested with 9 distinct curl + TablePlus verifications covering the new endpoint's 5 behaviors and the 4 modified endpoints' phase advances.
+**Backend status:** ✅ COMPLETE 2026-05-30. Tested with 9 distinct curl + TablePlus verifications.
 
-**iOS status:** ⬜ PENDING. The routing refactor, form split, and accountCheck screen still need to be built. See "iOS work" below.
+**iOS piece 1 status:** ✅ COMPLETE 2026-05-30. Phase-based routing in TuJeApp + OnboardingView refactored to switch on phase + OnboardingCoordinator deleted. Build clean. End-to-end verified: brand-new anonymous user routes to accountCheck stub at phase `not_started`.
+
+**iOS pieces 2-3 status:** ⬜ PENDING.
+- **Piece 2** — wire each stub's Next button to call `/users/me/advance-onboarding-phase`
+- **Piece 3** — split `TwoQuestionFormView` into `GoalSelectionView` + `LevelSelectionView`; make `accountCheck` a real screen
 
 **Big-picture context — two-phase onboarding (D18):**
 
@@ -261,21 +265,40 @@ PHASE 2 — sequential, account-required (M7+ work, NOT M4 part 2):
 - Test 9: `/api/initial-session/complete-interaction` Case A writes `initial_session_completed` (atomic with session UPDATE + session_score computation = 80) ✅
 
 **iOS work (M4 part 2):**
-- Refactor `TuJeApp.swift` routing — phase-based, not `goalId == nil`:
-  - Phase `not_started` → `accountCheck` screen
-  - Phase `account_checked` → `parisianTeaser` (placeholder HomeView with "Try first session" CTA)
-  - Phase `home_first_view` → `GoalSelectionView`
-  - Phase `goal_selected` → `LevelSelectionView`
-  - Phase `level_selected` → `transition` screen
-  - Phase `mic_authorized` → `conditions` screen
-  - Phase `disclaimer_confirmed` → `SessionView(isInitialSession: true)` (M4 part 1)
-  - Phase `initial_session_started` → `SessionView(isInitialSession: true)` (resume mid-session if quit)
-  - Phase `initial_session_completed` → feedback view (M5 stub for now)
-  - Phase `feedback_acknowledged` → HomeView placeholder (clickable but currently leads nowhere — M7+ adds the account creation gate)
-- Each stub's "Next →" button calls `advance-onboarding-phase` then advances coordinator step (or the routing re-renders automatically based on the new phase)
-- Split the existing single-screen form into `GoalSelectionView.swift` and `LevelSelectionView.swift` (D19)
-- Handle resume: user reopening app mid-onboarding lands on the correct screen based on stored phase
-- `tryFirstSessionCTA` stub is removed/folded into the placeholder HomeView
+
+**Piece 1 — Phase-based routing (✅ COMPLETE 2026-05-30):**
+- ✅ Refactored `TuJeApp.swift` routing — phase-based, not `goalId == nil`. Single private helper `shouldShowOnboarding(for:)` returns true for the 9 Phase 1 phases (`not_started` through `initial_session_completed`). Falls through to `ContentView` for `feedback_acknowledged` (TRANSITIONAL — M7+ replaces with gate behavior).
+- ✅ Refactored `OnboardingView.swift` to switch on `appState.currentUser?.onboardingPhase` (Optional<String>). 9 named phase cases + defensive default. SessionView at `initial_session_started` correctly wired with M4 part 1's closures (onInitialSessionComplete calls `appState.updateOnboardingPhase("initial_session_completed")`).
+- ✅ Deleted `OnboardingCoordinator.swift` and `OnboardingStep` enum entirely. Phase is now the single source of truth.
+- ✅ Removed coordinator references from `TwoQuestionFormView.swift` (2 lines). Form's submit still works: `updateUserFromOnboarding` sets phase to `level_selected`, which triggers TuJeApp re-render → OnboardingView switches to transition stub automatically.
+- ✅ Added `advanceOnboardingPhase(toPhase:token:)` to `OnboardingService.swift` with `AdvanceOnboardingPhaseRequest`/`AdvanceOnboardingPhaseResponse` structs. Same retry pattern as `submitPrefs` (1 retry on 5xx). Currently no callers (piece 2 will wire them).
+- ✅ Added `updateOnboardingPhase(_:)` to `AppState.swift` — local-state-only update that preserves all 12 User fields, reassigns authState to trigger SwiftUI re-render.
+- ✅ Fixed cold-launch stub at `AppState.swift:107` (`phase_1_in_progress` → `not_started`).
+- ✅ Build clean. End-to-end verified: brand-new anonymous user routes to accountCheck stub.
+
+Piece 1 phase → screen mapping (current state — to be refined in pieces 2-3):
+- `not_started` → existing accountCheck stub
+- `account_checked` → existing parisianTeaser stub
+- `home_first_view` → existing tryFirstSessionCTA stub
+- `goal_selected` → existing twoQuestionForm (real form)
+- `level_selected` → existing transition stub
+- `mic_authorized` → existing micPermission stub
+- `disclaimer_confirmed` → existing conditions stub
+- `initial_session_started` → SessionView(isInitialSession: true) [M4 part 1 work]
+- `initial_session_completed` → existing feedback stub
+- nil or unknown → existing accountCheck stub (defensive fallback)
+
+**Piece 2 — Per-stub phase advancement (PENDING):**
+- Each stub's "Next →" button should call `advance-onboarding-phase` on the backend, then call `updateOnboardingPhase` locally to trigger the routing re-render
+- Currently stubs' Next buttons just log `⚠️ stub Next tapped — phase advance not wired yet (piece 2)`
+- Mic permission flow at the transition stub: tapping Next should trigger the OS-level mic permission request, then advance to `mic_authorized`
+- The accountCheck stub's "Next" specifically: choosing "I'm new" advances; "I have an account" would route to login flow (out of scope, stubbed for now)
+
+**Piece 3 — Form split + accountCheck as real screen (PENDING):**
+- Split `TwoQuestionFormView` into `GoalSelectionView.swift` and `LevelSelectionView.swift` (per D19)
+- When form splits, each screen's submit becomes a one-step phase advance
+- `accountCheck` becomes a real screen with two buttons ("I have an account" / "I'm new")
+- `tryFirstSessionCTA` stub is removed; the CTA is folded into the placeholder HomeView shown at phase `account_checked`
 
 **M4 part 2 deferred to Phase 2 / M7+:**
 - The post-feedback gate behavior (timer + tap → account creation modal). For M4 part 2, the HomeView placeholder shown at phase `feedback_acknowledged` is just a placeholder — clickable but the click leads nowhere (or shows a "Coming soon" message). The full gate is M7 work.
@@ -413,12 +436,16 @@ REVISED 2026-05-30: phase model expanded from 10 to 15 phases (per D18), form wi
 - [x] **Backend:** Modify `/api/initial-session/start` to atomically advance phase to `initial_session_started` ✅ 2026-05-30
 - [x] **Backend:** Modify `/api/initial-session/complete-interaction` (Case A only) to atomically advance phase to `initial_session_completed` ✅ 2026-05-30
 - [x] **Backend bonus:** Fix latent `logger` undefined bug in `user_routes.py` ✅ 2026-05-30 — added `import logging` + module-level logger; file had 6 `logger` references but no logger defined (would have crashed at runtime if hit).
-- [ ] **iOS:** Refactor `TuJeApp.swift` routing — phase-based, not `goalId == nil`. Routes per phase (see M4 part 2 section for the table).
-- [ ] **iOS:** Each onboarding stub's "Next →" button calls `advance-onboarding-phase` then re-renders based on new phase.
-- [ ] **iOS:** Split `TwoQuestionFormView` into `GoalSelectionView.swift` and `LevelSelectionView.swift` (per D19).
-- [ ] **iOS:** `accountCheck` becomes a real screen with two buttons ("I have an account" / "I'm new"). "I'm new" advances phase; "I have an account" stubs to login (separate flow).
-- [ ] **iOS:** `tryFirstSessionCTA` stub is removed; the CTA is folded into the placeholder HomeView shown at phase `account_checked`.
-- [ ] **iOS:** Test resume — quit mid-onboarding at each phase, reopen, verify lands at correct screen.
+- [x] **iOS Piece 1:** Refactor `TuJeApp.swift` routing — phase-based, not `goalId == nil` ✅ 2026-05-30. Single helper `shouldShowOnboarding(for:)` returns true for 9 Phase 1 phases. End-to-end verified.
+- [x] **iOS Piece 1:** Refactor `OnboardingView.swift` to switch on phase, eliminate coordinator ✅ 2026-05-30.
+- [x] **iOS Piece 1:** Add `advanceOnboardingPhase` to OnboardingService and `updateOnboardingPhase` to AppState ✅ 2026-05-30.
+- [x] **iOS Piece 1:** Fix cold-launch stub (`phase_1_in_progress` → `not_started`) ✅ 2026-05-30.
+- [x] **iOS Piece 1:** Delete `OnboardingCoordinator.swift` ✅ 2026-05-30.
+- [ ] **iOS Piece 2:** Wire each stub's "Next →" button to call `advance-onboarding-phase` then `updateOnboardingPhase` locally. Handle the transition stub's mic-permission flow (request OS permission before advancing).
+- [ ] **iOS Piece 3:** Split `TwoQuestionFormView` into `GoalSelectionView.swift` and `LevelSelectionView.swift` (per D19).
+- [ ] **iOS Piece 3:** `accountCheck` becomes a real screen with two buttons ("I have an account" / "I'm new"). "I'm new" advances phase; "I have an account" stubs to login (separate flow).
+- [ ] **iOS Piece 3:** `tryFirstSessionCTA` stub is removed; the CTA is folded into the placeholder HomeView shown at phase `account_checked`.
+- [ ] **iOS Piece 1+:** Test resume — quit mid-onboarding at each phase, reopen, verify lands at correct screen. (Deferred until pieces 2-3 land, so all phases are reachable to test.)
 
 ### M5 — Feedback screen
 
