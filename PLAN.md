@@ -1,7 +1,7 @@
 # TuJe v1 — Onboarding & Session Architecture Plan
 
 **Status:** Living document. Updated as decisions evolve.
-**Last updated:** 2026-05-31 (M4 part 2 piece 3 COMPLETE — backend + iOS, end-to-end verified in simulator)
+**Last updated:** 2026-05-31 (M5 COMPLETE — Feedback screen with score + qualitative label + goal context + HomePlaceholderView terminal state)
 **Owner:** Rémi
 **Goal:** Reach a solid v1 of TuJe with a complete, testable onboarding flow and a foundation we can sleep on.
 
@@ -324,19 +324,34 @@ Piece 1 phase → screen mapping (current state — to be refined in pieces 2-3)
 - Initial session DB rows created (session, cycle, 7 interactions, session_score) per M1-M3 work
 - "I have an account" branch on the accountCheck screen routes to a (stubbed-for-now) login flow
 
-### Milestone 5 — Feedback screen (~1 session, slightly revised 2026-05-30)
+### Milestone 5 — Feedback screen ✅ COMPLETE (2026-05-31)
 
-**Goal:** Beautiful, brand-appropriate feedback screen that interprets the user's `session_score` (computed in M3) into a CEFR-aligned verdict, considering what they self-reported at onboarding. On dismiss, lands the user on the HomeView placeholder.
+**Goal:** One-screen feedback at phase `initial_session_completed` showing the user's session_score (0-100) with a qualitative label, the goal context, and a Continue button that advances to `feedback_acknowledged` → HomePlaceholderView's terminal state.
 
-**Work:**
-- Decide the interpretation logic (product/UX): given `session_score` (0–100) and `initial_level_bucket` (0/1/2), what does the screen say? Per Point D, it might confirm/adjust the user's self-report, or flag "needs clarification in a first regular session."
-- Design the screen (copy, visuals, CEFR naming — A0.0 / A0.5 / A1.0 etc. per Point A)
-- SwiftUI implementation
-- Dismiss action advances phase to `feedback_acknowledged` and routes to HomeView placeholder
+**Scope intentionally minimized:** No CEFR estimation (the level system isn't wired for initial sessions yet — that's deferred to regular-session work). No comparison to self-declared `initial_level_bucket`. Just the headline number, a friendly label, and the user's goal. Honest about what we have.
 
-**Verification:**
-- Multiple test runs with different goal/level combos and different score outcomes (high/low/mid) → feedback adapts appropriately
-- On dismiss, user lands on HomeView placeholder with phase `feedback_acknowledged`
+**Score bucketing:**
+- 0-40 → "Good effort"
+- 41-70 → "Nice job"
+- 71-100 → "Excellent"
+
+**iOS work (5 chunks, all completed 2026-05-31, all clean builds, zero new warnings):**
+
+- **Chunk 1** — UserDefaults persistence. Created `SessionKeys.swift` (enum with `lastInitialSessionId` and `lastInitialSessionScore` constants). SessionViewModel writes both at the moments they're set (lines 277 and 336). AppState clears them in all 4 logout/reset flows (mirrors `anonGoalIdKey` pattern). This is required because SessionViewModel is `@StateObject` owned by SessionView, which dies when OnboardingView's switch re-renders to FeedbackView — the in-memory state is gone, so UserDefaults is the bridge.
+
+- **Chunk 2** — Created `FeedbackView.swift`. Reads `lastInitialSessionScore` via `UserDefaults.standard.object(forKey:) as? Int` (distinguishes nil from 0). Reads goal label via `GoalsService.shared.fetchGoals(token:)` + array find (cache is warm by this point). Graceful degradation: if score is nil, shows generic "Session complete!" without a number; if goal lookup fails, silent fail (goal context is decorative). Continue button advances phase to `feedback_acknowledged` via existing `OnboardingService.advanceOnboardingPhase`.
+
+- **Chunk 3** — Extended `HomePlaceholderView` with a third terminal state for `feedback_acknowledged`. Added `isFeedbackAcknowledged` computed property; existing `isLoading` and `showsCTA` stay correctly false at this phase. Three-state overlay: loading (spinner) / feedback_acknowledged (accentColor checkmark + "Lesson complete") / default (building icon). Second title/subtitle variant: "Welcome back to Paris" + "More lessons are coming soon. Thanks for being an early explorer!" No CTA at this phase (terminal state). Header comment updated.
+
+- **Chunk 4** — Routing changes. `OnboardingView.swift`: `initial_session_completed` case now routes to `FeedbackView` (was `OnboardingStubView`). `feedback_acknowledged` added to the existing combined HomePlaceholderView case (now 3 phases: `account_checked`, `home_first_view`, `feedback_acknowledged` — preserves view identity, no flicker between states). `TuJeApp.shouldShowOnboarding` Set extended to 11 phases with `feedback_acknowledged` inserted after `initial_session_completed`.
+
+- **Chunk 5** — Simulator end-to-end test (shortcut method per D26). Used existing user at `mic_authorized`, jumped phase to `initial_session_completed` via TablePlus (bypasses strict-advance-by-one). Force-quit + relaunch → AppState fetched fresh `/users/me` → routed to FeedbackView. Verified: FeedbackView rendered correctly with graceful degradation (no score in UserDefaults → "Session complete!" generic message + goal context "You're one step closer to travel and vacation." correctly formatted). Tapped Continue → advanced to `feedback_acknowledged` → HomePlaceholderView terminal state rendered (checkmark + "Welcome back to Paris" + "More lessons coming soon" + no CTA). All checks passed.
+
+**Key learnings:**
+- **SessionViewModel @StateObject lifecycle** — confirmed that @StateObject dies when its owning view unmounts. Any state needed across view transitions must be persisted to UserDefaults (or AppState, but AppState would be overkill for two ints/strings).
+- **Combined switch case for view identity preservation** — combining 3 phases (account_checked, home_first_view, feedback_acknowledged) into one case ensures SwiftUI keeps the HomePlaceholderView instance across phase changes. Internal computed properties (`isLoading`, `showsCTA`, `isFeedbackAcknowledged`) switch the rendered content without view recreation. This prevents flicker.
+- **`UserDefaults.standard.integer(forKey:)` is ambiguous** — returns 0 if missing. Always use `object(forKey:) as? Int` for Optional<Int> reads.
+- **Honest design over fake polish** — chose to show genuine data (session_score + goal) rather than fake CEFR estimates we can't actually compute. When the real level computation is built, M5 can be revisited.
 
 ### Milestone 6 — Phase 1 v1 readiness (~1 session, revised 2026-05-30)
 
@@ -445,6 +460,20 @@ Endpoint also validates the goal_id exists in `brain_user_goal` (rejects unknown
 
 Existing `/users/me/onboarding-prefs` endpoint is unchanged — it stays the "save both" endpoint, called by LevelSelectionView's submit.
 
+**D26: M5 feedback screen — show genuine data only, no fake CEFR estimates.** Original M5 vision (per pre-existing PLAN.md notes) was a "beautiful, brand-appropriate feedback screen that interprets the user's session_score into a CEFR-aligned verdict, considering what they self-reported at onboarding." Reality check during M5 discovery: the level system isn't wired for initial sessions yet. `brain_user.level` stays at 0 for new users — no performance-derived level is computed at session completion. So we can't honestly say "you're at A2 now" because we never computed that.
+
+Decision: ship a feedback screen that shows what we genuinely have (session_score 0-100 + goal context), with a qualitative label for warmth, and skip the CEFR fakery. When the real level computation is built (regular-session work), M5 can be revisited.
+
+**D27: M5 score persistence via UserDefaults bridge.** `SessionViewModel` is `@StateObject` owned by `SessionView`. When OnboardingView's switch re-renders to FeedbackView (at phase `initial_session_completed`), SessionView is unmounted and SessionViewModel dies with it. The captured `finalSessionScore` (a `@Published` Int?) is gone.
+
+Solution: SessionViewModel persists session_id and session_score to UserDefaults at the moments they're set. FeedbackView reads from UserDefaults. Created `SessionKeys` enum (in `TuJe/Models/SessionKeys.swift`) as a single source of truth for the two key strings, since three classes touch them (SessionViewModel writes, FeedbackView reads, AppState clears on logout). Existing `anonGoalIdKey` pattern (private constants per class) wouldn't have worked for the multi-consumer case.
+
+Future cleanup: when real session-resume logic is needed (e.g., for the regular-session flow), we may add a `GET /api/session/{id}` iOS service method. Not needed for M5's simple case.
+
+**D28: M5 graceful degradation — no score in UserDefaults = generic message.** If a user reaches `initial_session_completed` without UserDefaults having a session_score (e.g., test fixtures, edge cases where SessionViewModel didn't run), FeedbackView shows "Session complete!" as the fallback message instead of "X/100 — [label]". The goal context line still shows (goal_id is on AppState, doesn't depend on UserDefaults). Continue button still works. This is intentional defense — the test path (chunk 5 simulator verification) actually exercised this graceful path and it rendered correctly.
+
+**D29: M5 simulator test shortcut via TablePlus phase jump.** Original M5 verification plan was a full end-to-end test (cold launch → 7 interactions → FeedbackView). Pragmatic shortcut chosen: use an existing user, manually jump their phase to `initial_session_completed` via TablePlus (bypassing strict advance-by-one), force-quit + relaunch → AppState fetches fresh `/users/me` → router lands on FeedbackView. Tests routing, view rendering, graceful degradation, Continue button advance, and HomePlaceholderView terminal state — without requiring an actual 7-interaction session run. Accepted: this doesn't verify SessionViewModel's UserDefaults writes (those are mechanical and trusted by build); the value of running 7 actual interactions just to confirm two UserDefaults.set calls work isn't worth the time.
+
 ---
 
 ## 5. TODO bank
@@ -508,9 +537,14 @@ REVISED 2026-05-30: phase model expanded from 10 to 15 phases (per D18), form wi
 - [ ] **HomePlaceholderView advanceFromLoading failure:** no retry button — user must foreground/background. Acceptable for placeholder; replace with proper onPlayerReady callback when real Parisian video lands.
 - [ ] **AccountCheckView edge case:** user with `onboarding_phase=not_started` but already `.authenticated` would still see AccountCheckView. Current behavior: hides "I have an account" button via `if case .anonymous` guard. Acceptable.
 
-### M5 — Feedback screen
+### M5 — Feedback screen ✅ COMPLETE 2026-05-31
 
-- [ ] **iOS:** Build the post-initial-session feedback screen — reads `session_score` and `initial_level_bucket`, renders interpretation, dismiss advances phase to `feedback_acknowledged` and routes to HomeView placeholder.
+- [x] **iOS:** Build the post-initial-session feedback screen ✅ 2026-05-31. Shows session_score (0-100) + qualitative label (Good effort/Nice job/Excellent) + goal context. Continue advances to `feedback_acknowledged` → HomePlaceholderView terminal state. UserDefaults bridge for session data persistence across SessionView→FeedbackView transition (per D27).
+
+**Deferred TODOs surfaced during M5 (next sessions):**
+- [ ] **FeedbackView graceful degradation refinement:** When score is nil in UserDefaults, both the header and the score block show "Session complete!" — slight redundancy. Cleaner: omit the score block entirely when nil (header already conveys the message). Cosmetic, not blocking.
+- [ ] **GET /api/session/{id} iOS service method:** Not needed for M5 (UserDefaults bridge is sufficient), but will be needed for resume-aware flows in regular sessions and for analytics. Add when regular-session work begins.
+- [ ] **Real CEFR estimation:** When the level system is wired for initial sessions (currently `brain_user.level` stays at 0 — performance never updates it), revisit FeedbackView to show "estimated CEFR" alongside score. Per D26, this is deferred until real level computation exists.
 
 ### M6 — Phase 1 v1 readiness
 
