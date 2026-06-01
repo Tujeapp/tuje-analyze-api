@@ -1,7 +1,7 @@
 # TuJe v1 — Onboarding & Session Architecture Plan
 
 **Status:** Living document. Updated as decisions evolve.
-**Last updated:** 2026-05-31 (M5 COMPLETE — Feedback screen with score + qualitative label + goal context + HomePlaceholderView terminal state)
+**Last updated:** 2026-06-01 (Milestones renumbered: M6 now Airtable CMS for initial session templates; M7 comprehensive walkthrough; M8 Phase 2 account/tier)
 **Owner:** Rémi
 **Goal:** Reach a solid v1 of TuJe with a complete, testable onboarding flow and a foundation we can sleep on.
 
@@ -353,21 +353,62 @@ Piece 1 phase → screen mapping (current state — to be refined in pieces 2-3)
 - **`UserDefaults.standard.integer(forKey:)` is ambiguous** — returns 0 if missing. Always use `object(forKey:) as? Int` for Optional<Int> reads.
 - **Honest design over fake polish** — chose to show genuine data (session_score + goal) rather than fake CEFR estimates we can't actually compute. When the real level computation is built, M5 can be revisited.
 
-### Milestone 6 — Phase 1 v1 readiness (~1 session, revised 2026-05-30)
+### Milestone 6 — Airtable CMS for initial session templates (~1-2 sessions)
 
-**Goal:** Phase 1 of v1 is ship-ready. Full simulator test from cold launch through `feedback_acknowledged`. No known bugs, no dead code in the Phase 1 path, full documentation. The placeholder HomeView is clickable but doesn't yet trigger account creation — that's M7+.
+**Goal:** Make the 18 initial session templates (6 goals × 3 levels) manageable through Airtable as the CMS. Rémi can populate, edit, and reorder interactions across all templates visually; an Airtable→PostgreSQL webhook syncs changes to `brain_initial_session_template`.
 
-**Note:** v1 cannot fully ship without Phase 2 (M7+) because account creation is mandatory. But Phase 1 being verifiably complete is the foundation for everything that follows. M6 establishes that foundation.
+**Why this milestone exists (per D30):** Without it, the 18 templates can only be populated via raw SQL inserts, which is slow, error-prone, and offers no creative feedback loop. With this, Rémi (the only content owner) can craft realistic learning sequences for every goal/level combination. M7's comprehensive walkthrough test then becomes meaningful — testing with real, intentionally-crafted content rather than test fixtures.
 
-### Milestone 7+ — Phase 2: account creation + tier selection (NEW, multi-session, ~4-6 sessions)
+**Current state (2026-06-01):**
+- PostgreSQL `brain_initial_session_template` exists and is populated with limited test data from M1-M3 testing (likely 1-2 templates)
+- Airtable has NO table for the 18 templates yet
+- Airtable→PostgreSQL sync infrastructure exists for other tables (notions, interactions, vocab) but has not been extended to cover templates
+
+**Work to do (high-level — exact spec needs M6 discovery):**
+- Design new Airtable table (tentative name "Initial Session Templates")
+  - Columns: Goal (single select matching `brain_user_goal.id`), Level (single select 0/1/2), Interactions (linked records to existing Interactions table), ordering mechanism
+  - Each row = one template = one (goal × level) combination
+- Build/extend the Airtable→PostgreSQL sync to handle this new table
+- Write to `brain_initial_session_template` correctly, including the interaction sequence ordering
+- Populate all 18 templates with real content (this is content work, not engineering)
+
+**Verification:**
+- Editing a template in Airtable triggers the webhook, PostgreSQL updates within seconds
+- Backend `/api/initial-session/start` finds the right template for any (goal, level) combination
+- iOS receives the correct interactions and renders them in order
+
+**Open scope questions for M6 discovery (when we begin):**
+- How are interactions stored in `brain_initial_session_template`? Array column, join table, JSON?
+- How do the existing Airtable syncs work (script location, pattern)?
+- Do the 18 templates need to be ALL populated before M7, or is partial coverage acceptable for early testing?
+- Is there a "template version" or "live/draft" mechanism needed, or does Airtable's edit-to-sync flow handle it?
+
+### Milestone 7 — Phase 1 v1 readiness (comprehensive walkthrough test) (~1-2 sessions)
+
+**Goal:** Phase 1 of v1 is ship-ready. Full simulator test from cold launch through `feedback_acknowledged`. No known bugs, no dead code in the Phase 1 path. With M6 done, multiple variants tested (different goals, different levels) with real content.
+
+**Note:** v1 cannot fully ship without Phase 2 (M8) because account creation is mandatory. But Phase 1 being verifiably complete is the foundation for everything that follows. M7 establishes that foundation.
+
+**What hasn't been tested end-to-end yet (M7 will close these gaps):**
+- Cold launch → onboarding routing as a real user (no shortcuts)
+- All 7 interactions in an actual session (video playback, recording, transcription, scoring)
+- SessionViewModel's UserDefaults persistence writes (added in M5 chunk 1, never exercised by a real session — TablePlus shortcut bypassed it)
+- FeedbackView's happy path with a real session_score (graceful degradation was tested; the actual "X/100 — [label]" rendering hasn't been)
+- Phase advancement `disclaimer_confirmed → initial_session_started → initial_session_completed` (these phases are set BY the backend during the session; we've never seen this happen in one continuous flow)
+- Resume behavior — quit mid-session, reopen, verify lands at correct phase
+- Edge cases that surface only in real use: animations, network blips, mic permission revocation mid-session
+
+**Realistic scope:** 2-4 hours including bug surfacing/fixing. Could be more if real bugs surface. Don't assume first-try success.
+
+### Milestone 8 — Phase 2: account creation + tier selection (multi-session, ~4-6 sessions)
 
 **Goal:** Build the gated Phase 2 onboarding — account creation, email/phone verification, plan tier selection. The bridge from `feedback_acknowledged` (Phase 1 done, anonymous user) to `onboarding_completed` (fully committed user).
 
 **Likely milestone breakdown (subject to revision when we get there):**
-- **M7:** The HomeView gate behavior — timer + tap → account creation modal. Phase advancement to `account_creation_started`.
-- **M8:** Account creation form — backend `/auth/upgrade-anonymous` already exists; iOS wraps it. Phases `account_creation_started → account_credentials_entered`.
-- **M9:** Email/phone verification — requires choosing a provider (Twilio for SMS? SES for email?), code generation and validation endpoints, iOS verification screen. Phases `account_credentials_entered → account_verified`.
-- **M10:** Plan tier selection UI — Free/Basic/Pro presentation, persistence to `brain_user.subscription_tier`. Phase `account_verified → plan_tier_selected`. NOTE: StoreKit 2 integration (real subscriptions, App Store Server Notifications V2, receipt validation) likely deferred to a v1.1 unless mandatory for v1.
+- **M8:** The HomeView gate behavior — timer + tap → account creation modal. Phase advancement to `account_creation_started`.
+- **M9:** Account creation form — backend `/auth/upgrade-anonymous` already exists; iOS wraps it. Phases `account_creation_started → account_credentials_entered`.
+- **M10:** Email/phone verification — requires choosing a provider (Twilio for SMS? SES for email?), code generation and validation endpoints, iOS verification screen. Phases `account_credentials_entered → account_verified`.
+- **M11:** Plan tier selection UI — Free/Basic/Pro presentation, persistence to `brain_user.subscription_tier`. Phase `account_verified → plan_tier_selected`. NOTE: StoreKit 2 integration (real subscriptions, App Store Server Notifications V2, receipt validation) likely deferred to a v1.1 unless mandatory for v1.
 - **M11:** Final transition + v1 polish — landing on the (committed) HomeView, phase `onboarding_completed`, full end-to-end test.
 
 These milestones are placeholders. We'll scope each properly when we reach them. M7-M11 numbering may shift.
@@ -474,6 +515,12 @@ Future cleanup: when real session-resume logic is needed (e.g., for the regular-
 
 **D29: M5 simulator test shortcut via TablePlus phase jump.** Original M5 verification plan was a full end-to-end test (cold launch → 7 interactions → FeedbackView). Pragmatic shortcut chosen: use an existing user, manually jump their phase to `initial_session_completed` via TablePlus (bypassing strict advance-by-one), force-quit + relaunch → AppState fetches fresh `/users/me` → router lands on FeedbackView. Tests routing, view rendering, graceful degradation, Continue button advance, and HomePlaceholderView terminal state — without requiring an actual 7-interaction session run. Accepted: this doesn't verify SessionViewModel's UserDefaults writes (those are mechanical and trusted by build); the value of running 7 actual interactions just to confirm two UserDefaults.set calls work isn't worth the time.
 
+**D30: Milestone renumbering — insert Airtable CMS work as M6, push comprehensive walkthrough to M7, Phase 2 becomes M8 (2026-06-01).** The original PLAN.md had M6 as "Phase 1 v1 readiness (comprehensive walkthrough test)" and M7+ as Phase 2 (account/tier). After completing M5, Rémi identified a gap: the 18 initial session templates can currently only be populated via raw SQL in TablePlus. Running a comprehensive walkthrough test (M7) without first being able to manage content visually means testing with stale fixtures rather than realistic, intentionally-crafted learning sequences.
+
+Inserting M6 — Airtable as CMS for the 18 templates with webhook sync to PostgreSQL — solves this. M7's comprehensive test then becomes meaningful (can test all 18 templates, multiple goal/level combinations, real content). M8 (Phase 2: account + tier) remains the final pre-launch milestone for v1.
+
+The decoupling also matters for energy management: building Airtable schema + sync is a different mode of work from comprehensive iOS testing (more concrete, faster feedback loop, doesn't require staying in Swift mental model). Sequencing them apart respects how the work actually feels to do.
+
 ---
 
 ## 5. TODO bank
@@ -546,11 +593,18 @@ REVISED 2026-05-30: phase model expanded from 10 to 15 phases (per D18), form wi
 - [ ] **GET /api/session/{id} iOS service method:** Not needed for M5 (UserDefaults bridge is sufficient), but will be needed for resume-aware flows in regular sessions and for analytics. Add when regular-session work begins.
 - [ ] **Real CEFR estimation:** When the level system is wired for initial sessions (currently `brain_user.level` stays at 0 — performance never updates it), revisit FeedbackView to show "estimated CEFR" alongside score. Per D26, this is deferred until real level computation exists.
 
-### M6 — Phase 1 v1 readiness
+### M6 — Airtable CMS for initial session templates
 
-- [ ] Full end-to-end simulator test of Phase 1 (cold launch through `feedback_acknowledged`). Document any remaining issues.
+- [ ] Design new Airtable table (tentative: "Initial Session Templates") with Goal single-select, Level single-select, linked records to Interactions, ordering mechanism
+- [ ] Extend Airtable→PostgreSQL sync infrastructure to handle the new table
+- [ ] Populate all 18 templates (6 goals × 3 levels) with real content in Airtable
+- [ ] Verify backend `/api/initial-session/start` correctly fetches the right template for each (goal, level) combination
 
-### M7+ — Phase 2: account + tier (multi-session, see PLAN section 3)
+### M7 — Phase 1 v1 readiness (comprehensive walkthrough test)
+
+- [ ] Full end-to-end simulator test of Phase 1 (cold launch through `feedback_acknowledged`). Multiple variants — different goals, different levels — using M6's real content. Document any bugs and fix them.
+
+### M8+ — Phase 2: account + tier (multi-session, see PLAN section 3)
 
 ### High-priority, independent of milestones
 
