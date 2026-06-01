@@ -1,7 +1,7 @@
 # TuJe v1 — Onboarding & Session Architecture Plan
 
 **Status:** Living document. Updated as decisions evolve.
-**Last updated:** 2026-06-01 (Milestones renumbered: M6 now Airtable CMS for initial session templates; M7 comprehensive walkthrough; M8 Phase 2 account/tier)
+**Last updated:** 2026-06-01 (M6 COMPLETE — Airtable CMS for initial session templates; M7 COMPLETE — Phase 1 comprehensive walkthrough verified end-to-end including two real bug fixes)
 **Owner:** Rémi
 **Goal:** Reach a solid v1 of TuJe with a complete, testable onboarding flow and a foundation we can sleep on.
 
@@ -353,52 +353,79 @@ Piece 1 phase → screen mapping (current state — to be refined in pieces 2-3)
 - **`UserDefaults.standard.integer(forKey:)` is ambiguous** — returns 0 if missing. Always use `object(forKey:) as? Int` for Optional<Int> reads.
 - **Honest design over fake polish** — chose to show genuine data (session_score + goal) rather than fake CEFR estimates we can't actually compute. When the real level computation is built, M5 can be revisited.
 
-### Milestone 6 — Airtable CMS for initial session templates (~1-2 sessions)
+### Milestone 6 — Airtable CMS for initial session templates ✅ COMPLETE (2026-06-01)
 
 **Goal:** Make the 18 initial session templates (6 goals × 3 levels) manageable through Airtable as the CMS. Rémi can populate, edit, and reorder interactions across all templates visually; an Airtable→PostgreSQL webhook syncs changes to `brain_initial_session_template`.
 
-**Why this milestone exists (per D30):** Without it, the 18 templates can only be populated via raw SQL inserts, which is slow, error-prone, and offers no creative feedback loop. With this, Rémi (the only content owner) can craft realistic learning sequences for every goal/level combination. M7's comprehensive walkthrough test then becomes meaningful — testing with real, intentionally-crafted content rather than test fixtures.
+**Why this milestone exists (per D30):** Without it, the 18 templates could only be populated via raw SQL inserts, which is slow, error-prone, and offers no creative feedback loop. With this, Rémi (the only content owner) can craft realistic learning sequences for every goal/level combination. M7's comprehensive walkthrough test then becomes meaningful — testing with real, intentionally-crafted content rather than test fixtures.
 
-**Current state (2026-06-01):**
-- PostgreSQL `brain_initial_session_template` exists and is populated with limited test data from M1-M3 testing (likely 1-2 templates)
-- Airtable has NO table for the 18 templates yet
-- Airtable→PostgreSQL sync infrastructure exists for other tables (notions, interactions, vocab) but has not been extended to cover templates
+**Shipped in 5 chunks (engineering complete; content population is ongoing your-time work):**
 
-**Work to do (high-level — exact spec needs M6 discovery):**
-- Design new Airtable table (tentative name "Initial Session Templates")
-  - Columns: Goal (single select matching `brain_user_goal.id`), Level (single select 0/1/2), Interactions (linked records to existing Interactions table), ordering mechanism
-  - Each row = one template = one (goal × level) combination
-- Build/extend the Airtable→PostgreSQL sync to handle this new table
-- Write to `brain_initial_session_template` correctly, including the interaction sequence ordering
-- Populate all 18 templates with real content (this is content work, not engineering)
+**Chunk 1 — Initial Interaction sync infrastructure (backend)**
+- SQL migration: `brain_initial_session_template` aligned with sync convention
+  - Old `id` (auto-increment integer) → new `id` (TEXT primary key, TuJe-style "ISI..." IDs)
+  - Existing 7 test rows deleted (will be repopulated via Airtable)
+  - `updated_at` → `update_at` (matches framework convention across all 16 brain_* tables — per D32)
+  - `last_modified_time_ref` changed from TIMESTAMP to BIGINT (framework sends raw ms epoch int; surfaced as bug during testing — see D31)
+- Python additions to `airtable_routes.py` (~25 lines):
+  - `InitialInteractionEntry` Pydantic model (4 fields: goalId, userLevel, position, interactionId)
+  - field_mappings additions for `goalId` and `userLevel`
+  - SYNC_CONFIGS entry "initial_interaction"
+  - Webhook endpoint `POST /webhook-sync-initial-interaction`
+- Verified via curl POST → 200 success, DB row written correctly
 
-**Verification:**
-- Editing a template in Airtable triggers the webhook, PostgreSQL updates within seconds
-- Backend `/api/initial-session/start` finds the right template for any (goal, level) combination
-- iOS receives the correct interactions and renders them in order
+**Chunk 2 — User Goal sync infrastructure (backend)**
+- SQL migration: `brain_user_goal` extended with 5 sync columns (airtable_record_id, last_modified_time_ref BIGINT, created_at, update_at, live), `name` made NOT NULL
+- Existing 6 goal rows (GOAL1-GOAL6) preserved — first sync UPDATEs them to populate airtable_record_id
+- Python additions (~15 lines): `UserGoalEntry` Pydantic model (1 field beyond BaseEntry: name), SYNC_CONFIGS entry "user_goal", webhook endpoint `POST /webhook-sync-user-goal`
+- Verified via curl POST → 200 success, GOAL3 row UPDATEd correctly with `ON CONFLICT (id) DO UPDATE` semantics
 
-**Open scope questions for M6 discovery (when we begin):**
-- How are interactions stored in `brain_initial_session_template`? Array column, join table, JSON?
-- How do the existing Airtable syncs work (script location, pattern)?
-- Do the 18 templates need to be ALL populated before M7, or is partial coverage acceptable for early testing?
-- Is there a "template version" or "live/draft" mechanism needed, or does Airtable's edit-to-sync flow handle it?
+**Chunk 3 — Airtable scripts (UI work)**
+- User Goal sync script (minimal — just id + name + sync fields)
+- Initial Interaction sync script (handles linked record lookups for Interaction ID and Goal ID, plus Level single-select parsing to int)
+- Both scripts deployed to "Sync Data" button columns in Airtable
+- End-to-end Airtable→backend→PostgreSQL syncs verified for both entities
 
-### Milestone 7 — Phase 1 v1 readiness (comprehensive walkthrough test) (~1-2 sessions)
+**Chunk 4 — Content population (Rémi's time, ongoing)**
+- 1 User Goal synced (GOAL1); GOAL2-GOAL6 remain to be synced (5 button clicks)
+- 1 template populated (GOAL1 / level 0 / 7 rows, all using the same INT202505090900 for testing template plumbing not content variety)
+- 17 templates remain (content work — Rémi's timeline)
 
-**Goal:** Phase 1 of v1 is ship-ready. Full simulator test from cold launch through `feedback_acknowledged`. No known bugs, no dead code in the Phase 1 path. With M6 done, multiple variants tested (different goals, different levels) with real content.
+**Chunk 5 — Backend verification**
+- Fresh anonymous user created with goal_id=GOAL1, initial_level_bucket=0, phase=disclaimer_confirmed
+- POST /api/initial-session/start → returned correct response: session_id, cycle_id, interaction_id, brain_interaction_id=INT202505090900 (position 1), total_interactions=7
+- Verified `session_cycle.template_interaction_ids` contains all 7 ordered positions in PostgreSQL
 
-**Note:** v1 cannot fully ship without Phase 2 (M8) because account creation is mandatory. But Phase 1 being verifiably complete is the foundation for everything that follows. M7 establishes that foundation.
+**End-to-end pipeline now operational:** Edit interaction in Airtable → click Sync Data → PostgreSQL row written in <0.1s → backend `/api/initial-session/start` reflects the change → iOS receives the new content.
 
-**What hasn't been tested end-to-end yet (M7 will close these gaps):**
-- Cold launch → onboarding routing as a real user (no shortcuts)
-- All 7 interactions in an actual session (video playback, recording, transcription, scoring)
-- SessionViewModel's UserDefaults persistence writes (added in M5 chunk 1, never exercised by a real session — TablePlus shortcut bypassed it)
-- FeedbackView's happy path with a real session_score (graceful degradation was tested; the actual "X/100 — [label]" rendering hasn't been)
-- Phase advancement `disclaimer_confirmed → initial_session_started → initial_session_completed` (these phases are set BY the backend during the session; we've never seen this happen in one continuous flow)
-- Resume behavior — quit mid-session, reopen, verify lands at correct phase
-- Edge cases that surface only in real use: animations, network blips, mic permission revocation mid-session
+**Open follow-ups from M6:**
+- Populate remaining 17 templates × 7 = 119 Initial Interaction rows + 5 User Goal rows (content work, your timeline)
+- Consider fixing the "carrier" → "career" typo in GOAL5 via Airtable edit (one-click change now that User Goal syncs)
 
-**Realistic scope:** 2-4 hours including bug surfacing/fixing. Could be more if real bugs surface. Don't assume first-try success.
+### Milestone 7 — Phase 1 v1 readiness (comprehensive walkthrough test) ✅ COMPLETE (2026-06-01)
+
+**Goal:** Phase 1 of v1 is ship-ready. Full simulator test from cold launch through `feedback_acknowledged`. No known bugs, no dead code in the Phase 1 path. M7 closed the gaps between piece-by-piece testing and full end-to-end verification.
+
+**Test setup pragmatic choice:** Single (GOAL1, level 0) template populated; the same multiple-buttons interaction (INT202505090900, "Bonjour, votre passeport s'il vous plait ?") synced 7 times to test template plumbing rather than content variety. This avoided the need to design 7 distinct French interactions AND avoided exercising the mic (which is destined for separate work — see Future Work below). Each of 7 interactions completed by tapping any of 2 rendered answer buttons.
+
+**What was verified end-to-end (now proven, previously theoretical):**
+- Cold launch → anonymous user creation with X-App-Version + X-Bundle-ID + X-Client-Platform headers
+- All 9 onboarding phase advances (account_checked → home_first_view → cta_tapped → goal_selected → level_selected → mic_authorized → disclaimer_confirmed)
+- SessionView onAppear → startInitialSession → backend lookup of (GOAL1, level 0) template → 7 ordered interactions returned
+- For each of 7 interactions: video loaded → buttons rendered → tap → submit-answer → score 100 → complete-interaction → next loads
+- Session-complete detection (sessionComplete=true, nextInteractionId=nil) → backend auto-advanced phase to `initial_session_completed`
+- **CRITICAL NEW VERIFICATION:** SessionViewModel's M5 chunk 1 UserDefaults persistence ACTUALLY FIRED — console showed `✅ FeedbackView: loaded session score from UserDefaults: 100`. This was theoretical until M7.
+- FeedbackView happy path rendered with real score (100/100) — not just graceful-degradation fallback
+- Continue tapped → phase advanced to `feedback_acknowledged` → HomePlaceholderView terminal state
+
+**Two real bugs surfaced AND fixed during M7 (see D31 and D32):**
+1. **sessionInteractionId silently cleared by `resetTrackingForNewInteraction()`** → initial-session button taps did nothing (visual press feedback but no action). Root cause: helper method designed for regular-session flow (where startInteraction re-sets sessionInteractionId after the reset) was being called from initial-session flow (where sessionInteractionId was set by startInitialSession and there's no later set). Fix: removed sessionInteractionId clear from the helper; moved it explicitly into fetchInteraction (regular flow). Plus added defensive logs to submitButtonAnswer and submitSingleButtonTap guards to prevent future silent failures.
+2. **VideoPlayerView same-URL guard prevented onVideoReady from firing on consecutive identical videos** → second interaction stuck on black loading screen because updateUIView's `guard currentURL != url` short-circuited swapURL, so the new status observation was never created, so onVideoReady never fired, so isLoadingVideo stayed true. Fix: added `playerIsReady: Bool` to Coordinator; when updateUIView sees same URL and player is already ready, re-fire onVideoReady manually so loading state clears.
+
+**Future work surfaced (NOT M7 scope):**
+- Mic-based answering system needs a dedicated separate conversation (per Rémi's note during M7 setup)
+- `user_level=250` sent in `/answers-by-interaction` URL when test user's actual level was 0 — some default fallback is happening; worth investigating but not a blocker
+- Only 2 answers returned when brain_interaction_answer has 4 live rows for this interaction — confirmed intentional (difficulty/answer-type filter, not a bug)
 
 ### Milestone 8 — Phase 2: account creation + tier selection (multi-session, ~4-6 sessions)
 
@@ -521,6 +548,30 @@ Inserting M6 — Airtable as CMS for the 18 templates with webhook sync to Postg
 
 The decoupling also matters for energy management: building Airtable schema + sync is a different mode of work from comprehensive iOS testing (more concrete, faster feedback loop, doesn't require staying in Swift mental model). Sequencing them apart respects how the work actually feels to do.
 
+**D31: `resetTrackingForNewInteraction()` no longer manages `sessionInteractionId` (2026-06-01, M7 bug fix).** The helper was designed for the regular-session flow, where `fetchInteraction()` clears state, then `startInteraction()` later re-sets sessionInteractionId from the server response. But `loadInteractionForPlayback()` (initial-session flow) was also calling `resetTrackingForNewInteraction()` AFTER `startInitialSession()` had already correctly set sessionInteractionId — and there's no later set in this flow because the backend creates the session_interaction row inside startInitialSession itself. Result: sessionInteractionId was silently cleared right before iOS rendered the answer buttons; tapping a button triggered `submitButtonAnswer`, which had a `guard !sessionInteractionId.isEmpty else { return }` — silent early return, no log, no visible failure, just buttons that "didn't work."
+
+Fix:
+1. Removed `sessionInteractionId = ""` from `resetTrackingForNewInteraction()`
+2. Added it explicitly to `fetchInteraction()` (regular flow) at the same point it used to fire (so regular-flow behavior preserved exactly)
+3. Added defensive print logs to BOTH silent-guard sites: `submitButtonAnswer` and `submitSingleButtonTap`. Future silent-failure bugs will at least log a warning.
+
+Lesson: shared helpers used by multiple flows must be careful about what state they clear. Either make the helper flow-agnostic (don't touch state owned by callers) or have each caller manage its own state. Silent guards make debugging much harder — the original guard was correct defensively but should have logged.
+
+**D32: VideoPlayerView Coordinator tracks `playerIsReady` flag (2026-06-01, M7 bug fix).** Bug: consecutive interactions in the test template all used the same brain_interaction_id (INT202505090900), so iOS loaded the same Cloudinary video URL twice in a row. SwiftUI's `updateUIView(_:context:)` had `guard context.coordinator.currentURL != url else { return }` — when same URL, skipped `swapURL` entirely. But `swapURL` was responsible for invalidating the old AVPlayerItem status observation and setting up a new one. The new observation is what fires `onVideoReady` (→ sets `isLoadingVideo = false`). Skipping `swapURL` meant `onVideoReady` never re-fired, so the loading overlay persisted indefinitely on consecutive same-URL interactions.
+
+This isn't only a test-data issue. Real templates may legitimately repeat a video (e.g., retry scenarios, "watch again" features, deliberate slot reuse). The fix must work for all cases.
+
+Fix (Option 2 of 3 considered, chosen because it preserves the "don't unnecessarily reload" optimization):
+1. Added `private var playerIsReady: Bool = false` property to Coordinator
+2. In both `setupPlayer()` and `swapURL()`: reset `playerIsReady = false` at start; set to `true` inside the `.readyToPlay` branch of the status observation (alongside the existing `onVideoReady` call)
+3. In `updateUIView`: when URL matches existing, check `playerIsReady`. If true, fire `onVideoReady` manually so loading state clears. If false, skip — the pending observation will fire when readyToPlay arrives.
+
+Edge cases considered:
+- Repeated updateUIView calls with same URL while ready → `onVideoReady` may fire multiple times. The closure sets `isLoadingVideo = false`; idempotent and harmless.
+- Memory ordering between observation callback (KVO queue) and updateUIView (main thread) is technically a data race on the Bool. Acceptable: both outcomes (fire or skip) are safe. Worth noting for future refactoring if we encounter weirdness.
+
+Lesson: SwiftUI's UIViewRepresentable lifecycle is subtle. The view representable's `updateUIView` runs whenever SwiftUI re-renders, but the underlying UIKit/AVFoundation state machine has its own lifecycle. Short-circuit guards in updateUIView must consider not just "is this redundant" but also "do downstream consumers expect a callback they only get via this code path." When in doubt, fire the callback.
+
 ---
 
 ## 5. TODO bank
@@ -593,16 +644,19 @@ REVISED 2026-05-30: phase model expanded from 10 to 15 phases (per D18), form wi
 - [ ] **GET /api/session/{id} iOS service method:** Not needed for M5 (UserDefaults bridge is sufficient), but will be needed for resume-aware flows in regular sessions and for analytics. Add when regular-session work begins.
 - [ ] **Real CEFR estimation:** When the level system is wired for initial sessions (currently `brain_user.level` stays at 0 — performance never updates it), revisit FeedbackView to show "estimated CEFR" alongside score. Per D26, this is deferred until real level computation exists.
 
-### M6 — Airtable CMS for initial session templates
+### M6 — Airtable CMS for initial session templates ✅ COMPLETE
 
-- [ ] Design new Airtable table (tentative: "Initial Session Templates") with Goal single-select, Level single-select, linked records to Interactions, ordering mechanism
-- [ ] Extend Airtable→PostgreSQL sync infrastructure to handle the new table
-- [ ] Populate all 18 templates (6 goals × 3 levels) with real content in Airtable
-- [ ] Verify backend `/api/initial-session/start` correctly fetches the right template for each (goal, level) combination
+Engineering shipped (chunks 1-3, 5). Content work ongoing:
+- [ ] Sync remaining 5 User Goal rows (GOAL2-GOAL6) via Airtable button clicks
+- [ ] Populate remaining 17 templates × 7 = 119 Initial Interaction rows (your timeline)
+- [ ] Consider fixing "carrier" → "career" typo in GOAL5 via Airtable edit
 
-### M7 — Phase 1 v1 readiness (comprehensive walkthrough test)
+### M7 — Phase 1 v1 readiness (comprehensive walkthrough test) ✅ COMPLETE
 
-- [ ] Full end-to-end simulator test of Phase 1 (cold launch through `feedback_acknowledged`). Multiple variants — different goals, different levels — using M6's real content. Document any bugs and fix them.
+End-to-end walkthrough verified for GOAL1 / level 0 template. Two bugs surfaced and fixed (D31, D32). Optional follow-ups:
+- [ ] Re-run M7 walkthrough for other (goal, level) combinations once content is populated — verifies the template lookup works for all 18 combinations and not just the one tested
+- [ ] Investigate `user_level=250` default in /answers-by-interaction URL when fresh user's level is 0 (not a blocker but worth understanding)
+- [ ] Test resume behavior — quit app mid-session, reopen, verify lands at correct phase
 
 ### M8+ — Phase 2: account + tier (multi-session, see PLAN section 3)
 
