@@ -460,6 +460,13 @@ class IntentEntry(BaseEntry):
     name: str
     description: str
 
+class UserGoalEntry(BaseEntry):
+    """User goal — one of 6 motivations for learning French.
+    Mirrors brain_user_goal. Used as a referent for initial session templates
+    and user onboarding choices.
+    """
+    name: str
+
 class SubtopicEntry(BaseEntry):
     nameFr: str
     nameEn: str
@@ -649,6 +656,12 @@ SYNC_CONFIGS = {
         "airtable_table": "Interest",
         "columns": ["id", "name", "subtopic_ids",
                    "airtable_record_id", "last_modified_time_ref", 
+                   "created_at", "update_at", "live"]
+    },
+    "user_goal": {
+        "table_name": "brain_user_goal",
+        "airtable_table": "User Goal",
+        "columns": ["id", "name", "airtable_record_id", "last_modified_time_ref",
                    "created_at", "update_at", "live"]
     },
     "bonus_malus": {
@@ -942,6 +955,11 @@ async def webhook_sync_interest(entry: InterestEntry, background_tasks: Backgrou
 async def webhook_sync_mistake(entry: MistakeEntry, background_tasks: BackgroundTasks):
     """Webhook endpoint to sync mistake data from Airtable"""
     return await generic_sync_webhook(entry, "mistake", background_tasks)
+
+@router.post("/webhook-sync-user-goal")
+async def webhook_sync_user_goal(entry: UserGoalEntry, background_tasks: BackgroundTasks):
+    """Webhook endpoint to sync user goal data from Airtable"""
+    return await generic_sync_webhook(entry, "user_goal", background_tasks)
 
 # Health check endpoint
 @router.get("/sync-health")
