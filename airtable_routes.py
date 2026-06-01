@@ -497,6 +497,15 @@ class InteractionAnswerEntry(BaseEntry):
             return [str(item).strip() for item in v if item and str(item).strip()]
         return []
 
+class InitialInteractionEntry(BaseEntry):
+    """Initial session template slot — one row per (goal, level, position) combination.
+    Each template = 7 rows sharing the same (goal, level), with position 1..7.
+    """
+    goalId: str
+    userLevel: int
+    position: int
+    interactionId: str
+
 class EntityEntry(BaseEntry):
     name: str
     description: str
@@ -571,6 +580,16 @@ SYNC_CONFIGS = {
         "airtable_table": "Interaction-Answer",
         "columns": ["id", "interaction_id", "answer_id", "list_of_mistakes", "answer_type", "airtable_record_id",
                    "last_modified_time_ref", "created_at", "update_at", "live"]
+    },
+    "initial_interaction": {
+        "table_name": "brain_initial_session_template",
+        "airtable_table": "Initial Interaction",
+        # NOTE: "update_at" is the framework's standard column naming across all
+        # synced entities (inherited typo — semantically means "updated_at").
+        # Preserved for consistency with the 15 other brain_* tables.
+        "columns": ["id", "goal_id", "user_level", "position", "interaction_id",
+                   "airtable_record_id", "last_modified_time_ref",
+                   "created_at", "update_at", "live"]
     },
     "entity": {
         "table_name": "brain_entity",
@@ -687,6 +706,7 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "expectedIntentIds": "expected_intent_id",
         "expectedEntitiesIds": "expected_entities_id",
         "expectedVocabIds": "expected_vocab_id",
+        "goalId": "goal_id",
         "interactionVocabIds": "interaction_vocab_id",
         "airtableRecordId": "airtable_record_id",
         "hintIds": "hint_ids",
@@ -706,6 +726,7 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "listOfMistakes": "list_of_mistakes",
         "bonusMalusType": "bonus_malus_type",
         "ruleCode": "rule_code",
+        "userLevel": "user_level",
         "value": "value",
         "priority": "priority",
         "conditions": "conditions",
@@ -873,6 +894,10 @@ async def webhook_sync_subtopic(entry: SubtopicEntry, background_tasks: Backgrou
 @router.post("/webhook-sync-interaction-answer")
 async def webhook_sync_interaction_answer(entry: InteractionAnswerEntry, background_tasks: BackgroundTasks):
     return await generic_sync_webhook(entry, "interaction_answer", background_tasks)
+
+@router.post("/webhook-sync-initial-interaction")
+async def webhook_sync_initial_interaction(entry: InitialInteractionEntry, background_tasks: BackgroundTasks):
+    return await generic_sync_webhook(entry, "initial_interaction", background_tasks)
 
 @router.post("/webhook-sync-entity")
 async def webhook_sync_entity(entry: EntityEntry, background_tasks: BackgroundTasks):
