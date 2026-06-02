@@ -1,7 +1,7 @@
 # TuJe v1 — Onboarding & Session Architecture Plan
 
 **Status:** Living document. Updated as decisions evolve.
-**Last updated:** 2026-06-02 (M8 scope concretized via discovery — see TuJe_M8_Phase2_Spec.md for full spec; PLAN.md M8 section updated to reference it)
+**Last updated:** 2026-06-02 (M8 backend chunks 1-5 COMPLETE — see TuJe_M8_Phase2_Spec.md for full details and D-M8-07/08 lessons. iOS chunks 6-12 remaining.)
 **Owner:** Rémi
 **Goal:** Reach a solid v1 of TuJe with a complete, testable onboarding flow and a foundation we can sleep on.
 
@@ -427,7 +427,9 @@ Piece 1 phase → screen mapping (current state — to be refined in pieces 2-3)
 - `user_level=250` sent in `/answers-by-interaction` URL when test user's actual level was 0 — some default fallback is happening; worth investigating but not a blocker
 - Only 2 answers returned when brain_interaction_answer has 4 live rows for this interaction — confirmed intentional (difficulty/answer-type filter, not a bug)
 
-### Milestone 8 — Phase 2: account creation + onboarding questions + tier selection (multi-session, ~6-10 chunks)
+### Milestone 8 — Phase 2: account creation + onboarding questions + tier selection (multi-session, in progress)
+
+**Status: Backend chunks 1-5 ✅ COMPLETE (2026-06-02). iOS chunks 6-12 remaining.**
 
 **Goal:** Build the rest of v1's onboarding. User progresses from `feedback_acknowledged` (Phase 1 done, anonymous) to `onboarding_completed` (real account, all questions answered, tier picked).
 
@@ -460,11 +462,11 @@ Piece 1 phase → screen mapping (current state — to be refined in pieces 2-3)
 - Reuse `/users/me/advance-onboarding-phase` for transition-only screens (tier_intro_shown → plan_tier_selected, payment_stub_acknowledged → onboarding_completed)
 
 **Chunk plan (~12 chunks across multiple sessions; see spec doc for details):**
-1. SQL migration (add 5 new columns) + verify legacy columns aren't blocked
-2. Update ONBOARDING_PHASES list with 11 new phases + repurpose account_verified
-3. Generic question endpoint (POST /users/me/onboarding-question)
-4. Tier selection endpoint
-5. (Optional) Extend /auth/login to include onboarding_phase
+1. ✅ SQL migration (add 5 new columns) — DONE
+2. ✅ Update ONBOARDING_PHASES list with 11 new phases + repurpose account_verified — DONE (also rebuilt CHECK constraint mid-chunk-3 per D-M8-07)
+3. ✅ Generic question endpoint (POST /users/me/onboarding-question) — DONE
+4. ✅ Tier selection endpoint — DONE
+5. ✅ Extend /auth/login to include onboarding_phase — DONE
 6. iOS: HomePlaceholderView CTA + locate AccountCreationView
 7. iOS: LoginView + Keychain swap
 8. iOS: Generic QuestionScreenView component
