@@ -814,7 +814,7 @@ async def login(credentials: UserLogin):
         # Get user by email
         user = await conn.fetchrow("""
             SELECT id, email, password_hash, username, display_name, level, role,
-                   is_active, goal_id, initial_level_bucket
+                   is_active, goal_id, initial_level_bucket, onboarding_phase
             FROM brain_user
             WHERE email = $1 AND deleted_at IS NULL
         """, credentials.email)
@@ -866,6 +866,7 @@ async def login(credentials: UserLogin):
                 "role": user["role"],
                 "goal_id": user["goal_id"],
                 "initial_level_bucket": user["initial_level_bucket"],
+                "onboarding_phase": user["onboarding_phase"],
             }
         }
 
