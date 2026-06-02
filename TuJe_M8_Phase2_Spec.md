@@ -1,7 +1,7 @@
 # TuJe M8 — Phase 2 Spec (Account Creation + Onboarding Questions + Tier Selection)
 
 **Status:** Living document. Updated as M8 progresses.
-**Last updated:** 2026-06-02 (initial spec)
+**Last updated:** 2026-06-02 (M8 backend chunks 1-5 COMPLETE — see Decision Log for new entries D-M8-07, D-M8-08; iOS chunks 6-12 remaining)
 **Owner:** Rémi
 
 ---
@@ -281,34 +281,41 @@ After `onboarding_completed`, the user lands on HomePlaceholderView's NEXT itera
 
 Estimated 8-12 chunks across multiple sessions. Order is bottom-up: backend first, then iOS bottom-up.
 
-### Backend chunks (M8.1)
+### Backend chunks (M8.1) ✅ COMPLETE (2026-06-02)
 
-**Chunk 1 — SQL migration + verify legacy columns**
-- Discovery: verify `daily_time_commitment` and `date_of_birth` usage in code (read-only)
-- Add 5 new columns to brain_user (nullable, no defaults except where sensible)
-- No code yet — just migration
+**Chunk 1 — SQL migration ✅ COMPLETE**
+- Discovery confirmed `daily_time_commitment` and `date_of_birth` are dead schema (no code references); safe to ignore for M8
+- Pre-migration baseline captured: 27 users, no NULLs on the 3 reused columns (`language_level`, `native_language`, `preferred_session_duration_minutes`)
+- Added 5 new nullable columns to brain_user: `last_french_usage`, `french_importance`, `languages_spoken_count` (smallint), `age_bracket`, `user_source`
+- All 4 tier columns verified present (`subscription_tier`, `subscription_status`, `subscription_period`, `subscription_expires_at`)
 
-**Chunk 2 — Onboarding phase list update**
-- Insert 11 new phases into `ONBOARDING_PHASES` list at positions 13-23
-- Repurpose `account_verified` → `tier_intro_shown`
-- No iOS impact (iOS doesn't enumerate phases; it just reads/sets them via the API)
-- Verify advance validation accepts the new transitions via curl
+**Chunk 2 — Onboarding phase list update ✅ COMPLETE**
+- Updated `ONBOARDING_PHASES` in user_routes.py: 16 → 25 entries
+- Inserted 11 new Phase 2 phases at positions 13-23
+- Repurposed `account_verified` slot (index 13) → `expected_level_selected`
+- `tier_intro_shown` now sits at index 21 (semantically replacing the old account_verified meaning)
+- **Bug found mid-flight (chunk 3 testing surfaced it):** the existing `brain_user_onboarding_phase_check` CHECK constraint in PostgreSQL also enforced the old 16-phase list. Dropped and recreated the constraint with all 25 phases. See D-M8-07.
 
-**Chunk 3 — Generic question endpoint**
-- New `POST /users/me/onboarding-question` with allowlist + value validation
-- Pydantic models for request/response
-- 8 question dispatch table (question_key → column + phase)
-- Test via curl for all 8 question types
+**Chunk 3 — Generic question endpoint ✅ COMPLETE**
+- New `POST /users/me/onboarding-question` with dispatch table mapping 8 question_keys → (column, expected_phase, value_map)
+- Pydantic `OnboardingQuestionRequest` model; raw dict response matching house style
+- Strict-phase rule: advance only when at expected_phase; UPDATE column only on revisit; reject (400) when out-of-order
+- Numeric coercion working (e.g., wire value `"4_or_more"` → DB integer `4`)
+- All 12 test cases passed (8 happy paths, 1 revisit, 1 out-of-order, 1 unknown key, 1 invalid value)
+- **Bug found mid-flight:** `language_level` was `VARCHAR(10)` — too short for values like `"first_time_tourist"` (18 chars). Widened `language_level` and `native_language` to `VARCHAR(50)`. See D-M8-08.
 
-**Chunk 4 — Tier selection endpoint**
-- New `POST /users/me/tier-selection`
-- Sets subscription_tier + subscription_period
-- Test via curl
+**Chunk 4 — Tier selection endpoint ✅ COMPLETE**
+- New `POST /users/me/tier-selection` with same strict-phase pattern as chunk 3
+- Atomic UPDATE: `subscription_tier` + `subscription_period` (monthly for paid, NULL for free)
+- `subscription_status` explicitly untouched (stays `'never_subscribed'` until real payment)
+- Verified: free downgrade correctly writes NULL to `subscription_period` (asyncpg `None → NULL` mapping works)
+- All 5 test cases passed (happy path, upgrade revisit, downgrade revisit, out-of-order, invalid tier)
 
-**Chunk 5 — /auth/login extension (optional)**
-- Add `onboarding_phase` to login response
-- Saves iOS a round-trip after login
-- Tiny change; could also be skipped if iOS finds round-trip acceptable
+**Chunk 5 — /auth/login extension ✅ COMPLETE**
+- Added `onboarding_phase` to login SELECT statement and response `user` dict
+- Saves iOS a follow-up GET /users/me round-trip after login
+- Risk-free additive change (Swift Codable ignores unknown keys)
+- Verified end-to-end: anonymous → upgrade → login → response contains `user.onboarding_phase`
 
 ### iOS chunks (M8.2)
 
@@ -379,3 +386,28 @@ Estimated 8-12 chunks across multiple sessions. Order is bottom-up: backend firs
 **D-M8-05:** Login response gap — `/auth/login` doesn't currently return `onboarding_phase`. M8 will likely extend the response to include it (chunk 5, optional). If skipped, iOS makes a follow-up `GET /users/me` call. Both work; extending the login response saves a round-trip.
 
 **D-M8-06:** Resume mid-questions uses `onboarding_phase` as source of truth. User who closes app at question 4 returns to question 5 on next launch. Previously-answered values stay in DB; iOS doesn't re-show those screens. Matches Phase 1's resume behavior.
+
+**D-M8-07: When updating `ONBOARDING_PHASES`, also update the corresponding CHECK constraint on `brain_user.onboarding_phase` (2026-06-02).** Chunk 2 added 11 new phases to the Python `ONBOARDING_PHASES` list. The list change alone was thought to be sufficient because the advance-onboarding-phase endpoint's validation is index-derived from the Python list. But the PostgreSQL table has its own enforcement layer — a CHECK constraint named `brain_user_onboarding_phase_check` that hardcoded the original 16 phase values. Updates that tried to write any of the new 11 phase strings (e.g., `expected_level_selected`) were rejected by the DB even though the Python code accepted them. Surfaced during chunk 3 testing (curl returned: "violates check constraint").
+
+Fix: dropped the old constraint, recreated it with all 25 phases. The constraint is a useful defensive layer — keeps the DB self-validating even if Python code has bugs — so it's worth maintaining alongside the Python list.
+
+**Lesson — discovery template gap:** When modifying any enum-like list referenced by a database column, discovery must search BOTH:
+- Python code references (string literals, list entries, conditional checks)
+- Database schema-level enforcement: CHECK constraints, ENUM types, triggers, default-value expressions
+
+Code-only grep is insufficient. Add `pg_constraint` queries to the discovery template for any future enum-like list changes.
+
+**D-M8-08: When designing wire values for an existing column, check `character_maximum_length` (2026-06-02).** Chunk 3 designed 5-char-or-longer wire values for `language_level` (e.g., `first_time_tourist` at 18 chars). The column was `VARCHAR(10)` — too short. asyncpg rejected the INSERT with "value too long for type character varying(10)". Surfaced during chunk 3's Test 1.
+
+Fix: ALTERed `language_level` to `VARCHAR(50)`. Also defensively widened `native_language` (same `VARCHAR(10)` legacy cap, technically fit our values at 8 chars but tight against future additions).
+
+**Lesson — discovery template gap:** When designing string-typed wire values for an existing column, discovery must verify the column's `character_maximum_length` constraint, not just its `data_type`. The 5 new columns we ADDED in chunk 1 were created as plain `VARCHAR` (no limit), so they're fine — but reused columns (`language_level`, `native_language`) carried legacy length caps from before the sync framework was even built. The check is:
+
+```sql
+SELECT column_name, data_type, character_maximum_length
+FROM information_schema.columns 
+WHERE table_name = 'X' 
+  AND column_name IN ('reused_col1', 'reused_col2', ...);
+```
+
+Add this to the discovery template for any future "reuse existing column" decision.
