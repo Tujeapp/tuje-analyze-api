@@ -41,9 +41,18 @@ ONBOARDING_PHASES = [
     "feedback_acknowledged",
     "account_creation_started",
     "account_credentials_entered",
-    "account_verified",
-    "plan_tier_selected",
-    "onboarding_completed",
+    "expected_level_selected",      # 13  (was: account_verified — REPURPOSED)
+    "last_french_usage_selected",   # 14  (NEW)
+    "native_language_selected",     # 15  (NEW)
+    "importance_level_selected",    # 16  (NEW)
+    "languages_count_selected",     # 17  (NEW)
+    "age_bracket_selected",         # 18  (NEW)
+    "user_source_selected",         # 19  (NEW)
+    "daily_commitment_selected",    # 20  (NEW)
+    "tier_intro_shown",             # 21  (NEW — semantically replaces account_verified)
+    "plan_tier_selected",           # 22  (existing, moved from 14)
+    "payment_stub_acknowledged",    # 23  (NEW)
+    "onboarding_completed",         # 24  (existing, terminal, moved from 15)
 ]
 
 # Explicit whitelist of allowed backward phase transitions.
