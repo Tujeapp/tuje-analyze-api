@@ -1,7 +1,7 @@
 # TuJe v1 — Onboarding & Session Architecture Plan
 
 **Status:** Living document. Updated as decisions evolve.
-**Last updated:** 2026-06-01 (M6 COMPLETE — Airtable CMS for initial session templates; M7 COMPLETE — Phase 1 comprehensive walkthrough verified end-to-end including two real bug fixes)
+**Last updated:** 2026-06-02 (M8 scope concretized via discovery — see TuJe_M8_Phase2_Spec.md for full spec; PLAN.md M8 section updated to reference it)
 **Owner:** Rémi
 **Goal:** Reach a solid v1 of TuJe with a complete, testable onboarding flow and a foundation we can sleep on.
 
@@ -427,18 +427,51 @@ Piece 1 phase → screen mapping (current state — to be refined in pieces 2-3)
 - `user_level=250` sent in `/answers-by-interaction` URL when test user's actual level was 0 — some default fallback is happening; worth investigating but not a blocker
 - Only 2 answers returned when brain_interaction_answer has 4 live rows for this interaction — confirmed intentional (difficulty/answer-type filter, not a bug)
 
-### Milestone 8 — Phase 2: account creation + tier selection (multi-session, ~4-6 sessions)
+### Milestone 8 — Phase 2: account creation + onboarding questions + tier selection (multi-session, ~6-10 chunks)
 
-**Goal:** Build the gated Phase 2 onboarding — account creation, email/phone verification, plan tier selection. The bridge from `feedback_acknowledged` (Phase 1 done, anonymous user) to `onboarding_completed` (fully committed user).
+**Goal:** Build the rest of v1's onboarding. User progresses from `feedback_acknowledged` (Phase 1 done, anonymous) to `onboarding_completed` (real account, all questions answered, tier picked).
 
-**Likely milestone breakdown (subject to revision when we get there):**
-- **M8:** The HomeView gate behavior — timer + tap → account creation modal. Phase advancement to `account_creation_started`.
-- **M9:** Account creation form — backend `/auth/upgrade-anonymous` already exists; iOS wraps it. Phases `account_creation_started → account_credentials_entered`.
-- **M10:** Email/phone verification — requires choosing a provider (Twilio for SMS? SES for email?), code generation and validation endpoints, iOS verification screen. Phases `account_credentials_entered → account_verified`.
-- **M11:** Plan tier selection UI — Free/Basic/Pro presentation, persistence to `brain_user.subscription_tier`. Phase `account_verified → plan_tier_selected`. NOTE: StoreKit 2 integration (real subscriptions, App Store Server Notifications V2, receipt validation) likely deferred to a v1.1 unless mandatory for v1.
-- **M11:** Final transition + v1 polish — landing on the (committed) HomeView, phase `onboarding_completed`, full end-to-end test.
+**Full spec lives in `TuJe_M8_Phase2_Spec.md`** — that doc is authoritative for M8. PLAN.md captures only the high-level summary.
 
-These milestones are placeholders. We'll scope each properly when we reach them. M7-M11 numbering may shift.
+**Scope summary:**
+- HomePlaceholderView gets a new "Create your account" CTA
+- Existing AccountCreationView (built weeks ago) wraps `/auth/upgrade-anonymous` — needs locating + verification
+- LoginView for returning users (accessible via "Already have an account?" link)
+- 8 onboarding question screens (one phase each, same UX pattern as GoalSelection/LevelSelection)
+- TierIntroView ("Thank you, pick a tier") — repurposes the `account_verified` phase slot
+- TierSelectionView with 3 horizontal cards (Free / Basic / Pro, monthly only)
+- PaymentStubView (light visual stub, no real payment; tier still saved to DB)
+- Final state: `onboarding_completed`
+
+**Out of scope for M8** (deferred to future work): email verification, Apple/Google Sign In, forgot password, profile editing, account deletion, yearly plans, real payment processing (StoreKit 2), real entitlement enforcement.
+
+**Phase progression goes from 16 phases to 24 phases.** Specifically, 11 new phases inserted between `account_credentials_entered` and `onboarding_completed`. `account_verified` is repurposed to `tier_intro_shown` (since email verification is out of scope).
+
+**Data model:**
+- 3 existing columns reused: `language_level`, `native_language`, `preferred_session_duration_minutes`
+- 5 new columns to add: `last_french_usage`, `french_importance`, `languages_spoken_count`, `age_bracket`, `user_source`
+- `subscription_tier` (existing) gets written by tier selection. `subscription_status` stays `'never_subscribed'` until real payment.
+
+**Endpoint strategy:**
+- Reuse `/auth/upgrade-anonymous` (already works)
+- Reuse `/auth/login` (already works; may extend response to include `onboarding_phase`)
+- New: `POST /users/me/onboarding-question` (generic dispatcher for all 8 questions)
+- New: `POST /users/me/tier-selection` (persists tier choice)
+- Reuse `/users/me/advance-onboarding-phase` for transition-only screens (tier_intro_shown → plan_tier_selected, payment_stub_acknowledged → onboarding_completed)
+
+**Chunk plan (~12 chunks across multiple sessions; see spec doc for details):**
+1. SQL migration (add 5 new columns) + verify legacy columns aren't blocked
+2. Update ONBOARDING_PHASES list with 11 new phases + repurpose account_verified
+3. Generic question endpoint (POST /users/me/onboarding-question)
+4. Tier selection endpoint
+5. (Optional) Extend /auth/login to include onboarding_phase
+6. iOS: HomePlaceholderView CTA + locate AccountCreationView
+7. iOS: LoginView + Keychain swap
+8. iOS: Generic QuestionScreenView component
+9. iOS: Wire 8 question instances
+10. iOS: TierIntroView + TierSelectionView
+11. iOS: PaymentStubView + final routing
+12. End-to-end verification
 
 ---
 
