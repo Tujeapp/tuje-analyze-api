@@ -62,6 +62,116 @@ ALLOWED_REVERTS = {
     ("level_selected", "goal_selected"),
 }
 
+# ========================================
+# M8 — Onboarding question dispatch table
+# ========================================
+# Maps each question_key to:
+#   - column:         the brain_user column to write
+#   - expected_phase: the phase the user must currently be at to ADVANCE
+#                     (i.e. the predecessor of this question's "selected" phase)
+#   - value_map:      allowed wire values → stored DB value.
+#                     Identity for varchar columns; string→int for smallint columns.
+#
+# The resulting "selected" phase is derived at runtime as the phase immediately
+# AFTER expected_phase in ONBOARDING_PHASES — single source of truth, no drift.
+# Column names are hardcoded here (never user-supplied), so interpolating them
+# into the UPDATE statement in the handler is injection-safe.
+ONBOARDING_QUESTIONS = {
+    "expected_level": {
+        "column": "language_level",
+        "expected_phase": "account_credentials_entered",
+        "value_map": {
+            "first_time_tourist": "first_time_tourist",
+            "confident_tourist": "confident_tourist",
+            "expat": "expat",
+            "native_speaker": "native_speaker",
+            "master_remi": "master_remi",
+        },
+    },
+    "last_french_usage": {
+        "column": "last_french_usage",
+        "expected_phase": "expected_level_selected",
+        "value_map": {
+            "today": "today",
+            "few_days": "few_days",
+            "month_or_two": "month_or_two",
+            "year_or_last": "year_or_last",
+            "never": "never",
+        },
+    },
+    "native_language": {
+        "column": "native_language",
+        "expected_phase": "last_french_usage_selected",
+        "value_map": {
+            "en_us": "en_us",
+            "en_gb": "en_gb",
+            "es_latam": "es_latam",
+            "es_es": "es_es",
+            "ru": "ru",
+            "it": "it",
+            "de": "de",
+            "other": "other",
+        },
+    },
+    "french_importance": {
+        "column": "french_importance",
+        "expected_phase": "native_language_selected",
+        "value_map": {
+            "cool_but_not_priority": "cool_but_not_priority",
+            "might_need": "might_need",
+            "need_pretending_not": "need_pretending_not",
+            "5_stars_but_wont": "5_stars_but_wont",
+            "life_or_death": "life_or_death",
+        },
+    },
+    "languages_count": {
+        "column": "languages_spoken_count",
+        "expected_phase": "importance_level_selected",
+        "value_map": {
+            "1": 1,
+            "2": 2,
+            "3": 3,
+            "4_or_more": 4,
+        },
+    },
+    "age_bracket": {
+        "column": "age_bracket",
+        "expected_phase": "languages_count_selected",
+        "value_map": {
+            "under_20": "under_20",
+            "20_plus": "20_plus",
+            "30_plus": "30_plus",
+            "40_plus": "40_plus",
+            "50_plus": "50_plus",
+            "60_plus": "60_plus",
+        },
+    },
+    "user_source": {
+        "column": "user_source",
+        "expected_phase": "age_bracket_selected",
+        "value_map": {
+            "instagram": "instagram",
+            "youtube": "youtube",
+            "tiktok": "tiktok",
+            "online_ads": "online_ads",
+            "google": "google",
+            "news_article_blog": "news_article_blog",
+            "app_store": "app_store",
+            "family_friends": "family_friends",
+            "other": "other",
+        },
+    },
+    "daily_commitment": {
+        "column": "preferred_session_duration_minutes",
+        "expected_phase": "user_source_selected",
+        "value_map": {
+            "15": 15,
+            "30": 30,
+            "45": 45,
+        },
+    },
+}
+
 if not DATABASE_URL:
     raise RuntimeError("Missing required environment variable: DATABASE_URL")
 
@@ -141,6 +251,16 @@ class OnboardingPrefsGoalRequest(BaseModel):
 class RevertOnboardingPhaseRequest(BaseModel):
     """Payload for POST /users/me/revert-onboarding-phase."""
     to_phase: str
+
+
+class OnboardingQuestionRequest(BaseModel):
+    """Payload for POST /users/me/onboarding-question (M8 generic dispatcher).
+
+    `value` is always a string on the wire; it is coerced to int server-side
+    for smallint-backed questions (languages_count, daily_commitment).
+    """
+    question_key: str
+    value: str
 
 
 class UserProfile(BaseModel):
@@ -1134,6 +1254,145 @@ async def submit_onboarding_goal(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to save goal: {str(e)}",
+        )
+
+
+@router.post("/users/me/onboarding-question")
+async def submit_onboarding_question(
+    request: OnboardingQuestionRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Generic dispatcher for the 8 Phase 2 onboarding questions (M8).
+
+    Validates question_key + value against a server-side allowlist, writes the
+    answer to the mapped brain_user column, and conditionally advances
+    onboarding_phase under a STRICT sequential rule:
+
+      - current phase == the question's expected (predecessor) phase
+            → write column + advance to the question's "selected" phase
+      - current phase is PAST the expected phase (user revisiting an earlier
+        question to revise an answer)
+            → write column only, leave phase unchanged
+      - current phase is BEFORE the expected phase (out-of-order request)
+            → 400, reject
+      - current phase string is not in ONBOARDING_PHASES (corrupt state)
+            → 500
+    """
+    user_id = str(current_user["id"])
+    question_key = request.question_key
+
+    # 1. Validate question_key against the dispatch table
+    question = ONBOARDING_QUESTIONS.get(question_key)
+    if question is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown question_key: '{question_key}'",
+        )
+
+    # 2. Validate value against the question's allowed wire values
+    value_map = question["value_map"]
+    if request.value not in value_map:
+        allowed = ", ".join(value_map.keys())
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Invalid value '{request.value}' for question '{question_key}'. "
+                f"Allowed: {allowed}"
+            ),
+        )
+
+    # 3. Resolve the stored value (identity for varchar, int for smallint)
+    stored_value = value_map[request.value]
+    column = question["column"]
+
+    # 4. Validate current phase is recognized (corrupt → 500)
+    current_phase = current_user.get("onboarding_phase", "not_started")
+    if current_phase not in ONBOARDING_PHASES:
+        logger.error(
+            f"❌ Corrupt onboarding_phase '{current_phase}' for user {user_id}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Corrupt onboarding_phase: '{current_phase}' is not a recognized phase",
+        )
+
+    # 5. Compute expected (predecessor) and target ("selected") phases
+    expected_phase = question["expected_phase"]
+    expected_idx = ONBOARDING_PHASES.index(expected_phase)
+    target_phase = ONBOARDING_PHASES[expected_idx + 1]
+    current_idx = ONBOARDING_PHASES.index(current_phase)
+
+    # 6. Strict sequential rule
+    if current_idx < expected_idx:
+        logger.warning(
+            f"⚠️ Out-of-order question '{question_key}' for user {user_id}: "
+            f"at '{current_phase}', requires '{expected_phase}'"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Cannot answer '{question_key}' yet. Current phase "
+                f"'{current_phase}' is before the required phase '{expected_phase}'."
+            ),
+        )
+
+    advance = current_idx == expected_idx  # else current_idx > expected_idx → revisit
+
+    # 7. Persist. Column name is from the trusted dispatch table (not user input),
+    #    so interpolating it into the SQL is injection-safe. Values are parameterized.
+    try:
+        conn = await asyncpg.connect(DATABASE_URL)
+
+        if advance:
+            updated = await conn.fetchrow(
+                f"""
+                UPDATE brain_user
+                SET {column} = $1,
+                    onboarding_phase = $2,
+                    updated_at = NOW()
+                WHERE id = $3
+                RETURNING onboarding_phase
+                """,
+                stored_value, target_phase, current_user["id"],
+            )
+        else:
+            updated = await conn.fetchrow(
+                f"""
+                UPDATE brain_user
+                SET {column} = $1,
+                    updated_at = NOW()
+                WHERE id = $2
+                RETURNING onboarding_phase
+                """,
+                stored_value, current_user["id"],
+            )
+
+        await conn.close()
+
+        result_phase = updated["onboarding_phase"]
+        logger.info(
+            f"✅ Question '{question_key}' saved for user {user_id}: "
+            f"{column}={stored_value}, phase '{current_phase}' → '{result_phase}' "
+            f"(advanced={advance})"
+        )
+
+        return {
+            "success": True,
+            "question_key": question_key,
+            "value": request.value,
+            "phase": result_phase,
+            "changed": advance,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            f"❌ Failed to save question '{question_key}' for user {user_id}: {e}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to save onboarding question: {str(e)}",
         )
 
 
