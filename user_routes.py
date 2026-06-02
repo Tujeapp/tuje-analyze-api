@@ -263,6 +263,11 @@ class OnboardingQuestionRequest(BaseModel):
     value: str
 
 
+class TierSelectionRequest(BaseModel):
+    """Payload for POST /users/me/tier-selection (M8)."""
+    tier: str
+
+
 class UserProfile(BaseModel):
     id: UUID
     email: Optional[str]  # Now optional — anonymous users have no email
@@ -1393,6 +1398,134 @@ async def submit_onboarding_question(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to save onboarding question: {str(e)}",
+        )
+
+
+@router.post("/users/me/tier-selection")
+async def submit_tier_selection(
+    request: TierSelectionRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Persist the user's subscription tier choice (M8).
+
+    Validates tier against ['free', 'basic', 'pro'], atomically writes
+    subscription_tier + subscription_period, and conditionally advances
+    onboarding_phase from 'tier_intro_shown' → 'plan_tier_selected' under the
+    same STRICT sequential rule as the onboarding-question endpoint:
+
+      - current phase == 'tier_intro_shown' (expected predecessor)
+            → write tier + period + advance to 'plan_tier_selected'
+      - current phase is PAST 'tier_intro_shown' (revisiting to change tier)
+            → write tier + period only, leave phase unchanged
+      - current phase is BEFORE 'tier_intro_shown' (out-of-order request)
+            → 400, reject
+      - current phase string is not in ONBOARDING_PHASES (corrupt state)
+            → 500
+
+    subscription_period is set to 'monthly' for paid tiers (basic/pro) and
+    explicit NULL for free. subscription_status is intentionally NOT touched —
+    it stays 'never_subscribed' until real payment is wired up.
+    """
+    user_id = str(current_user["id"])
+    tier = request.tier
+
+    # 1. Validate tier against the allowlist
+    ALLOWED_TIERS = ("free", "basic", "pro")
+    if tier not in ALLOWED_TIERS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid tier '{tier}'. Allowed: {', '.join(ALLOWED_TIERS)}",
+        )
+
+    # 2. Derive subscription_period: 'monthly' for paid tiers, NULL for free
+    subscription_period = None if tier == "free" else "monthly"
+
+    # 3. Validate current phase is recognized (corrupt → 500)
+    current_phase = current_user.get("onboarding_phase", "not_started")
+    if current_phase not in ONBOARDING_PHASES:
+        logger.error(
+            f"❌ Corrupt onboarding_phase '{current_phase}' for user {user_id}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Corrupt onboarding_phase: '{current_phase}' is not a recognized phase",
+        )
+
+    # 4. Compute expected (predecessor) and target phases
+    expected_phase = "tier_intro_shown"
+    expected_idx = ONBOARDING_PHASES.index(expected_phase)
+    target_phase = ONBOARDING_PHASES[expected_idx + 1]  # 'plan_tier_selected'
+    current_idx = ONBOARDING_PHASES.index(current_phase)
+
+    # 5. Strict sequential rule
+    if current_idx < expected_idx:
+        logger.warning(
+            f"⚠️ Out-of-order tier-selection for user {user_id}: "
+            f"at '{current_phase}', requires '{expected_phase}'"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Cannot select a tier yet. Current phase "
+                f"'{current_phase}' is before the required phase '{expected_phase}'."
+            ),
+        )
+
+    advance = current_idx == expected_idx  # else current_idx > expected_idx → revisit
+
+    # 6. Persist tier + period atomically; advance phase only when at expected phase
+    try:
+        conn = await asyncpg.connect(DATABASE_URL)
+
+        if advance:
+            updated = await conn.fetchrow(
+                """
+                UPDATE brain_user
+                SET subscription_tier = $1,
+                    subscription_period = $2,
+                    onboarding_phase = $3,
+                    updated_at = NOW()
+                WHERE id = $4
+                RETURNING onboarding_phase
+                """,
+                tier, subscription_period, target_phase, current_user["id"],
+            )
+        else:
+            updated = await conn.fetchrow(
+                """
+                UPDATE brain_user
+                SET subscription_tier = $1,
+                    subscription_period = $2,
+                    updated_at = NOW()
+                WHERE id = $3
+                RETURNING onboarding_phase
+                """,
+                tier, subscription_period, current_user["id"],
+            )
+
+        await conn.close()
+
+        result_phase = updated["onboarding_phase"]
+        logger.info(
+            f"✅ Tier selected for user {user_id}: tier={tier}, "
+            f"period={subscription_period}, phase '{current_phase}' → '{result_phase}' "
+            f"(advanced={advance})"
+        )
+
+        return {
+            "success": True,
+            "tier": tier,
+            "phase": result_phase,
+            "changed": advance,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Failed to save tier for user {user_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to save tier selection: {str(e)}",
         )
 
 
