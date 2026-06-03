@@ -57,9 +57,22 @@ ONBOARDING_PHASES = [
 
 # Explicit whitelist of allowed backward phase transitions.
 # revert-onboarding-phase only permits these (current_phase, to_phase) pairs.
+# NOTE: a question screen renders AT its predecessor phase, so the user's current_phase
+# while viewing question N is question (N-1)'s *_selected phase. "Back" reverts to the
+# phase before that. Hence these pairs are between consecutive *_selected phases (Q2–Q8);
+# Q1 has no back (its predecessor is account_credentials_entered, the account screen).
 ALLOWED_REVERTS = {
+    # Phase 1 (existing)
     ("goal_selected", "cta_tapped"),
     ("level_selected", "goal_selected"),
+    # M8 Phase 2 questions — back from Q2..Q8 to the prior question
+    ("expected_level_selected", "account_credentials_entered"),   # Q2 → Q1
+    ("last_french_usage_selected", "expected_level_selected"),    # Q3 → Q2
+    ("native_language_selected", "last_french_usage_selected"),   # Q4 → Q3
+    ("importance_level_selected", "native_language_selected"),    # Q5 → Q4
+    ("languages_count_selected", "importance_level_selected"),    # Q6 → Q5
+    ("age_bracket_selected", "languages_count_selected"),         # Q7 → Q6
+    ("user_source_selected", "age_bracket_selected"),             # Q8 → Q7
 }
 
 # ========================================
