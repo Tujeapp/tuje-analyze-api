@@ -65,16 +65,7 @@ async def start_new_cycle(
     )
     
     cycle_id = generate_id("CYCLE")
-    
-    # Save cycle to database
-    await db_pool.execute("""
-        INSERT INTO session_cycle (
-            id, session_id, cycle_number, subtopic_id,
-            status, started_at, cycle_level, cycle_boredom, cycle_goal
-        ) VALUES ($1, $2, $3, $4, 'active', NOW(), $5, $6, $7)
-    """, cycle_id, session_id, cycle_number, interactions[0].subtopic_id,
-        cycle_level, cycle_boredom, cycle_goal)
-    
+
     # Select ordered sequence of 7 interactions
     ordered_ids = await select_cycle_interactions(
         interactions=interactions,
@@ -82,6 +73,17 @@ async def start_new_cycle(
         cycle_boredom=cycle_boredom,
         cycle_goal=cycle_goal
     )
+
+    # Save cycle to database (ordered_ids persisted as candidate_pool_ids
+    # so advance_to_next_interaction can read them back later).
+    await db_pool.execute("""
+        INSERT INTO session_cycle (
+            id, session_id, cycle_number, subtopic_id,
+            status, started_at, cycle_level, cycle_boredom, cycle_goal,
+            candidate_pool_ids
+        ) VALUES ($1, $2, $3, $4, 'active', NOW(), $5, $6, $7, $8)
+    """, cycle_id, session_id, cycle_number, interactions[0].subtopic_id,
+        cycle_level, cycle_boredom, cycle_goal, ordered_ids)
     
     # Save first interaction as active
     first_interaction_id = generate_id("INT")

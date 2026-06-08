@@ -23,13 +23,14 @@ async def detect_user_state(user_id: str, db_pool: asyncpg.Pool) -> UserHistory:
     async with db_pool.acquire() as conn:
         history = await conn.fetchrow("""
             SELECT 
-                MIN(created_at) as first_session_date,
+                MIN(started_at) as first_session_date,
                 MAX(completed_at) as last_session_date,
                 COUNT(*) as total_sessions,
                 MAX(session_level) FILTER (WHERE status = 'completed') as last_session_level
             FROM session
             WHERE user_id = $1
             AND status IN ('completed', 'incomplete')
+            AND is_initial_session IS NOT TRUE
         """, user_id)
         
         now = datetime.now()

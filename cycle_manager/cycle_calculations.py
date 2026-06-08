@@ -150,7 +150,7 @@ async def calculate_cycle_boredom(
         else:
             coefficient = 0.75  # Doing well, decrease boredom
         
-        new_boredom = last_cycle['cycle_boredom'] * coefficient
+        new_boredom = float(last_cycle['cycle_boredom']) * coefficient
         new_boredom = round(max(0.0, min(1.0, new_boredom)), 2)  # Clamp to 0.0-1.0
         
         logger.debug(f"Cycle {cycle_number} boredom: {new_boredom:.2f} (from {last_cycle['cycle_boredom']:.2f}, rate: {last_cycle_rate:.2f}, coef: {coefficient})")
@@ -163,23 +163,31 @@ async def calculate_cycle_goal(
     db_pool: asyncpg.Pool
 ) -> str:
     """
-    Determine cycle goal based on patterns and history
-    
-    This is a simplified version - full implementation would follow
-    modulo-based rotation logic
-    
-    Args:
-        session_id: Current session ID
-        cycle_number: Cycle number (1-7)
-        db_pool: Database connection pool
-    
-    Returns:
-        Cycle goal: "story", "notion", or "intent"
+    Determine cycle goal.
+
+    Per TuJe_Session_RampUp_and_Cycle_Goal_Logic.md §4: the first regular
+    session (session_rank = 1) forces all three cycles to "story" — the
+    intent/notion goals require history that does not yet exist on the
+    first regular session. Cycle-goal selection (per §6) begins from the
+    second regular session.
+
+    For session_rank >= 2, falls through to the rotation pattern. (The full
+    boredom-band cycle-goal algorithm per §6 is deferred to a later chunk
+    — this rotation is a placeholder for now.)
     """
-    
-    # Simplified rotation pattern
-    # Full implementation would use modulo calculation
-    
+    # First-regular-session override.
+    async with db_pool.acquire() as conn:
+        session_rank = await conn.fetchval(
+            "SELECT session_rank FROM session WHERE id = $1",
+            session_id,
+        )
+
+    if session_rank == 1:
+        logger.debug(f"Cycle {cycle_number} goal: story (session_rank=1, all cycles forced to story)")
+        return "story"
+
+    # Rotation pattern for session_rank >= 2 (placeholder; full algorithm
+    # in §6 of the ramp-up doc is deferred).
     rotation_pattern = {
         1: "story",
         2: "notion",
@@ -187,12 +195,10 @@ async def calculate_cycle_goal(
         4: "intent",
         5: "story",
         6: "notion",
-        7: "story"
+        7: "story",
     }
-    
     goal = rotation_pattern.get(cycle_number, "story")
-    
-    logger.debug(f"Cycle {cycle_number} goal: {goal}")
+    logger.debug(f"Cycle {cycle_number} goal: {goal} (session_rank={session_rank})")
     return goal
 
 

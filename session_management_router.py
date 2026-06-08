@@ -31,6 +31,7 @@ from helpers import (
     validate_session_mood,
     log_session_summary
 )
+from routers.initial_session_router import _bucket_to_session_level
 from models import UserState
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,12 @@ class StartSessionRequest(BaseModel):
     session_mood: str
     user_level: Optional[int] = None
     is_initial_session: Optional[bool] = None
+
+
+class MoodRecommendationResponse(BaseModel):
+    """Response for GET /mood-recommendation"""
+    recommended_mood: str
+    available_moods: List[str]
 
 
 class TopNotionInfo(BaseModel):
@@ -226,16 +233,19 @@ async def start_session_endpoint(request: StartSessionRequest):
             
             # Initialize session based on user state
             if user_history.state == UserState.BRAND_NEW:
-                user_level = request.user_level if request.user_level is not None else 0
+                # Level for a user with no regular history comes from their onboarding
+                # bucket (same mapping used at initial-session close-out). request.user_level
+                # overrides if explicitly provided.
+                if request.user_level is not None:
+                    user_level = request.user_level
+                else:
+                    user_level = _bucket_to_session_level(user_bucket)
                 session_data = await initialize_brand_new_user(
                     user_id=request.user_id,
                     session_type=request.session_type,
                     session_mood=request.session_mood,
                     user_level=user_level,
                     db_pool=pool,
-                    is_initial_session=bool(is_initial_session),
-                    goal_id=user_goal_id,
-                    initial_level_bucket=user_bucket
                 )
                 
             elif user_history.state == UserState.RETURNING_USER:
@@ -346,6 +356,75 @@ async def start_session_endpoint(request: StartSessionRequest):
         raise
     except Exception as e:
         logger.error(f"Failed to start session: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/mood-recommendation", response_model=MoodRecommendationResponse)
+async def mood_recommendation(user_id: str):
+    """
+    Return the user's recommended session mood and the full list of available
+    moods. iOS uses this to render the mood-selection panel before
+    /start-session is called.
+
+    Per TuJe_Session_RampUp_and_Cycle_Goal_Logic.md §4, the default
+    recommendation is "effective". The full recommendation algorithm
+    (based on history) is deferred — placeholder returns "effective"
+    unconditionally for now. user_id is accepted so the contract is stable
+    when the algorithm lands.
+    """
+    try:
+        logger.info(f"Mood recommendation requested for user: {user_id}")
+
+        pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=2)
+        try:
+            async with pool.acquire() as conn:
+                rows = await conn.fetch("""
+                    SELECT name
+                    FROM brain_session_mood
+                    WHERE live = TRUE
+                    ORDER BY name ASC
+                """)
+                available_moods = [row["name"] for row in rows]
+
+            # Placeholder recommendation (per ramp-up doc §4). The casing matches
+            # brain_session_mood.name (capitalized) — the canonical source for
+            # what iOS receives and sends back to /start-session. helpers.py's
+            # get_mood_types() lowercases internally so the existing search code
+            # still works.
+            recommended_mood = "Effective"
+
+            # Defensive: if "effective" somehow isn't in the live list (e.g.
+            # disabled in Airtable), fall back to the alphabetically-first
+            # available mood.
+            if recommended_mood not in available_moods:
+                if available_moods:
+                    logger.warning(
+                        f"Recommended mood 'effective' is not live in "
+                        f"brain_session_mood; falling back to "
+                        f"{available_moods[0]!r}."
+                    )
+                    recommended_mood = available_moods[0]
+                else:
+                    # Truly empty list — return effective anyway with a warning.
+                    # iOS will at least have something; the underlying data
+                    # gap needs fixing in Airtable.
+                    logger.error(
+                        "brain_session_mood is empty or has no live rows. "
+                        "Returning 'effective' as recommendation; iOS will "
+                        "have no other choices to show."
+                    )
+                    available_moods = ["effective"]
+
+            return MoodRecommendationResponse(
+                recommended_mood=recommended_mood,
+                available_moods=available_moods,
+            )
+
+        finally:
+            await pool.close()
+
+    except Exception as e:
+        logger.error(f"Failed to get mood recommendation: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

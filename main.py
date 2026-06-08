@@ -17,7 +17,7 @@ from gpt_fallback_router import router as gpt_fallback_router
 from adjustement_main_router import router as transcription_router
 from matching_answer_router import router as matching_router
 from user_routes import router as user_router
-from session_management_router import router as session_router
+from session_management_router import router as adaptive_session_router
 from routers.session_router import router as session_router
 from upload_video_simplified import router as video_router
 from upload_answer_image import router as answer_image_router
@@ -81,7 +81,7 @@ app.include_router(user_router, tags=["Users"])
 app.include_router(transcription_router, prefix="/api", tags=["transcription"])
 app.include_router(matching_router, prefix="/api/matching", tags=["answer_matching"])
 app.include_router(gpt_fallback_router, prefix="/api/gpt", tags=["gpt_fallback"])
-app.include_router(session_router, prefix="/api/session", tags=["session_management"])
+app.include_router(adaptive_session_router, prefix="/api/session-adaptive", tags=["session_adaptive"])
 app.include_router(session_router, prefix="/api/session", tags=["session_management"])
 app.include_router(video_router)
 app.include_router(answer_image_router)

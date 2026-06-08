@@ -36,96 +36,130 @@ async def initialize_brand_new_user(
     session_type: str,
     session_mood: str,
     user_level: int,
-    db_pool: asyncpg.Pool
+    db_pool,
 ) -> Dict[str, Any]:
     """
-    Initialize session for brand new user (first session ever)
-    
-    Documentation - "Set first session for a new user":
-    - user_level = from onboarding question
-    - session_boredom = 0
-    - modulo = 0.5 (hardcoded)
-    - Skip: streaks, mood recommendation, notion decay
-    
-    Args:
-        user_id: User ID
-        session_type: "short", "medium", "long"
-        session_mood: Selected mood (or use "effective" as default)
-        user_level: Level from onboarding (0, 100, 200, 300, 400)
-        db_pool: Database connection pool
-    
-    Returns:
-        Complete session initialization data
+    Initialize a session for a user with no regular-session history.
+
+    Used for:
+      - Truly brand-new users (no completed sessions of any kind).
+      - Users who have completed an initial (onboarding) session but no regular
+        session yet — per Option A in TuJe_Regular_Session_Spec.md, we route
+        them here so the first regular session uses seed values rather than
+        history-derived calculations.
+
+    Seeds (deliberate; see spec):
+      streak7=0, streak30=0, session_boredom=0, modulo=0.5,
+      session_level_direction='stable', top_session_mood=session_mood (no
+      history to compute it from), top_session_mood_rate=0,
+      mood_recommendation=session_mood.
+
+    user_level is supplied by the caller — for an initial-only user this comes
+    from _bucket_to_session_level(brain_user.initial_level_bucket); for a truly
+    brand-new user it comes from request.user_level (defaulting to 0).
+
+    Returns a dict with every key the start-session handler reads.
     """
-    logger.info(f"🆕 Initializing BRAND NEW user: {user_id} at level {user_level}")
-    
-    # Fixed values for new users (per documentation)
-    session_level = user_level
+    session_id = generate_id("SESSION")
+    session_nbr_cycle = get_cycle_count(session_type)
+    # expected_total_score: 700 per cycle (initial-session convention).
+    expected_total_score = session_nbr_cycle * 700
+
+    # Seed values (no history to compute from).
     streak7 = 0.0
     streak30 = 0.0
     session_boredom = 0.0
-    modulo = 0.5  # Documentation: "Modulo = 0.5" for first session
-    
-    # Use "effective" if not specified (documentation default)
-    if not session_mood:
-        session_mood = "effective"
-    
-    # Empty context for new user
+    modulo = 0.5
+    top_session_mood = session_mood
+    top_session_mood_rate = 0.0
+    mood_recommendation = session_mood
+    session_level_direction = "stable"
+
+    # Notion init for a brand-new user (writes session_notion seed rows;
+    # short-circuits the decay/priority pipeline).
+    notion_result = await process_notions_for_session_start(
+        user_id=user_id,
+        streak7=streak7,
+        streak30=streak30,
+        session_mood=session_mood,
+        is_new_user=True,
+        user_level=user_level,
+        db_pool=db_pool,
+    )
+
+    # Empty SessionContext: no prior cycles/interactions to derive 'seen' sets
+    # from. (Constructed directly rather than .load() — load() would query
+    # session_cycle/session_interaction which have no user_id column populated
+    # yet; see spec R6.)
     context = SessionContext(
         user_id=user_id,
         seen_subtopics=set(),
         seen_interaction_ids=set(),
-        seen_intents=set()
+        seen_intents=set(),
     )
-    
-    session_id = generate_id("SESSION")
-    
-    # Insert session record
-    await db_pool.execute("""
+
+    # Persist the session row. Every NOT NULL column on the live `session`
+    # table must be populated here.
+    await db_pool.execute(
+        """
         INSERT INTO session (
-            id, user_id, session_rank, status, session_level,
-            session_level_direction, session_nbr_cycle, session_mood,
+            id, user_id, session_type, session_rank, status,
+            session_level, session_level_direction,
+            session_nbr_cycle, session_mood,
             streak7, streak30, session_boredom, modulo,
-            top_session_mood, top_session_mood_rate,
-            created_at
+            top_session_mood, top_session_mood_rate, mood_recommendation,
+            expected_cycles, expected_total_score,
+            is_initial_session,
+            started_at, last_activity_at
         ) VALUES (
-            $1, $2, 1, 'active', $3, 'stable', $4, $5, 
-            0, 0, 0, 0.5, $5, 0, NOW()
+            $1, $2, $3, 1, 'active',
+            $4, $5,
+            $6, $7,
+            $8, $9, $10, $11,
+            $12, $13, $14,
+            $15, $16,
+            FALSE,
+            NOW(), NOW()
         )
-    """, session_id, user_id, session_level, 
-        get_cycle_count(session_type), session_mood)
-    
-    # Initialize first notions for new user (per documentation)
-    notion_result = await process_notions_for_session_start(
-        user_id=user_id,
-        streak7=0.0,
-        streak30=0.0,
-        session_mood=session_mood,
-        is_new_user=True,
-        user_level=user_level,
-        db_pool=db_pool
+        """,
+        session_id, user_id, session_type,                       # $1 $2 $3
+        user_level, session_level_direction,                     # $4 $5
+        session_nbr_cycle, session_mood,                         # $6 $7
+        streak7, streak30, session_boredom, modulo,              # $8 $9 $10 $11
+        top_session_mood, top_session_mood_rate, mood_recommendation,  # $12 $13 $14
+        session_nbr_cycle, expected_total_score,                 # $15 $16
     )
-    
+
     return {
+        # Core IDs / levels.
         "session_id": session_id,
         "user_level": user_level,
-        "session_level": session_level,
-        "session_boredom": session_boredom,
+        "session_level": user_level,
+        # Seed values, surfaced for the response.
         "streak7": streak7,
         "streak30": streak30,
+        "session_boredom": session_boredom,
         "modulo": modulo,
-        "top_session_mood": session_mood,
-        "top_session_mood_rate": 0.0,
-        "mood_recommendation": session_mood,  # Same as selected for new user
+        "top_session_mood": top_session_mood,
+        "top_session_mood_rate": top_session_mood_rate,
+        "mood_recommendation": mood_recommendation,
+        # Notion result (is_new_user branch returns a dict with empty top_notions
+        # and skipped_reason='new_user').
+        "top_notions": notion_result.get("top_notions", []),
+        "notion_processing": notion_result,
+        # SessionContext (empty) and derived 'seen' lists.
         "context": context,
         "seen_intents": [],
         "seen_subtopics": [],
-        "top_notions": [],
-        "notion_processing": notion_result,
+        # Flags read by the response builder.
         "is_new_user": True,
         "is_returning_user": False,
         "is_early_user": False,
-        "welcome_message": "Welcome to TuJe! Let's start your French journey! 🇫🇷"
+        "welcome_message": "Welcome! Let's start your French journey. 🇫🇷",
+        # No history → these are explicitly None.
+        "available_history_days": None,
+        "days_away": None,
+        "level_adjusted_from": None,
     }
 
 

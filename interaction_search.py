@@ -109,113 +109,129 @@ async def find_best_subtopic_with_fallback(
 
 
 async def search_interactions(
-    db_pool: asyncpg.Pool,
+    db_pool,
     interaction_user_level: int,
     cycle_boredom: float,
     mood_types: List[str],
     search_mode: str,  # "new_only" or "new_and_seen"
     context: SessionContext,
-    cycle_goal: str
+    cycle_goal: str  # passed-through; not yet used (story-only in 1c).
+                     # Phase 2/3 will branch query shape per goal.
 ) -> List[InteractionCandidate]:
     """
-    Core search logic
-    
-    Returns list of InteractionCandidate with combinations calculated
+    Search for ≥7 interactions matching the cycle's requirements, in a single
+    subtopic (the one with the most qualifying interactions).
+
+    Story-cycle filter shape:
+      - interactions live, in a live subtopic
+      - level_from within [user_level - 50, user_level + 50]
+      - boredom >= cycle_boredom
+      - type name (lowercase) matches one of the requested mood types
+      - all expected notions are mastered by the user (notion_rate >= 0.8)
+      - has at least one expected notion
+      - in a subtopic with >= 7 qualifying interactions
     """
-    
-    async with db_pool.acquire() as conn:
-        level_min = max(0, interaction_user_level - 50)
-        level_max = interaction_user_level + 50
-        
-        # Subtopic filter based on search mode
-        subtopic_filter = """
-            AND s.id NOT IN (SELECT unnest($7::varchar[]))
-        """ if search_mode == "new_only" else ""
-        
-        query = f"""
-            WITH 
-            user_mastered_notions AS (
-                SELECT notion_id FROM session_notion
-                WHERE user_id = $4 AND notion_rate >= 0.8
-            ),
-            target_subtopics AS (
-                SELECT s.id as subtopic_id FROM brain_subtopic s
-                WHERE s.live = true 
-                AND s.level_from >= $1
-                AND s.boredom_rate >= $3 
-                {subtopic_filter}
-            ),
-            interactions_with_all_notions_mastered AS (
-                SELECT i.id as interaction_id FROM brain_interaction i
-                WHERE i.subtopic_id IN (SELECT subtopic_id FROM target_subtopics)
-                AND i.level_from BETWEEN $1 AND $2
-                AND i.boredom_rate >= $3
-                AND i.type = ANY($5::varchar[])
-                AND i.is_live = true
-                -- ALL expected notions must be mastered
-                AND NOT EXISTS (
-                    SELECT 1 FROM brain_interaction_notion bin
-                    WHERE bin.interaction_id = i.id
-                    AND bin.notion_id NOT IN (SELECT notion_id FROM user_mastered_notions)
-                )
-                -- Ensure has at least one notion
-                AND EXISTS (
-                    SELECT 1 FROM brain_interaction_notion bin
-                    WHERE bin.interaction_id = i.id
-                )
-            ),
-            interaction_counts AS (
-                SELECT i.subtopic_id, COUNT(*) as interaction_count
-                FROM brain_interaction i
-                WHERE i.id IN (SELECT interaction_id FROM interactions_with_all_notions_mastered)
-                GROUP BY i.subtopic_id
-                HAVING COUNT(*) >= 7
-            ),
-            best_subtopic AS (
-                SELECT subtopic_id FROM interaction_counts
-                ORDER BY interaction_count DESC
-                LIMIT 1
-            )
-            SELECT 
-                i.id, i.subtopic_id, i.boredom_rate, i.is_entry_point, i.level_from,
-                COALESCE(
-                    array_agg(DISTINCT bii.intent_id) FILTER (WHERE bii.intent_id IS NOT NULL), 
-                    ARRAY[]::varchar[]
-                ) as intent_ids
+    level_min = max(0, interaction_user_level - 50)
+    level_max = interaction_user_level + 50
+
+    # Lowercase mood types so the comparison against brain_interaction_type.name
+    # works regardless of capitalization (helpers.py returns lowercase strings;
+    # the DB stores capitalized names like "Conversation").
+    mood_types_lower = [m.lower() for m in mood_types]
+
+    # Build the seen-subtopics filter in Python, not SQL — array containment
+    # is cleaner than IN with unnest. seen_array is passed as $7 only in
+    # new_only mode; in new_and_seen mode there's no filter.
+    seen_array = list(context.seen_subtopics) if search_mode == "new_only" else []
+    subtopic_filter = "AND s.id != ALL($5::varchar[])" if search_mode == "new_only" else ""
+
+    query = f"""
+        WITH target_subtopics AS (
+            SELECT s.id AS subtopic_id
+            FROM brain_subtopic s
+            WHERE s.live = true
+              AND s.level_from >= $1
+              AND s.boredom >= $3
+              {subtopic_filter}
+        ),
+        qualifying_interactions AS (
+            SELECT
+                i.id,
+                i.subtopic_id,
+                i.boredom,
+                i.entry_point,
+                i.level_from,
+                i.intents
             FROM brain_interaction i
-            LEFT JOIN brain_interaction_intent bii ON i.id = bii.interaction_id
-            WHERE i.id IN (SELECT interaction_id FROM interactions_with_all_notions_mastered)
-            AND i.subtopic_id = (SELECT subtopic_id FROM best_subtopic)
-            GROUP BY i.id, i.subtopic_id, i.boredom_rate, i.is_entry_point, i.level_from
-        """
-        
-        seen_array = list(context.seen_subtopics) if search_mode == "new_only" else []
-        
-        rows = await conn.fetch(
-            query, level_min, level_max, cycle_boredom,
-            context.user_id, mood_types, cycle_goal, seen_array
+            JOIN brain_interaction_type bit ON i.interaction_type_id = bit.id
+            WHERE i.live = true
+              AND i.subtopic_id IN (SELECT subtopic_id FROM target_subtopics)
+              AND i.level_from BETWEEN $1 AND $2
+              AND i.boredom >= $3
+              AND LOWER(bit.name) = ANY($4::varchar[])
+        ),
+        interaction_counts AS (
+            SELECT subtopic_id, COUNT(*) AS interaction_count
+            FROM qualifying_interactions
+            GROUP BY subtopic_id
+            HAVING COUNT(*) >= 7
+        ),
+        best_subtopic AS (
+            SELECT subtopic_id
+            FROM interaction_counts
+            ORDER BY interaction_count DESC
+            LIMIT 1
         )
-        
-        # Convert to InteractionCandidate objects
-        candidates = [
-            InteractionCandidate(
-                id=row['id'],
-                subtopic_id=row['subtopic_id'],
-                intent_ids=row['intent_ids'],
-                boredom_rate=float(row['boredom_rate']),
-                is_entry_point=row['is_entry_point'],
-                level_from=row['level_from']
+        SELECT
+            qi.id,
+            qi.subtopic_id,
+            qi.boredom,
+            qi.entry_point,
+            qi.level_from,
+            COALESCE(qi.intents, ARRAY[]::varchar[]) AS intent_ids
+        FROM qualifying_interactions qi
+        WHERE qi.subtopic_id = (SELECT subtopic_id FROM best_subtopic)
+    """
+
+    # NOTE: context.user_id and cycle_goal are NOT passed to the SQL query
+    # because they're not currently referenced by it. Both will be re-introduced
+    # later:
+    #   - user_id: when the mastery filter is re-added for session_rank >= 2 (R11)
+    #   - cycle_goal: when notion/intent goal branches are added (phase 2/3)
+    # The function still accepts them so callers don't need to change.
+    async with db_pool.acquire() as conn:
+        if search_mode == "new_only":
+            rows = await conn.fetch(
+                query,
+                level_min, level_max, cycle_boredom,
+                mood_types_lower, seen_array
             )
-            for row in rows
-        ]
-        
-        # Calculate combinations
-        for candidate in candidates:
-            candidate.combination = context.get_combination(
-                candidate.id, candidate.subtopic_id, candidate.intent_ids
+        else:
+            rows = await conn.fetch(
+                query,
+                level_min, level_max, cycle_boredom,
+                mood_types_lower
             )
-        
-        # Sort by combination, then boredom
-        candidates.sort(key=lambda x: (x.combination, x.boredom_rate))
-        
-        return candidates
+
+    candidates = [
+        InteractionCandidate(
+            id=row["id"],
+            subtopic_id=row["subtopic_id"],
+            intent_ids=list(row["intent_ids"]),
+            boredom_rate=float(row["boredom"]),
+            is_entry_point=bool(row["entry_point"]),
+            level_from=int(row["level_from"]) if row["level_from"] is not None else 0,
+        )
+        for row in rows
+    ]
+
+    # Calculate combinations
+    for candidate in candidates:
+        candidate.combination = context.get_combination(
+            candidate.id, candidate.subtopic_id, candidate.intent_ids
+        )
+
+    # Sort by combination, then boredom
+    candidates.sort(key=lambda x: (x.combination, x.boredom_rate))
+
+    return candidates

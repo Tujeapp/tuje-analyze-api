@@ -465,57 +465,68 @@ async def get_top_notions_list(
 async def initialize_notions_for_new_user(
     user_id: str,
     user_level: int,
-    db_pool: asyncpg.Pool,
-    initial_count: int = 5
+    db_pool,
 ) -> int:
     """
-    Initialize first notions for a brand new user
-    
-    Documentation: "List of notions = search in brain_notion, 
-    filter with user level, get the first 5 notions"
-    
-    Args:
-        user_id: User ID
-        user_level: User's starting level
-        db_pool: Database connection pool
-        initial_count: Number of notions to initialize
-    
-    Returns:
-        Number of notions initialized
+    Seed session_notion rows for a user with no regular-session history.
+
+    Per TuJe_Session_RampUp_and_Cycle_Goal_Logic.md §4:
+    Pull max 5 notions from brain_notion at the EXACT user_level only,
+    ordered by rank ASC, all written at notion_rate = 0 (introduced but
+    not yet practiced). This is the seed that gives the second regular
+    session its first readable notion history.
+
+    There is no "owned" pre-seeding for notions below user_level — the
+    notion-mastery model in the doc has no such concept.
+
+    Returns the count of session_notion rows inserted.
     """
     async with db_pool.acquire() as conn:
-        # Check if user already has notions
-        existing = await conn.fetchval("""
-            SELECT COUNT(*) FROM session_notion WHERE user_id = $1
-        """, user_id)
-        
+        # Idempotent guard — if rows exist, skip (preserves prior seeding
+        # without overwriting).
+        existing = await conn.fetchval(
+            "SELECT COUNT(*) FROM session_notion WHERE user_id = $1",
+            user_id,
+        )
         if existing > 0:
-            logger.debug(f"User {user_id} already has {existing} notions, skipping init")
+            logger.info(
+                f"User {user_id} already has {existing} session_notion rows; "
+                f"skipping initialization."
+            )
             return 0
-        
-        # Get first N notions appropriate for user level
-        notions = await conn.fetch("""
-            SELECT id, notion_name, notion_level_from
+
+        # Up to 5 notions at exactly user_level, ordered by rank ASC.
+        rows = await conn.fetch(
+            """
+            SELECT id
             FROM brain_notion
-            WHERE notion_level_from <= $1
-            AND live = true
-            ORDER BY notion_level_from ASC, notion_weightiness DESC
-            LIMIT $2
-        """, user_level, initial_count)
-        
-        # Insert initial notions with rate = 0 (will be learned)
-        for notion in notions:
-            await conn.execute("""
+            WHERE level_from = $1 AND live = true
+            ORDER BY rank ASC
+            LIMIT 5
+            """,
+            user_level,
+        )
+
+        inserted = 0
+        for row in rows:
+            await conn.execute(
+                """
                 INSERT INTO session_notion (
-                    user_id, notion_id, notion_rate, 
+                    user_id, notion_id, notion_rate,
                     notion_introduction_date, created_at, updated_at
                 )
                 VALUES ($1, $2, 0.0, NOW(), NOW(), NOW())
                 ON CONFLICT (user_id, notion_id) DO NOTHING
-            """, user_id, notion['id'])
-        
-        logger.info(f"Initialized {len(notions)} notions for new user {user_id}")
-        return len(notions)
+                """,
+                user_id, row["id"],
+            )
+            inserted += 1
+
+        logger.info(
+            f"Seeded {inserted} session_notion rows for user {user_id} "
+            f"at user_level={user_level} (max 5 by rank, score 0)."
+        )
+        return inserted
 
 
 # ============================================================================

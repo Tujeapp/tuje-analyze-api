@@ -19,8 +19,18 @@ from session_management import (
     interaction_service,
     scoring_service,
     bonus_malus_service,
-    cycle_service
+    cycle_service,
+    session_service
 )
+
+from cycle_manager.cycle_creation import advance_to_next_interaction, start_new_cycle
+from cycle_manager.cycle_completion import complete_cycle as cycle_completion_complete
+from cycle_manager.cycle_calculations import (
+    calculate_cycle_level,
+    calculate_cycle_boredom,
+    calculate_cycle_goal,
+)
+from session_context import SessionContext
 
 logger = logging.getLogger(__name__)
 
@@ -378,15 +388,163 @@ async def _complete_interaction(
     )
 
     async with db_pool.acquire() as conn:
-        cycle_id = await conn.fetchval("""
-            SELECT cycle_id FROM session_interaction WHERE id = $1
-        """, interaction_id)
+        interaction_row = await conn.fetchrow(
+            """
+            SELECT
+                si.cycle_id,
+                si.interaction_number,
+                si.session_id,
+                s.session_level,
+                s.session_boredom,
+                s.session_mood
+            FROM session_interaction si
+            JOIN session s ON si.session_id = s.id
+            WHERE si.id = $1
+            """,
+            interaction_id,
+        )
+        cycle_id = interaction_row["cycle_id"]
+        interaction_number = interaction_row["interaction_number"]
+        session_id = interaction_row["session_id"]
+        session_level = interaction_row["session_level"]
+        session_boredom = float(interaction_row["session_boredom"] or 0)
+        session_mood = interaction_row["session_mood"]
 
+    # Check if the cycle is complete (all 7 interactions done).
     cycle_complete = await interaction_service.check_cycle_complete(cycle_id, db_pool)
+
+    # Default values for fields we'll surface in the response.
+    next_interaction_id = None
+    next_brain_interaction_id = None
+    next_interaction_number = None
+    cycle_summary_data = None
+    next_cycle_data = None
+    session_complete = False
+    session_summary_data = None
 
     if cycle_complete:
         logger.info("🎊 Cycle completed!")
-        await cycle_service.complete_cycle(cycle_id, db_pool)
+
+        # Complete the cycle and capture its summary stats.
+        cycle_result = await cycle_completion_complete(
+            cycle_id=cycle_id,
+            session_id=session_id,
+            db_pool=db_pool,
+        )
+        cycle_summary_data = {
+            "cycle_id": cycle_result["cycle_id"],
+            "cycle_score": cycle_result["cycle_score"],
+            "cycle_rate": cycle_result["cycle_rate"],
+            "average_interaction_score": cycle_result["average_interaction_score"],
+            "completed_interactions": cycle_result["completed_interactions"],
+            "total_duration_seconds": cycle_result["total_duration_seconds"],
+        }
+
+        # Read the new completed_cycles count (just incremented by complete_cycle).
+        async with db_pool.acquire() as conn:
+            completed_cycles = await conn.fetchval(
+                "SELECT completed_cycles FROM session WHERE id = $1",
+                session_id,
+            )
+
+        if completed_cycles < 3:
+            # Auto-open the next cycle.
+            next_cycle_number = completed_cycles + 1
+
+            next_cycle_level = await calculate_cycle_level(
+                session_id, next_cycle_number, session_level, db_pool
+            )
+            next_cycle_boredom = await calculate_cycle_boredom(
+                session_id, next_cycle_number, session_boredom, db_pool
+            )
+            next_cycle_goal = await calculate_cycle_goal(
+                session_id, next_cycle_number, db_pool
+            )
+
+            next_context = await SessionContext.load(user_id, db_pool)
+
+            next_cycle_result = await start_new_cycle(
+                session_id=session_id,
+                context=next_context,
+                cycle_number=next_cycle_number,
+                cycle_goal=next_cycle_goal,
+                cycle_boredom=next_cycle_boredom,
+                cycle_level=next_cycle_level,
+                interaction_user_level=next_cycle_level,
+                session_mood=session_mood,
+                db_pool=db_pool,
+            )
+
+            next_cycle_data = {
+                "cycle_id": next_cycle_result["cycle_id"],
+                "cycle_number": next_cycle_number,
+                "subtopic_id": next_cycle_result["subtopic_id"],
+                "cycle_goal": next_cycle_goal,
+                "cycle_level": next_cycle_level,
+                "cycle_boredom": float(next_cycle_boredom),
+                "first_interaction_id": next_cycle_result["first_interaction_id"],
+                "first_brain_interaction_id": next_cycle_result["ordered_interactions"][0],
+            }
+        else:
+            # Session is complete after cycle 3.
+            session_complete = True
+            await session_service.complete_session(session_id, db_pool)
+
+            # complete_session returns None — re-read the session row.
+            async with db_pool.acquire() as conn:
+                completed_session = await conn.fetchrow(
+                    """
+                    SELECT id, status, completed_cycles, total_score,
+                           average_score_per_interaction, total_duration_seconds,
+                           completed_at
+                    FROM session WHERE id = $1
+                    """,
+                    session_id,
+                )
+            session_summary_data = {
+                "session_id": completed_session["id"],
+                "status": completed_session["status"],
+                "completed_cycles": completed_session["completed_cycles"],
+                "total_score": completed_session["total_score"],
+                "average_score_per_interaction": (
+                    float(completed_session["average_score_per_interaction"])
+                    if completed_session["average_score_per_interaction"] is not None
+                    else None
+                ),
+                "total_duration_seconds": completed_session["total_duration_seconds"],
+                "completed_at": completed_session["completed_at"].isoformat()
+                    if completed_session["completed_at"] else None,
+            }
+    else:
+        # Advance to the next interaction in the persisted pool.
+        async with db_pool.acquire() as conn:
+            pool_ids = await conn.fetchval(
+                "SELECT candidate_pool_ids FROM session_cycle WHERE id = $1",
+                cycle_id,
+            )
+            if not pool_ids or len(pool_ids) < 7:
+                # Defensive: pool should always have 7 entries for a properly-
+                # opened cycle. If missing or short, log and don't advance —
+                # cycles created before Piece 1 of chunk 3 won't have a pool.
+                logger.error(
+                    f"Cycle {cycle_id} has no candidate pool "
+                    f"(size={len(pool_ids) if pool_ids else 0}). "
+                    f"Cannot advance. Was this cycle created before Piece 1 "
+                    f"of chunk 3?"
+                )
+            else:
+                advance_result = await advance_to_next_interaction(
+                    cycle_id=cycle_id,
+                    session_id=session_id,
+                    current_interaction_number=interaction_number,
+                    ordered_interaction_ids=list(pool_ids),
+                    db_pool=db_pool,
+                )
+
+                if not advance_result.get("cycle_complete"):
+                    next_interaction_id = advance_result["next_interaction_id"]
+                    next_brain_interaction_id = advance_result["brain_interaction_id"]
+                    next_interaction_number = advance_result["interaction_number"]
 
     return {
         "answer_id": answer_id,
@@ -398,7 +556,14 @@ async def _complete_interaction(
         "cycle_complete": cycle_complete,
         "feedback": _get_feedback_for_score(interaction_score),
         "gpt_used": False,
-        "cost_saved": cost_saved
+        "cost_saved": cost_saved,
+        "next_interaction_id": next_interaction_id,
+        "next_brain_interaction_id": next_brain_interaction_id,
+        "interaction_number": next_interaction_number,
+        "cycle_summary": cycle_summary_data,
+        "next_cycle": next_cycle_data,
+        "session_complete": session_complete,
+        "session_summary": session_summary_data,
     }
 
 

@@ -80,7 +80,39 @@ class SubmitAnswerRequest(BaseModel):
     tapped_at_seconds: Optional[float] = None
 
 
+class CycleSummary(BaseModel):
+    cycle_id: str
+    cycle_score: int
+    cycle_rate: float
+    average_interaction_score: float
+    completed_interactions: int
+    total_duration_seconds: int
+
+
+class NextCycle(BaseModel):
+    cycle_id: str
+    cycle_number: int
+    subtopic_id: str
+    cycle_goal: str
+    cycle_level: int
+    cycle_boredom: float
+    first_interaction_id: str
+    first_brain_interaction_id: str
+    total_interactions: int = 7
+
+
+class SessionSummary(BaseModel):
+    session_id: str
+    status: str
+    completed_cycles: int
+    total_score: Optional[int] = None
+    average_score_per_interaction: Optional[float] = None
+    total_duration_seconds: Optional[int] = None
+    completed_at: str
+
+
 class SubmitAnswerResponse(BaseModel):
+    # Existing answer-level fields
     answer_id: str
     status: str  # "success", "retry", "partial_success"
     method: str
@@ -91,6 +123,22 @@ class SubmitAnswerResponse(BaseModel):
     gpt_used: bool
     cost_saved: float = 0
     bonus_malus_applied: Optional[dict] = None
+
+    # Cycle-level state
+    cycle_complete: bool = False
+    cycle_summary: Optional[CycleSummary] = None
+
+    # Next-interaction state (mid-cycle advance)
+    next_interaction_id: Optional[str] = None
+    next_brain_interaction_id: Optional[str] = None
+    interaction_number: Optional[int] = None
+
+    # Next-cycle state (cycle just completed, new one opened)
+    next_cycle: Optional[NextCycle] = None
+
+    # Session-level state (final cycle complete)
+    session_complete: bool = False
+    session_summary: Optional[SessionSummary] = None
 
 
 # ============================================================================

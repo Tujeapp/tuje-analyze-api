@@ -28,6 +28,18 @@ from helpers import generate_id
 
 logger = logging.getLogger(__name__)
 
+
+def _bucket_to_session_level(bucket) -> int:
+    """Map onboarding initial_level_bucket (0/1/2) to a numeric session level.
+    Intentionally conservative (under-estimates); the regular session adapts
+    upward from here. Placeholder mapping — see TuJe_Regular_Session_Spec.md."""
+    mapping = {0: 0, 1: 100, 2: 200}
+    try:
+        return mapping.get(int(bucket), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 router = APIRouter()
 
 
@@ -304,6 +316,8 @@ async def complete_initial_interaction(
                 if session_score is None:
                     session_score = 0
 
+                initial_level_value = _bucket_to_session_level(current_user.get("initial_level_bucket"))
+
                 # Atomic: mark session complete + advance onboarding phase together
                 # NOTE: This guard allows forward-skip (e.g., level_selected →
                 # initial_session_completed). This is intentional for the current
@@ -321,11 +335,13 @@ async def complete_initial_interaction(
                         SET status = 'completed',
                             completed_at = NOW(),
                             last_activity_at = NOW(),
-                            session_score = $2
+                            session_score = $2,
+                            session_level = $3
                         WHERE id = $1
                         """,
                         request.session_id,
                         session_score,
+                        initial_level_value,
                     )
 
                     if current_phase not in ONBOARDING_PHASES:
