@@ -80,61 +80,16 @@ class NotionProcessingInfo(BaseModel):
 
 class StartSessionResponse(BaseModel):
     """
-    Complete response for session start
-    
-    Includes all calculations from "Logic of a Session" Part 1:
-    - Streaks (7 and 30 day)
-    - Session boredom
-    - Top session mood and rate
-    - Mood recommendation
-    - Modulo (for scoring)
-    - Top notions list
-    - Seen content lists
+    Lean session-start response. Returns only what the iOS client reads:
+    the session id (to drive the cycle call) and the two user_behavior values
+    (rescue_level -> FrustrationTracker; always_silent -> voice/silent toggle).
+    The full session calculation pipeline still runs server-side and is persisted
+    on the session row / logged via log_session_summary; it is intentionally not
+    returned here (no client consumer). See R25.
     """
-    # Core identifiers
     session_id: str
-    user_id: str
-    session_rank: int
-    
-    # Levels
-    user_level: int
-    session_level: int
-    
-    # Streaks (B, C)
-    streak7: float
-    streak30: float
-    
-    # Boredom (D)
-    session_boredom: float
-    
-    # Mood (A, E)
-    session_mood: str
-    top_session_mood: str
-    top_session_mood_rate: float
-    mood_recommendation: str
-    
-    # Modulo (F)
-    modulo: float
-    
-    # Notions (G, H, I, J)
-    top_notions: List[TopNotionInfo]
-    notion_processing: NotionProcessingInfo
-    
-    # Seen content (K, L)
-    seen_intents_count: int
-    seen_subtopics_count: int
-    
-    # User state flags
-    user_state: str
-    is_new_user: bool = False
-    is_returning_user: bool = False
-    is_early_user: bool = False
-    
-    # Additional info
-    welcome_message: str
-    available_history_days: Optional[int] = None
-    days_away: Optional[int] = None
-    level_adjusted_from: Optional[int] = None
+    rescue_level: float
+    always_silent: bool
 
 
 class StartCycleRequest(BaseModel):
@@ -284,69 +239,29 @@ async def start_session_endpoint(request: StartSessionRequest):
                 "user_state": user_history.state.value
             })
             
-            # Build response
-            notion_processing = session_data.get("notion_processing", {})
-            top_notions = session_data.get("top_notions", [])
-            
+            # Fetch or create user_behavior row (rescue_level, always_silent).
+            # Mirrors the proven pattern in routers/session_router.py.
+            async with pool.acquire() as conn:
+                behavior = await conn.fetchrow("""
+                    SELECT rescue_level, always_silent
+                    FROM user_behavior WHERE user_id = $1
+                """, request.user_id)
+
+                if behavior is None:
+                    await conn.execute("""
+                        INSERT INTO user_behavior (user_id, rescue_level, always_silent)
+                        VALUES ($1, 0.50, FALSE)
+                    """, request.user_id)
+                    rescue_level = 0.50
+                    always_silent = False
+                else:
+                    rescue_level = float(behavior['rescue_level'])
+                    always_silent = bool(behavior['always_silent'])
+
             return StartSessionResponse(
-                # Core identifiers
                 session_id=session_data['session_id'],
-                user_id=request.user_id,
-                session_rank=user_history.total_sessions + 1,
-                
-                # Levels
-                user_level=session_data['user_level'],
-                session_level=session_data['session_level'],
-                
-                # Streaks
-                streak7=session_data['streak7'],
-                streak30=session_data['streak30'],
-                
-                # Boredom
-                session_boredom=session_data['session_boredom'],
-                
-                # Mood
-                session_mood=request.session_mood,
-                top_session_mood=session_data.get('top_session_mood', request.session_mood),
-                top_session_mood_rate=session_data.get('top_session_mood_rate', 0.0),
-                mood_recommendation=session_data.get('mood_recommendation', request.session_mood),
-                
-                # Modulo
-                modulo=session_data.get('modulo', 0.5),
-                
-                # Notions
-                top_notions=[
-                    TopNotionInfo(
-                        notion_id=n.get('notion_id', ''),
-                        notion_name=n.get('notion_name', ''),
-                        notion_rate=n.get('notion_rate', 0),
-                        priority_rate=n.get('priority_rate', 0),
-                        complexity_rate=n.get('complexity_rate', 0)
-                    )
-                    for n in top_notions
-                ],
-                notion_processing=NotionProcessingInfo(
-                    notions_decayed=notion_processing.get('notions_decayed', 0),
-                    priorities_updated=notion_processing.get('priorities_updated', 0),
-                    complexities_updated=notion_processing.get('complexities_updated', 0),
-                    skipped_reason=notion_processing.get('skipped_reason')
-                ),
-                
-                # Seen content
-                seen_intents_count=len(session_data.get('seen_intents', [])),
-                seen_subtopics_count=len(session_data.get('seen_subtopics', [])),
-                
-                # User state
-                user_state=user_history.state.value,
-                is_new_user=session_data.get('is_new_user', False),
-                is_returning_user=session_data.get('is_returning_user', False),
-                is_early_user=session_data.get('is_early_user', False),
-                
-                # Additional info
-                welcome_message=session_data.get('welcome_message', ''),
-                available_history_days=session_data.get('available_history_days'),
-                days_away=session_data.get('days_away'),
-                level_adjusted_from=session_data.get('level_adjusted_from')
+                rescue_level=rescue_level,
+                always_silent=always_silent,
             )
             
         finally:
