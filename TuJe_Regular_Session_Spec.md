@@ -1,6 +1,6 @@
 # TuJe — Regular Session System — Build Specification
 
-**Status:** Phase 1 in progress. Chunks 0, 1a, 1b, 1c, 3 complete. New backend endpoint added: GET /api/session-adaptive/mood-recommendation (returns recommended_mood + available_moods from brain_session_mood; recommendation is placeholder "Effective" pending full algorithm). iOS work for the central-button regular-session entry is the next chunk, scoped: build a new mood-selection screen, rewire central button to open it, relocate picker to a temporary HomeView button, and add an adaptive-mode parameter to SessionView/SessionViewModel so it plays through interactions using the adaptive endpoint responses. Cycle-boundary and session-end UI explicitly deferred to a later iOS conversation. After iOS work: chunk 1d (seen-ratio override §5).
+**Status:** Phase 1 in progress. Backend chunks 0, 1a, 1b, 1c, 3 complete and deployed to Render. R8 fixed today (notion_management.py column renames). iOS chunk structurally complete: mood-selection screen built, central button rewired, SessionView/SessionViewModel adaptive mode added, picker relocated to HomeView dev button, video-unavailable fallback. Picker regression test passed; adaptive end-to-end test BLOCKED on backend schema-vs-code drift in non-brand_new code paths (early_user → process_notions_for_session_start successful after R8, then crashes on session.created_at column not existing). Next session's first task: schema-vs-code drift audit (Phase 1 live schema inventory, Phase 2 code reference inventory) before any further iOS testing.
 **Last updated:** Conversation of June 2026.
 **Scope:** The core plumbing of the everyday adaptive learning session a user gets after onboarding — session setup, the adaptive interaction loop, cycle open/close, and session close. **Phase 1 is story-only.** Out of scope for now: session UI/visual design, extra buttons, nice-to-haves.
 
@@ -124,13 +124,58 @@ Each chunk is independently testable and ordered by dependency. **Schema changes
 - **R5 — iOS prefix seam.** Until chunk 6, iOS calls `/api/session-adaptive/*` for lifecycle and `/api/session/*` for `submit-answer` etc. Document this for the frontend work.
 - **R6 — user_id type mismatch (medium, latent).** `brain_user.id` is `uuid`; `session.user_id` (and likely session_cycle/session_interaction user_id columns) are `varchar`. UUIDs written as varchar aren't normalized, so casing differences (observed: same UUID stored both upper- and lower-case) can cause silent user-history join misses — a returning user could be mis-detected as brand_new. Audit and normalize before chunk 1c's history-dependent queries rely on user_id joins.
 - **R7 — chunk 1 routing now load-bearing for crash-safety.** Per the Option A decision, the first regular session must route to the seed path. Because we write ONLY session_level at initial close (not session_nbr_cycle etc.), the initial session row still has NULL columns that the early/active calculators would crash on (None * 7 * 100). Fix 1 routing is therefore the sole protection against those crashes — chunk 1b testing must explicitly verify the calculators are never reached for an initial-only user.
-- **R8 — Notion pipeline column mismatches (medium, latent for session 2+).** The G/H/I/J notion pipeline (`notion_management.py` lines 99, 116, 299, 430–432, 447, 451–452) references `notion_name`, `notion_level_from`, `notion_weightiness` — none of which exist on the live `brain_notion` table (correct names: `name_fr`/`name_en`, `level_from`, `weightiness`). The brand_new (is_new_user=True) branch short-circuits before reaching this code, so chunk 1b doesn't hit it. Will surface when a user starts their second regular session (is_new_user=False) and the pipeline runs. Same fix pattern as chunk 1b — column renames.
+- **R8 — Notion pipeline column mismatches (FIXED TODAY).** Five column renames applied in notion_management.py: `bn.notion_weightiness` → `bn.weightiness` (3 occurrences), `bn.notion_name` → `bn.name_fr` (1), `bn.notion_level_from` → `bn.level_from` (1), plus matching Python row[...] readers updated. Discovered via iOS test today. Surfaces in early_user / non-brand_new sessions.
 - **R9 — Cold-code-vs-live-schema drift (general, applies to remaining chunks).** Chunks 1a/1b surfaced ~10 separate code-vs-schema mismatches: missing columns (`created_at` on session), wrong column names in `brain_notion` reads, function signature mismatches, and multiple unhandled NOT NULL constraints (`session_type`, `expected_cycles`, etc.). The pattern: cold code was written against an imagined schema looser than what's deployed. Expect similar density in chunks 1c–5. Tactic established: when a function accumulates many small fixes (≥3), surgical rewrite using the live schema is faster than continued patching.
 - **R10 — iOS central button currently triggers a subtopic/interaction picker panel, not a regular session.** Migration needed once chunk 1 is complete: central button should call adaptive `start-session`. The picker panel should be preserved (it's useful for content-specific testing) but relocated, e.g. to a developer/debug area. Constraint on chunk 6: if/when CRUD lifecycle endpoints are retired, verify the picker panel's CRUD endpoint calls (which already exist) still resolve, or migrate them too.
 - **R15 — Decimal × float arithmetic drift (general).** Postgres `numeric` columns return as Python `Decimal` via asyncpg; multiplying by a Python `float` raises `TypeError`. Surfaced in chunk 3 at `cycle_calculations.py:150` (`cycle_boredom * coefficient`) — fixed with `float()` conversion at the use site. Latent risk anywhere code does arithmetic on a value pulled from a numeric column without converting at the read site. Future hardening: standardize on `float()` conversion at all `fetchrow`/`fetchval` reads of numeric columns, rather than at use sites.
 - **R16 — Cycle-goal rotation is a placeholder for session_rank ≥ 2.** The current `calculate_cycle_goal` falls through to a hardcoded `{1: story, 2: notion, 3: story, ...}` rotation for sessions beyond the first. Per ramp-up doc §6, the real algorithm involves cycle-boredom bands, the last cycle's goal, and three goal-usage scores over a 7-day window — none of which are implemented yet. Affects session_rank ≥ 2 only; safe for the current scope.
 - **R17 — Half B's cycle-completion + next-cycle-open is not atomic.**
 - **R18 — Casing inconsistency for session_mood strings.** brain_session_mood.name stores capitalized strings ("Effective", "Cultural", etc.). helpers.py:get_mood_types uses lowercase keys and calls .lower() on the input, papering over the mismatch. StartSessionRequest.session_mood is unvalidated str. The system currently works because iOS will pass whatever it received from the mood-recommendation endpoint (capitalized) and helpers lowercases it. Deferred consistency pass should pick a canonical casing across DB, helpers, and request validation. Until then, treat capitalized strings (matching brain_session_mood.name) as the canonical wire format for session_mood. The richer `complete_cycle` commits cycle-N's state, then the auto-open of cycle-(N+1) runs as a separate sequence. If the auto-open fails (e.g., `InsufficientInteractionsError`, or another bug surfacing), cycle-N stays committed but cycle-(N+1) is not created — iOS sees a 500 with no recovery path. Recovery today is a manual `start-cycle` call. Production hardening should either wrap Half B in a single transaction or build an idempotent "session is mid-progress, last cycle done, open the next if not done" recovery in `start-cycle`.
+### R19 — Schema-vs-code drift audit (OPEN, in progress)
+Two sources of truth only: live Postgres (Render) and raw-SQL column references in
+backend Python. No migrations layer exists (see R21), so there is no third reference.
+Trigger: early_user / returning_user session-adaptive paths crash on drifted columns
+that the brand_new path short-circuits past. Confirmed drift so far: R15 (Decimal×float),
+R8 (notion_management column renames, fixed today), R20 (session.created_at).
+Method: Phase 1 = information_schema column inventory of public schema; Phase 2 = grep
+asyncpg SQL literals + dynamic-query pass, cross-reference against Phase 1. Audit is
+read-only; fixes applied as one coordinated batch afterward, not bug-by-bug.
+
+### R20 — session.created_at: nonexistent column (OPEN, fix pending Phase 1)
+Symptom: POST /api/session-adaptive/start-session →
+"column \"created_at\" of relation \"session\" does not exist".
+Code writes session.created_at on session insert; live `session` table has no such column.
+Correct column TBD by Phase 1 (candidates: started_at / created_time / inserted_at / none).
+Fix folded into the R19 coordinated batch, not patched standalone.
+
+### R21 — No migrations source of truth (OPEN, post-fix hardening)
+Live DB is hand-migrated via TablePlus throughout project history; repo has no Alembic,
+schema.sql, or CREATE TABLE files. Consequence: no audit trail of column add/rename/remove,
+which is the mechanism by which R8/R15/R20-class drift accumulates invisibly. Proposed
+remedy: adopt Alembic, or at minimum maintain a checked-in schema.sql regenerated after each
+TablePlus change. Out of scope for the immediate audit; addresses the root cause R19 only
+patches the symptoms of.
+
+### R22 — early/returning/active session INSERTs omit NOT NULL columns (OPEN, fix with R20)
+session_init.py INSERTs in initialize_early_user (L271), initialize_returning_user (L397),
+and initialize_active_user (L545) omit session_type, expected_cycles, expected_total_score —
+all NOT NULL with no default on live `session`. Masked by the R20 created_at parse error,
+which fires first. brand_new (L105) is the correct template; the other three are stale,
+predating the columns being made NOT NULL (consequence of R21 — no migration trail).
+Fix: align all three to the brand_new column set. Surgical rewrite, not patch (Decision 5).
+Fold in (R15 family): early path passes raw Decimal streak7/streak30 into
+calculate_mood_recommendation (L239) and calculate_modulo (L244); active wraps them in
+float() (L512/517). Align early to active while rewriting.
+
+### R23 — session cycle-count stored redundantly across 4 columns (OPEN, refactor post-audit)
+`session` encodes one fact (cycle count) in session_type, session_nbr_cycle, expected_cycles,
+and expected_total_score (= count × 700). session_type is a label for the count, consumed only
+via get_cycle_count(); no behavioral reads confirmed yet (pending grep). Denormalization is the
+root cause of R22 (INSERTs must keep 4 columns in sync; 3 fell out of sync).
+Proposed end state: keep cycle count as the single source, derive the rest or drop the extras.
+Blocked on: (a) grep confirming zero behavioral reads of session_type; (b) verifying whether
+check_session_type_cycles constraint is live (Phase 1 pulled columns only). Risky drop under R21
+(no migration trail) — do as its own chunk, not folded into the R20/R22 unblock.
 
 ### Reliability & cost notes
 - Per-cycle search (Decision 2) keeps heavy DB work to ~3 searches/session, not ~21.

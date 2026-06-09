@@ -444,7 +444,7 @@ async def get_session_status(session_id: str):
                         top_session_mood, top_session_mood_rate,
                         mood_recommendation, completed_cycles,
                         session_score, is_returning_user,
-                        created_at, completed_at
+                        started_at AS created_at, completed_at
                     FROM session
                     WHERE id = $1
                 """, session_id)

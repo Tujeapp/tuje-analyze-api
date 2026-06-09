@@ -262,25 +262,30 @@ async def initialize_early_user(
     
     # Load full context
     context = await SessionContext.load(user_id, db_pool)
-    
+
     # Generate session
     session_id = generate_id("SESSION")
     session_rank = user_history.total_sessions + 1
-    
+
     # M. Save to database
     await db_pool.execute("""
         INSERT INTO session (
             id, user_id, session_rank, status, session_level,
             session_level_direction, session_nbr_cycle, session_mood,
+            session_type, expected_cycles, expected_total_score,
             streak7, streak30, session_boredom, modulo,
             top_session_mood, top_session_mood_rate,
-            mood_recommendation, created_at
+            mood_recommendation,
+            started_at, last_activity_at
         ) VALUES (
             $1, $2, $3, 'active', $4, 'stable', $5, $6,
-            $7, $8, $9, $10, $11, $12, $13, NOW()
+            $7, $8, $9,
+            $10, $11, $12, $13, $14, $15, $16,
+            NOW(), NOW()
         )
     """, session_id, user_id, session_rank, user_level,
         get_cycle_count(session_type), session_mood,
+        session_type, get_cycle_count(session_type), get_cycle_count(session_type) * 700,
         streak7, streak30, session_boredom, modulo,
         top_mood, top_mood_rate, mood_recommendation)
     
@@ -398,15 +403,21 @@ async def initialize_returning_user(
         INSERT INTO session (
             id, user_id, session_rank, status, session_level,
             session_level_direction, session_nbr_cycle, session_mood,
+            session_type, expected_cycles, expected_total_score,
             streak7, streak30, session_boredom, modulo,
             top_session_mood, top_session_mood_rate,
-            mood_recommendation, is_returning_user, created_at
+            mood_recommendation, is_returning_user,
+            started_at, last_activity_at
         ) VALUES (
             $1, $2, $3, 'active', $4, 'down', $5, $6,
-            0, 0, 0.1, $7, $8, $9, $10, true, NOW()
+            $7, $8, $9,
+            0, 0, 0.1, $10, $11, $12, $13, true,
+            NOW(), NOW()
         )
     """, session_id, user_id, session_rank, user_level,
-        get_cycle_count(session_type), session_mood, modulo,
+        get_cycle_count(session_type), session_mood,
+        session_type, get_cycle_count(session_type), get_cycle_count(session_type) * 700,
+        modulo,
         top_mood, top_mood_rate, mood_recommendation)
     
     return {
@@ -536,25 +547,30 @@ async def initialize_active_user(
     
     # Load full session context
     context = await SessionContext.load(user_id, db_pool)
-    
+
     # Generate session
     session_id = generate_id("SESSION")
     session_rank = user_history.total_sessions + 1
-    
+
     # M. Save to database
     await db_pool.execute("""
         INSERT INTO session (
             id, user_id, session_rank, status, session_level,
             session_level_direction, session_nbr_cycle, session_mood,
+            session_type, expected_cycles, expected_total_score,
             streak7, streak30, session_boredom, modulo,
             top_session_mood, top_session_mood_rate,
-            mood_recommendation, created_at
+            mood_recommendation,
+            started_at, last_activity_at
         ) VALUES (
             $1, $2, $3, 'active', $4, 'stable', $5, $6,
-            $7, $8, $9, $10, $11, $12, $13, NOW()
+            $7, $8, $9,
+            $10, $11, $12, $13, $14, $15, $16,
+            NOW(), NOW()
         )
     """, session_id, user_id, session_rank, user_level,
         get_cycle_count(session_type), session_mood,
+        session_type, get_cycle_count(session_type), get_cycle_count(session_type) * 700,
         streak7, streak30, session_boredom, modulo,
         top_mood, top_mood_rate, mood_recommendation)
     
