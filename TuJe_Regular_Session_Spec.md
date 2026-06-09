@@ -127,7 +127,7 @@ Each chunk is independently testable and ordered by dependency. **Schema changes
 - **R8 — Notion pipeline column mismatches (FIXED TODAY).** Five column renames applied in notion_management.py: `bn.notion_weightiness` → `bn.weightiness` (3 occurrences), `bn.notion_name` → `bn.name_fr` (1), `bn.notion_level_from` → `bn.level_from` (1), plus matching Python row[...] readers updated. Discovered via iOS test today. Surfaces in early_user / non-brand_new sessions.
 - **R9 — Cold-code-vs-live-schema drift (general, applies to remaining chunks).** Chunks 1a/1b surfaced ~10 separate code-vs-schema mismatches: missing columns (`created_at` on session), wrong column names in `brain_notion` reads, function signature mismatches, and multiple unhandled NOT NULL constraints (`session_type`, `expected_cycles`, etc.). The pattern: cold code was written against an imagined schema looser than what's deployed. Expect similar density in chunks 1c–5. Tactic established: when a function accumulates many small fixes (≥3), surgical rewrite using the live schema is faster than continued patching.
 - **R10 — iOS central button currently triggers a subtopic/interaction picker panel, not a regular session.** Migration needed once chunk 1 is complete: central button should call adaptive `start-session`. The picker panel should be preserved (it's useful for content-specific testing) but relocated, e.g. to a developer/debug area. Constraint on chunk 6: if/when CRUD lifecycle endpoints are retired, verify the picker panel's CRUD endpoint calls (which already exist) still resolve, or migrate them too.
-- **R15 — Decimal × float arithmetic drift (general).** Postgres `numeric` columns return as Python `Decimal` via asyncpg; multiplying by a Python `float` raises `TypeError`. Surfaced in chunk 3 at `cycle_calculations.py:150` (`cycle_boredom * coefficient`) — fixed with `float()` conversion at the use site. Latent risk anywhere code does arithmetic on a value pulled from a numeric column without converting at the read site. Future hardening: standardize on `float()` conversion at all `fetchrow`/`fetchval` reads of numeric columns, rather than at use sites.
+- **R15 — Decimal × float arithmetic drift (general).** Postgres `numeric` columns return as Python `Decimal` via asyncpg; multiplying by a Python `float` raises `TypeError`. Surfaced in chunk 3 at `cycle_calculations.py:150` (`cycle_boredom * coefficient`) — fixed with `float()` conversion at the use site. Latent risk anywhere code does arithmetic on a value pulled from a numeric column without converting at the read site. Future hardening: standardize on `float()` conversion at all `fetchrow`/`fetchval` reads of numeric columns, rather than at use sites. Early-path float() on streak7/streak30 folded into commit 6a8afb9.
 - **R16 — Cycle-goal rotation is a placeholder for session_rank ≥ 2.** The current `calculate_cycle_goal` falls through to a hardcoded `{1: story, 2: notion, 3: story, ...}` rotation for sessions beyond the first. Per ramp-up doc §6, the real algorithm involves cycle-boredom bands, the last cycle's goal, and three goal-usage scores over a 7-day window — none of which are implemented yet. Affects session_rank ≥ 2 only; safe for the current scope.
 - **R17 — Half B's cycle-completion + next-cycle-open is not atomic.**
 - **R18 — Casing inconsistency for session_mood strings.** brain_session_mood.name stores capitalized strings ("Effective", "Cultural", etc.). helpers.py:get_mood_types uses lowercase keys and calls .lower() on the input, papering over the mismatch. StartSessionRequest.session_mood is unvalidated str. The system currently works because iOS will pass whatever it received from the mood-recommendation endpoint (capitalized) and helpers lowercases it. Deferred consistency pass should pick a canonical casing across DB, helpers, and request validation. Until then, treat capitalized strings (matching brain_session_mood.name) as the canonical wire format for session_mood. The richer `complete_cycle` commits cycle-N's state, then the auto-open of cycle-(N+1) runs as a separate sequence. If the auto-open fails (e.g., `InsufficientInteractionsError`, or another bug surfacing), cycle-N stays committed but cycle-(N+1) is not created — iOS sees a 500 with no recovery path. Recovery today is a manual `start-cycle` call. Production hardening should either wrap Half B in a single transaction or build an idempotent "session is mid-progress, last cycle done, open the next if not done" recovery in `start-cycle`.
@@ -141,12 +141,15 @@ Method: Phase 1 = information_schema column inventory of public schema; Phase 2 
 asyncpg SQL literals + dynamic-query pass, cross-reference against Phase 1. Audit is
 read-only; fixes applied as one coordinated batch afterward, not bug-by-bug.
 
-### R20 — session.created_at: nonexistent column (OPEN, fix pending Phase 1)
+### R20 — session.created_at: nonexistent column (FIXED)
 Symptom: POST /api/session-adaptive/start-session →
 "column \"created_at\" of relation \"session\" does not exist".
 Code writes session.created_at on session insert; live `session` table has no such column.
 Correct column TBD by Phase 1 (candidates: started_at / created_time / inserted_at / none).
 Fix folded into the R19 coordinated batch, not patched standalone.
+FIXED — commit 6a8afb9, deployed Render. created_at dropped from 3 session_init INSERTs;
+get_session_status SELECT aliased started_at AS created_at. Verified early_user via /docs
+(local + Render) and on simulator (decodes clean, advances to start-cycle).
 
 ### R21 — No migrations source of truth (OPEN, post-fix hardening)
 Live DB is hand-migrated via TablePlus throughout project history; repo has no Alembic,
@@ -156,7 +159,7 @@ remedy: adopt Alembic, or at minimum maintain a checked-in schema.sql regenerate
 TablePlus change. Out of scope for the immediate audit; addresses the root cause R19 only
 patches the symptoms of.
 
-### R22 — early/returning/active session INSERTs omit NOT NULL columns (OPEN, fix with R20)
+### R22 — early/returning/active session INSERTs omit NOT NULL columns (FIXED)
 session_init.py INSERTs in initialize_early_user (L271), initialize_returning_user (L397),
 and initialize_active_user (L545) omit session_type, expected_cycles, expected_total_score —
 all NOT NULL with no default on live `session`. Masked by the R20 created_at parse error,
@@ -166,6 +169,10 @@ Fix: align all three to the brand_new column set. Surgical rewrite, not patch (D
 Fold in (R15 family): early path passes raw Decimal streak7/streak30 into
 calculate_mood_recommendation (L239) and calculate_modulo (L244); active wraps them in
 float() (L512/517). Align early to active while rewriting.
+FIXED — commit 6a8afb9, deployed Render. session_type/expected_cycles/expected_total_score
+added to early/returning/active INSERTs; started_at/last_activity_at set explicitly.
+Verified early_user (row values short/3/3/2100). NOTE: returning_user (Edit 2) verified by
+INSPECTION ONLY — no 30+-day-inactive path was executed.
 
 ### R23 — session cycle-count stored redundantly across 4 columns (OPEN, refactor post-audit)
 `session` encodes one fact (cycle count) in session_type, session_nbr_cycle, expected_cycles,
@@ -176,6 +183,68 @@ Proposed end state: keep cycle count as the single source, derive the rest or dr
 Blocked on: (a) grep confirming zero behavioral reads of session_type; (b) verifying whether
 check_session_type_cycles constraint is live (Phase 1 pulled columns only). Risky drop under R21
 (no migration trail) — do as its own chunk, not folded into the R20/R22 unblock.
+
+### R24 — Two parallel session-creation/cycle stacks (OPEN — confirmed causing bugs)
+Two coexisting stacks both serve session/cycle flows with separate, hand-maintained
+response models that have drifted:
+  - Adaptive: session_management_router.py (start-session/start-cycle) → session_init.py
+  - CRUD/legacy: routers/session_router.py → session_management/session_service.py (SessionPicker)
+Originally intentional during migration (SessionPicker kept as dev tooling), but the
+duplicate StartCycleResponse definitions drifted and are now demonstrably causing failures:
+  - R26: adaptive StartCycleResponse missing first_brain_interaction_id that CRUD version has.
+  - R28: SessionView opens isAdaptive=false and re-runs the CRUD stack on top of an
+    adaptive launch, creating a second session and bypassing the adaptive engine.
+Decision needed (post-stabilization): consolidate to one stack, or formally retire CRUD.
+Until then, every shared response model must be kept in sync by hand across both — the
+exact mechanism producing R26/R28.
+
+### R25 — Client/server response-contract drift (PARTIALLY FIXED)
+iOS Decodable structs and backend Pydantic response models share no source of truth and
+drifted independently. start-session: Swift StartSessionResponse required session_type/
+expected_cycles the adaptive backend never sent (original simulator blocker) and needed
+rescue_level/always_silent the backend didn't return.
+FIXED for start-session — backend commit 9fa6cbf (response trimmed to {session_id,
+rescue_level, always_silent} via user_behavior fetch-or-create, mirroring
+routers/session_router.py) + iOS commit 5414b7d (StartSessionResponse trimmed to match).
+Simulator-verified: decodes clean, advances to start-cycle.
+OPEN as a class: same root family as R21 (no shared schema). Other endpoints (start-cycle,
+submit-answer) may carry the same drift — audit each when touched. R26 is the first instance.
+
+### R26 — start-cycle: no first interaction (FIXED)
+Simulator: mood → start-session (decodes clean) → start-cycle → app-level error
+"Server returned no first interaction". start-cycle returned first_interaction_id correctly
+in isolated /docs testing, so the failure differs for a real adaptive-created session via the
+app. Two candidate causes, not yet diagnosed:
+  (1) iOS reads firstInteractionId (optional in StartCycleResponse, may be nil) — client guard;
+  (2) backend select_cycle_interactions yields empty ordered_ids for this session — ordered_ids[0]
+      then has no first interaction.
+Cycle-content selection path was audited at table/INSERT level only (cycle_creation.py INSERTs
+structurally sound), NOT at column/logic level. This is the next work item.
+FIXED — commit <TBD, fill after Handoff 2>, deployed Render. Adaptive
+StartCycleResponse + return now include first_brain_interaction_id (from
+cycle_data['ordered_interactions'][0]). Verified via curl (field present) and simulator
+(guard clears, first interaction loads). iOS unchanged — field was already declared/consumed.
+
+### R27 — Orphan active sessions never reaped (OPEN, hygiene/correctness)
+detect_user_state and streak calcs read session WHERE status='active'. No timeout →
+'incomplete' transition is implemented (v1.0 spec specifies 60-min inactivity rule).
+Test user has 9+ active sessions, most with an open cycle, none completed — and R28's
+double-session bug doubles the rate. Pollutes user-state detection and history math.
+Decide: implement timeout-reaper, or enforce one-active-session-per-user at start
+(complete/abandon prior active before creating new). Not blocking; adjacent to R28.
+
+### R28 — SessionView runs CRUD stack despite adaptive launch (OPEN — blocks true adaptive flow)
+Simulator: adaptive mood flow succeeds (start-session + start-cycle return correct adaptive
+session + first_brain_interaction_id), MainTabView presents SessionView — but SessionView
+opens with isAdaptive=false and re-runs the legacy CRUD path (/api/session/create-session,
+/session/start-cycle, /session/start-interaction), creating a SECOND different session
+(SESSION_71A9… vs adaptive …7F0A). The interaction that plays is CRUD-driven, not adaptive.
+Also: SessionView init/onAppear fires TWICE (doubled create-session, SESSION INIT, onAppear).
+Root: R24 two-stack coexistence — MainTabView passes adaptive ids but isAdaptive defaults
+false, so SessionView falls back to CRUD startup. Fix is iOS view-layer wiring, not backend.
+Consequence: adaptive engine bypassed end-to-end; doubles orphan sessions (R27).
+NEXT WORK ITEM. Reads needed: MainTabView SessionView construction; SessionView init +
+onAppear; isAdaptive flag plumbing.
 
 ### Reliability & cost notes
 - Per-cycle search (Decision 2) keeps heavy DB work to ~3 searches/session, not ~21.
