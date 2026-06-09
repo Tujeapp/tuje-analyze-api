@@ -96,11 +96,11 @@ async def update_notion_rates_on_session_start(
                 sn.notion_introduction_date,
                 sn.notion_passive_rate,
                 sn.notion_active_rate,
-                bn.notion_weightiness
+                bn.weightiness
             FROM session_notion sn
             JOIN brain_notion bn ON sn.notion_id = bn.id
-            WHERE sn.user_id = $1 
-            AND sn.notion_rate > 0 
+            WHERE sn.user_id = $1
+            AND sn.notion_rate > 0
             AND sn.notion_rate < 1
         """, user_id)
         
@@ -113,7 +113,7 @@ async def update_notion_rates_on_session_start(
                 notion_introduction_date=notion['notion_introduction_date'],
                 notion_passive_rate=float(notion['notion_passive_rate'] or 0),
                 notion_active_rate=float(notion['notion_active_rate'] or 0),
-                notion_weightiness=float(notion['notion_weightiness'] or 0.5),
+                notion_weightiness=float(notion['weightiness'] or 0.5),
                 current_time=now
             )
             
@@ -296,7 +296,7 @@ async def calculate_notion_priority_rates(
         result = await conn.execute("""
             UPDATE session_notion sn
             SET notion_priority_rate = ROUND(
-                ((1 - sn.notion_rate) * COALESCE(bn.notion_weightiness, 0.5))::numeric, 
+                ((1 - sn.notion_rate) * COALESCE(bn.weightiness, 0.5))::numeric,
                 2
             ),
             updated_at = NOW()
@@ -427,9 +427,9 @@ async def get_top_notions_list(
                 sn.notion_rate,
                 sn.notion_priority_rate,
                 sn.notion_complexity_rate,
-                bn.notion_name,
-                bn.notion_level_from,
-                bn.notion_weightiness
+                bn.name_fr,
+                bn.level_from,
+                bn.weightiness
             FROM session_notion sn
             JOIN brain_notion bn ON sn.notion_id = bn.id
             WHERE sn.user_id = $1
@@ -444,12 +444,12 @@ async def get_top_notions_list(
         notions = [
             {
                 "notion_id": row['notion_id'],
-                "notion_name": row['notion_name'],
+                "notion_name": row['name_fr'],
                 "notion_rate": float(row['notion_rate']),
                 "priority_rate": float(row['notion_priority_rate'] or 0),
                 "complexity_rate": float(row['notion_complexity_rate'] or 0),
-                "level_from": row['notion_level_from'],
-                "weightiness": float(row['notion_weightiness'] or 0.5)
+                "level_from": row['level_from'],
+                "weightiness": float(row['weightiness'] or 0.5)
             }
             for row in rows
         ]
