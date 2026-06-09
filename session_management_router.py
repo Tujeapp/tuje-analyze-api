@@ -104,6 +104,7 @@ class StartCycleResponse(BaseModel):
     cycle_id: str
     subtopic_id: str
     first_interaction_id: str
+    first_brain_interaction_id: str
     total_interactions: int
     cycle_level: int
     cycle_boredom: float
@@ -471,6 +472,7 @@ async def start_cycle_endpoint(request: StartCycleRequest):
                 cycle_id=cycle_data['cycle_id'],
                 subtopic_id=cycle_data['subtopic_id'],
                 first_interaction_id=cycle_data['first_interaction_id'],
+                first_brain_interaction_id=cycle_data['ordered_interactions'][0],
                 total_interactions=len(cycle_data.get('ordered_interactions', [])),
                 cycle_level=cycle_level,
                 cycle_boredom=cycle_boredom,
