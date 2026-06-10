@@ -233,7 +233,7 @@ double-session bug doubles the rate. Pollutes user-state detection and history m
 Decide: implement timeout-reaper, or enforce one-active-session-per-user at start
 (complete/abandon prior active before creating new). Not blocking; adjacent to R28.
 
-### R28 — SessionView runs CRUD stack despite adaptive launch (OPEN — blocks true adaptive flow)
+### R28 — SessionView runs CRUD stack despite adaptive launch (FIXED)
 Simulator: adaptive mood flow succeeds (start-session + start-cycle return correct adaptive
 session + first_brain_interaction_id), MainTabView presents SessionView — but SessionView
 opens with isAdaptive=false and re-runs the legacy CRUD path (/api/session/create-session,
@@ -243,8 +243,72 @@ Also: SessionView init/onAppear fires TWICE (doubled create-session, SESSION INI
 Root: R24 two-stack coexistence — MainTabView passes adaptive ids but isAdaptive defaults
 false, so SessionView falls back to CRUD startup. Fix is iOS view-layer wiring, not backend.
 Consequence: adaptive engine bypassed end-to-end; doubles orphan sessions (R27).
-NEXT WORK ITEM. Reads needed: MainTabView SessionView construction; SessionView init +
-onAppear; isAdaptive flag plumbing.
+FIXED — iOS commit 081afd1. MainTabView now passes the full adaptive param set to
+SessionView (isAdaptive: true + adaptiveSessionId/CycleId/FirstInteractionId/
+FirstBrainInteractionId/SessionMood); SessionView.onAppear gained a hasStarted re-entry
+guard. Simulator-verified: isAdaptive true, zero CRUD calls (create-session/start-cycle
+silent), single startup, adaptive first interaction video + answers load. Adaptive engine
+now drives the session end-to-end THROUGH THE FIRST INTERACTION. R24 two-stack root remains
+(CRUD stack still exists for SessionPicker dev path) — not consolidated, just no longer
+bypassing adaptive.
+
+### R29 — /answers-by-interaction URL shape inconsistency (OPEN, low priority)
+Answers call uses path /answers-by-interaction (no /api/ prefix, not under
+session-adaptive/ namespace) — works, but inconsistent URL shape vs all other endpoints.
+Verify intentional when touching the answer path; may need alignment if API gateway or
+prefix routing is ever enforced.
+
+### R30 — Cycle/session boundary handling (Piece 1 FIXED / Piece 2 OPEN)
+Full-session simulator test exposed the cycle boundary stub. Split into two pieces:
+
+PIECE 1 — FIXED (iOS commit <fill hash>). advanceAdaptive's cycleComplete branch
+dismissed SessionView instead of advancing. Now unwraps lastNextCycle (backend
+auto-opens the next cycle and returns its first interaction in the submit-answer
+response), sets cycleId/sessionInteractionId/currentInteractionId, resets
+interactionsCompletedInCycle, and loads the next cycle's first interaction. Session
+complete still dismisses to HomeView (correct). Simulator-verified end-to-end: full
+session = 3 cycles x 7 interactions, both boundaries advance, completes to HomeView.
+
+PIECE 2 — OPEN (design + build). The intended UX has a feedback/summary screen between
+cycles ("quick feedback appears, next cycle loads behind it, user continues") and a
+complete-feedback screen at session end before returning to HomeView. Currently cycles
+advance directly with no feedback screen (functional but abrupt). Data exists
+(CycleSummary/SessionSummary structs decoded into lastCycleSummary/lastSessionSummary;
+onFeedbackContinue() already routes to advanceAdaptive for adaptive mode) but no
+adaptive cycle-feedback VIEW is built. This is the next work item — design-heavy
+(what the feedback screen shows/feels like), not a patch.
+
+### R31 — Adaptive interaction selection (RE-CHARACTERIZED — mostly BUILT, not random)
+CORRECTION: R31 was previously logged as "selection is placeholder/random — core engine
+stub." That was WRONG, based on an iOS debug log string ("selection_method: random"). Verified
+by code read this session: the selection pipeline IS built and spec-faithful for story goal:
+  - search (interaction_search.py): filters subtopic+interaction by level window, boredom,
+    mood-type match, seen/new split, >=7-qualifying-subtopic — matches spec Parts 1-3.
+  - combination tagging (session_context.get_combination): computes seen/new for
+    subtopic+transcription+intent and maps to combinations 1-5 per Definitions — built, correct.
+    seen-sets loaded from real history in SessionContext.load.
+  - ordering (interaction_selection.py): entry-point-first for story, then combination-proximity
+    next — matches spec Parts 4-6.
+  - find_best_subtopic_with_fallback adds a 4-phase relaxation (new->seen->reduce boredom->
+    reduce level) to guarantee >=7 — beyond spec, a robustness layer.
+The "random" FEEL in testing = cold-start: a sparse-history user on thin content makes most
+candidates resolve to the same combination, so the sort has nothing to differentiate and
+selection collapses to query order. Expected behavior, NOT a code defect; resolves as real
+history + a fuller content library accrue.
+
+GENUINELY OPEN (deliberately deferred, decision-gated — these are the real R31):
+  (a) Notion-mastery filter (notion_rate >= 0.8 join) is coded-around and DISABLED, gated to
+      session_rank >= 2 (R11). Re-enabling is a product decision, not a bug.
+  (b) Notion-goal selection branch — buildable (spec complete), not yet implemented.
+  (c) Intent-goal selection branch — BLOCKED on design: spec says "list of intents not set yet"
+      / "needs brainstorm." This is Remi's design work, not implementation.
+  (d) cycle_manager/cycle_calculations.py (cycle level/boredom/goal) is the SIMPLIFIED
+      placeholder, not the full spec algorithm. Separate from selection; also open.
+Note: first regular session forces all cycles to story (session_rank=1), so story-goal
+selection alone covers the entire first-session experience; (b)/(c) only matter from rank 2.
+
+Testing: see TESTING_TOOLS.md (5 SQL tools + planned selection-trace script) for how to
+exercise selection against real content with a controlled user.
 
 ### Reliability & cost notes
 - Per-cycle search (Decision 2) keeps heavy DB work to ~3 searches/session, not ~21.
