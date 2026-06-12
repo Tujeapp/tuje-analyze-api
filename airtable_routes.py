@@ -257,7 +257,7 @@ from typing import List, Optional
 class InteractionEntry(BaseEntry):
     transcriptionFr: str
     transcriptionEn: str
-    intents: List[str]
+    intents: Optional[List[str]] = None
     subtopicId: Optional[str] = None
     expectedEntitiesIds: Optional[List[str]] = None
     expectedVocabIds: Optional[List[str]] = None
@@ -268,7 +268,6 @@ class InteractionEntry(BaseEntry):
     interactionOptimumLevel: Optional[int] = None
     boredom: Optional[float] = None
     videoUrl: Optional[str] = None
-    videoUrl: Optional[str] = None
     videoPosterUrl: Optional[str] = None
     speak: Optional[bool] = False
     selectionMode: Optional[str] = "single"
@@ -278,12 +277,6 @@ class InteractionEntry(BaseEntry):
         if not v or len(v.strip()) == 0:
             raise ValueError('Transcription fields cannot be empty')
         return v.strip()
-    
-    @validator('intents')
-    def validate_intents(cls, v):
-        if not v or len(v) == 0:
-            raise ValueError('At least one intent is required')
-        return v
     
     @validator('boredom')
     def validate_boredom(cls, v):
@@ -307,8 +300,8 @@ class InteractionEntry(BaseEntry):
             return v_int  # Return as integer
         return v
     
-    @validator('hintIds', 'expectedEntitiesIds', 'expectedVocabIds', 
-               'expectedNotionIds', 'interactionVocabIds')
+    @validator('hintIds', 'expectedEntitiesIds', 'expectedVocabIds',
+               'expectedNotionIds', 'interactionVocabIds', 'intents')
     def validate_optional_arrays(cls, v):
         # Allow None or empty arrays
         if v is None:
