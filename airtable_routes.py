@@ -550,7 +550,12 @@ SYNC_CONFIGS = {
             "interaction_optimum_level", "boredom",
             "airtable_record_id", "last_modified_time_ref",
             "created_at", "update_at", "live", "video_url", "video_poster_url", "speak", "selection_mode"
-        ]
+        ],
+        # Per-lifecycle sync timestamp behavior: write the server time at sync
+        # completion to LastContentSyncedAt, instead of the default
+        # LastModifiedSaved with the incoming payload timestamp.
+        "timestamp_field": "LastContentSyncedAt",
+        "use_now_timestamp": True
     },
     "vocab": {
         "table_name": "brain_vocab",
@@ -834,12 +839,13 @@ async def sync_entity_to_database(entry_data: Dict, config: Dict) -> None:
                            f"interaction_vocab_id={entry_data.get('interaction_vocab_id')}")
 
 # Background task for Airtable updates
-async def background_airtable_update(record_id: str, timestamp: int, table_name: str):
+async def background_airtable_update(record_id: str, timestamp: int, table_name: str,
+                                     timestamp_field: str = "LastModifiedSaved"):
     """Background task to update Airtable without blocking the response"""
     try:
         await update_airtable_status(
             record_id=record_id,
-            fields={"LastModifiedSaved": timestamp},
+            fields={timestamp_field: timestamp},
             table_name=table_name
         )
     except Exception as e:
@@ -860,11 +866,18 @@ async def generic_sync_webhook(entry: BaseEntry, entity_type: str, background_ta
         await sync_entity_to_database(entry_data, config)
         
         # Queue background Airtable update
+        timestamp_field = config.get("timestamp_field", "LastModifiedSaved")
+        if config.get("use_now_timestamp", False):
+            sync_timestamp = int(time.time() * 1000)
+        else:
+            sync_timestamp = entry.lastModifiedTimeRef
+
         background_tasks.add_task(
             background_airtable_update,
             entry.airtableRecordId,
-            entry.lastModifiedTimeRef,
-            config["airtable_table"]
+            sync_timestamp,
+            config["airtable_table"],
+            timestamp_field
         )
         
         elapsed = time.time() - start_time
