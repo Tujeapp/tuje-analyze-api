@@ -310,6 +310,76 @@ selection alone covers the entire first-session experience; (b)/(c) only matter 
 Testing: see TESTING_TOOLS.md (5 SQL tools + planned selection-trace script) for how to
 exercise selection against real content with a controlled user.
 
+### R32 — Combination "transcription" axis keys on interaction_id, not transcription (OPEN — core selection correctness)
+DESIGN INTENT (confirmed by Rémi): the combination system's middle axis tracks whether the
+user has seen the actual SPOKEN WORDS before — transcription_fr — NOT the interaction id. The
+same transcription (e.g. "comment ça va?") deliberately exists as multiple distinct
+interactions across different subtopics (same words, different video/setting). So a user can
+have "seen" a transcription in subtopic A while subtopic B (same transcription) is still "new"
+— the language-TRANSFER case central to TuJe's pedagogy (same language, new situation).
+
+BUG: get_combination (session_context.py) uses
+  transcription_status = "seen" if interaction_id in self.seen_interaction_ids else "new"
+keying on interaction_id; SessionContext.load fills seen_interaction_ids from
+si.brain_interaction_id. So two same-transcription interactions are treated as DIFFERENT on
+this axis — opposite of design.
+
+CONSEQUENCE: combinations depending on "same words, different interaction" cannot fire as
+designed. Combination 4 (new subtopic / seen transcription / seen intent) is effectively
+UNREACHABLE under current code (can't have a seen interaction_id without seeing its subtopic;
+but you CAN have a seen transcription without seeing the subtopic). Combination 2 also
+affected. Combinations 1, 3, 5 unaffected and testable as-is.
+
+FIX (scoped, deferred — own focused pass):
+  - Add SessionContext.seen_transcriptions: Set[str] = recent transcription_fr strings the
+    user encountered (4-day window, mirroring current interaction window). Loaded by joining
+    session_interaction -> brain_interaction, collecting transcription_fr.
+  - get_combination transcription_status must check candidate's transcription_fr against
+    seen_transcriptions, NOT interaction_id against seen_interaction_ids.
+  - "Same transcription" = EXACT transcription_fr string match (Rémi's decision: no
+    normalization, grouping, or punctuation-insensitivity).
+  - Verify whether seen_interaction_ids is still needed elsewhere (e.g. recent-repeat
+    avoidance) before removing.
+
+TESTING IMPACT: combinations 2 & 4 cannot be validated against current code regardless of
+content volume (code/design mismatch, not content gap). Validate 1/3/5 now; 2/4 after fix.
+CONTENT NOTE: deliberate transcription reuse across subtopics is what makes combinations 2 & 4
+reachable/testable post-fix — worth tracking which transcriptions repeat where.
+
+### R33 — user_id stored case-sensitively with inconsistent case (OPEN — data integrity, silently breaks seen/new)
+SYMPTOM (caught live this session): a session played in-app was stored with user_id
+"D08BC99B-..." (UPPERCASE), while older sessions are "d08bc99b-..." (lowercase). Querying by
+lowercase returned nothing; the row only appeared with uppercase or LOWER(). Source: the JWT
+payload / request URLs carried the uppercase form (start-cycle URL showed user_id=D08BC99B-...),
+so that session was written uppercase.
+
+WHY IT MATTERS: every user-scoped query uses exact match (WHERE user_id = $1). If the app
+sends a different case than what's stored, the query silently returns empty/partial results.
+Critically, SessionContext.load (seen_subtopics/interactions/intents) filters WHERE
+s.user_id = $1 — so case mismatch makes seen/new history come back EMPTY even when the user
+has real recent sessions. This produces a FALSE cold-start: selection looks random/un-adaptive
+not because of thin content but because the history query missed the rows. Confirmed live:
+test_selection.py with lowercase id showed empty seen-sets + all combination 5; same harness
+with uppercase id showed full seen-sets + correct combination 1, same content.
+
+ROOT CAUSE: user_id column is text/varchar (confirm exact type — see Step 1), so case is
+significant. (Extends R6, which first noted user_id is varchar and the same case observation; R33
+adds live confirmation and the seen/new-history impact.) A real Postgres uuid type would normalize and compare case-insensitively.
+
+FIX OPTIONS (decide later, own pass):
+  (a) Normalize at the boundary — lowercase (or upcase) user_id everywhere it's written AND
+      read (auth token issuance, all INSERTs, all WHERE user_id clauses). Lower-risk, no
+      migration, but must be applied consistently or the bug persists.
+  (b) Migrate the column (and all user-id columns across tables) to real uuid type — proper
+      fix, normalizes automatically, but a schema migration on live data (and brain_user etc.
+      must agree).
+  Also: existing rows have mixed case — a one-time data cleanup (normalize stored values) is
+  needed regardless of (a) or (b).
+
+IMMEDIATE WORKAROUND for testing: match the case the session was stored under, or query with
+LOWER(user_id) = lower(:id). test_selection.py / SessionContext.load use exact match, so set
+the harness USER_ID to the stored case until fixed.
+
 ### Reliability & cost notes
 - Per-cycle search (Decision 2) keeps heavy DB work to ~3 searches/session, not ~21.
 - Whisper/GPT cost is unchanged by this work: scoring already runs on `submit-answer`; the adaptive "next pick" piggybacks on a round-trip we already make.

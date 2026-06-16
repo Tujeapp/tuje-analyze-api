@@ -35,7 +35,7 @@ from cycle_manager.interaction_selection import select_cycle_interactions
 # ============================================================================
 # CONFIG — edit these, then re-run
 # ============================================================================
-USER_ID = "d08bc99b-0996-4e2b-b4fb-80cf9e0b33dc"
+USER_ID = "D08BC99B-0996-4E2B-B4FB-80CF9E0B33DC"
 CYCLE_BOREDOM = 0.30          # 0.0 - 1.0
 CYCLE_LEVEL = 0               # 0 - 400, step 50
 INTERACTION_USER_LEVEL = 0    # level the search filters around (usually == CYCLE_LEVEL for cycle 1)
