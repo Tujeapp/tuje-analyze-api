@@ -405,6 +405,34 @@ IMMEDIATE WORKAROUND for testing: match the case the session was stored under, o
 LOWER(user_id) = lower(:id). test_selection.py / SessionContext.load use exact match, so set
 the harness USER_ID to the stored case until fixed.
 
+### R35 — Engine content-starvation root-caused & resolved: NULL level_from (subtopic + interaction)
+INVESTIGATION (2026-06-17, via diagnose_search.py): the engine appeared to "recycle" the same
+~7 interactions from 2 subtopics across sessions, looking non-adaptive. Root cause was NOT the
+selection logic — it was NULL level_from data:
+  - brain_subtopic.level_from was NULL on 6 of 8 subtopics → the subtopic filter
+    (s.level_from >= window_min) silently excluded them. FIXED via subtopic sync (level_from
+    added to the sync, 4-touch).
+  - brain_interaction.level_from was NULL on the interactions in those subtopics → even once
+    subtopics passed, their interactions failed the i.level_from BETWEEN window filter →
+    0 qualifying → subtopic never won. FIXED: Airtable now syncs interaction level_from
+    end-to-end (verified), plus a one-time TablePlus backfill for existing rows.
+RESULT: engine now sees all 8 subtopics, filters correctly, and selects NEW (unseen) subtopics
+— adaptive behavior confirmed. The "recycling" was a data-pipeline gap wearing an
+adaptiveness-bug costume.
+
+REMAINING (tuning, not bugs):
+  (a) Boredom distribution: only ~4 of 14 interactions per subtopic clear boredom 0.30, so a
+      cycle requesting 0.30 falls back one step to 0.20 to field 7. Decide whether one-step
+      fallback is acceptable or author more high-boredom interactions per subtopic.
+  (b) Tie-breaking: when subtopics tie on qualifying count, the winner is arbitrary (ordering).
+      Open selection-priority question (least-recently-seen? lowest combination?).
+  (c) The boredom→novelty sort-direction question (see test_selection_MANUAL.md) is now finally
+      testable since the engine can see varied content.
+
+TOOL: diagnose_search.py (v2) — read-only decision tracer; prints per-phase, per-subtopic
+qualifying counts with per-condition breakdown (pass_level/pass_boredom/pass_mood) so the
+binding constraint is named. Mirrors interaction_search.py as of 2026-06-17.
+
 ### Reliability & cost notes
 - Per-cycle search (Decision 2) keeps heavy DB work to ~3 searches/session, not ~21.
 - Whisper/GPT cost is unchanged by this work: scoring already runs on `submit-answer`; the adaptive "next pick" piggybacks on a round-trip we already make.
@@ -437,6 +465,20 @@ the harness USER_ID to the stored case until fixed.
 - **Numeric column → float standardization.** Per R15, convert at the read site rather than the use site, across all numeric column reads in the codebase. One coordinated pass, not mid-build.
 - **Full cycle-goal algorithm (§6 of ramp-up doc).** Per R16, the boredom-band + goal-usage-score algorithm. Required when intent-goal cycles are built.
 - **Atomic cycle-boundary in Half B.** Per R17. Lower-priority hardening for production.
+- **Subtopic full modernization (Path A).** Partial Path B applied this session (5 missing fields wired through to Postgres, stale validators fixed, User Goal field type changed to link, lookup fields added). The full modernization remains:
+  * RecordState, IsTest fields on Subtopic
+  * Per-lifecycle sync timestamps: LastContentSyncedAt, LastVideoSyncedAt, LastImageSyncedAt
+  * Per-lifecycle modtime formulas: ContentLastModified, VideoLastModified, ImageLastModified
+  * Three sub-status formulas (ContentStatus rewritten, VideoStatus new, ImageStatus new)
+  * Composite Status formula combining three lifecycles + Live + RecordState + IsTest
+  * Three sync buttons (rename "Sync Data" → "Sync Content"; split combined media button into "Sync Video" and "Sync Image")
+  * Backend SYNC_CONFIGS["subtopic"] per-lifecycle timestamp config (like Interaction's)
+  * Cloudinary endpoint updates to write per-lifecycle timestamps
+  * Cleanup of remaining stale fields: Brainstorm, Look up (User Goal) (no longer needed since User Goal is now a link), possibly ID (from AllMatchedRelatedSubTopic)
+  * Update content status formula to remove Live = BLANK() check
+  This is essentially Subtopic's Stage 1-3 from the recipe, deferred when we chose Path B to unblock the testing milestone.
+- **Per-Pydantic-model audit before applying Stage 5 recipe.** The Subtopic discovery uncovered 2 stale strict validators (validate_text_fields requiring optional descriptions; validate_boredom rejecting None despite Optional declaration) — the same pattern as InteractionEntry's validate_intents. Every other table's Pydantic model likely has at least one stale validator. Bake this into the Stage 5 recipe: the discovery phase must scan validators against type declarations.
+- **Schema-wide NUMERIC → INTEGER cleanup (Stage 5+ task).** An audit on 2026-06-17 found ~15 columns across brain_* tables typed NUMERIC that should be INTEGER: level_from, level_to, level_owned, interaction_optimum_level, answer_optimum_level, rank, priority, score, weightiness, value, timer_seconds, streak30, streak7, entity_priority. Plus ~15 last_modified_time_ref columns that should be BIGINT (lowest priority — NUMERIC works). Process per column: (1) check existing data — `SELECT column WHERE column != FLOOR(column)` to find fractional values; (2) if clean — `ALTER COLUMN ... TYPE INTEGER USING ::INTEGER`; (3) if not clean — investigate the source of fractional values before deciding (might be a different bug). Genuinely fractional fields to LEAVE as NUMERIC: boredom, current_boredom (range 0.0–1.0, intentional decimals). Same drift pattern caused level_from issues on Interaction (2026-06-17) and Subtopic (2026-06-17). Schedule a focused session for the bulk cleanup.
 
 ---
 
