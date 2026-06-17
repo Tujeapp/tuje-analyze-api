@@ -266,6 +266,7 @@ class InteractionEntry(BaseEntry):
     hintIds: Optional[List[str]] = None
     interactionTypeId: Optional[str] = None
     interactionOptimumLevel: Optional[int] = None
+    levelFrom: Optional[int] = None
     boredom: Optional[float] = None
     videoUrl: Optional[str] = None
     videoPosterUrl: Optional[str] = None
@@ -562,7 +563,7 @@ SYNC_CONFIGS = {
             "intents", "expected_entities_id", "expected_vocab_id",
             "expected_notion_id", "interaction_vocab_id",
             "hint_ids", "interaction_type_id",
-            "interaction_optimum_level", "boredom",
+            "interaction_optimum_level", "level_from", "boredom",
             "airtable_record_id", "last_modified_time_ref",
             "created_at", "update_at", "live", "video_url", "video_poster_url", "speak", "selection_mode"
         ],
