@@ -467,21 +467,43 @@ class SubtopicEntry(BaseEntry):
     descriptionEn: Optional[str] = None
     boredom: Optional[float] = None
     videoCoverUrl: Optional[str] = None
-    imageIconUrl: Optional[str] = None 
-    
-    @validator('nameFr', 'nameEn', 'descriptionFr', 'descriptionEn')
-    def validate_text_fields(cls, v):
+    imageIconUrl: Optional[str] = None
+    levelFrom: Optional[int] = None
+    levelTo: Optional[int] = None
+    topics: Optional[List[str]] = None
+    userGoalIds: Optional[List[str]] = None
+    matchedAsVariantIds: Optional[List[str]] = None
+
+    @validator('nameFr', 'nameEn')
+    def validate_required_text_fields(cls, v):
         if not v or len(v.strip()) == 0:
             raise ValueError('Text fields cannot be empty')
         return v.strip()
-    
+
+    @validator('descriptionFr', 'descriptionEn')
+    def validate_optional_text_fields(cls, v):
+        if v is None:
+            return None
+        v = v.strip()
+        return v if v else None
+
     @validator('boredom')
     def validate_boredom(cls, v):
         if v is None:
-            raise ValueError('Boredom cannot be None')
+            return None
         if v < 0.0 or v > 1.0:
             raise ValueError('Boredom must be between 0.0 and 1.0')
         return round(v, 2)
+
+    @validator('topics', 'userGoalIds', 'matchedAsVariantIds')
+    def validate_optional_arrays(cls, v):
+        # Allow None or empty arrays
+        if v is None:
+            return []
+        if not isinstance(v, list):
+            return []
+        # Filter out None/empty values
+        return [str(item).strip() for item in v if item and str(item).strip()]
 
 class InteractionAnswerEntry(BaseEntry):
     interactionId: str
@@ -577,7 +599,8 @@ SYNC_CONFIGS = {
         "airtable_table": "Subtopic",
         "columns": ["id", "name_fr", "name_en", "description_fr", "description_en", "boredom",
                    "video_cover_url", "image_icon_url",
-                   "airtable_record_id", "last_modified_time_ref", 
+                   "level_from", "level_to", "topics", "user_goal_ids", "matched_as_variant_ids",
+                   "airtable_record_id", "last_modified_time_ref",
                    "created_at", "update_at", "live"]
     },
     "interaction_answer": {
@@ -744,7 +767,9 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "videoUrl": "video_url",
         "videoPosterUrl": "video_poster_url",
         "videoCoverUrl": "video_cover_url",
-        "imageIconUrl": "image_icon_url", 
+        "imageIconUrl": "image_icon_url",
+        "userGoalIds": "user_goal_ids",
+        "matchedAsVariantIds": "matched_as_variant_ids",
         "imageUrl": "image_url",
         "answerMode": "answer_mode",
         "interactionId": "interaction_id",
@@ -810,7 +835,7 @@ async def sync_entity_to_database(entry_data: Dict, config: Dict) -> None:
             for col in columns:
                 value = entry_data.get(col)
                 # CHANGE 1: Add 'expected_intent_id' to this list (just add it to the existing list)
-                if col in ['intents', 'expected_entities_id', 'expected_vocab_id', 'expected_notion_id', 'expected_intent_id', 'interaction_vocab_id', 'session_mood_ids', 'subtopic_ids', 'hint_ids'] and isinstance(value, list):
+                if col in ['intents', 'expected_entities_id', 'expected_vocab_id', 'expected_notion_id', 'expected_intent_id', 'interaction_vocab_id', 'session_mood_ids', 'subtopic_ids', 'hint_ids', 'topics', 'user_goal_ids', 'matched_as_variant_ids'] and isinstance(value, list):
                     values.append(value)  # PostgreSQL will handle the array
                 else:
                     values.append(value)
