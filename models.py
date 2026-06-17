@@ -126,6 +126,7 @@ class InteractionCandidate:
     boredom_rate: float
     is_entry_point: bool
     level_from: int
+    transcription_fr: str = ""
     combination: Optional[int] = None
 
 

@@ -17,6 +17,7 @@
 # MIRRORS interaction_search.py AS OF 2026-06-17. If that query changes
 # (level filter, boredom filter, mood/type join, best-subtopic pick, phases),
 # UPDATE THIS FILE to match or it will explain the engine WRONGLY.
+# R32 applied: transcription axis now keys on transcription_fr (not interaction_id).
 #
 # RUN:
 #   cd ~/Desktop/tuje-analyze-api

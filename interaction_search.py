@@ -161,7 +161,8 @@ async def search_interactions(
                 i.boredom,
                 i.entry_point,
                 i.level_from,
-                i.intents
+                i.intents,
+                i.transcription_fr
             FROM brain_interaction i
             JOIN brain_interaction_type bit ON i.interaction_type_id = bit.id
             WHERE i.live = true
@@ -188,7 +189,8 @@ async def search_interactions(
             qi.boredom,
             qi.entry_point,
             qi.level_from,
-            COALESCE(qi.intents, ARRAY[]::varchar[]) AS intent_ids
+            COALESCE(qi.intents, ARRAY[]::varchar[]) AS intent_ids,
+            qi.transcription_fr
         FROM qualifying_interactions qi
         WHERE qi.subtopic_id = (SELECT subtopic_id FROM best_subtopic)
     """
@@ -221,6 +223,7 @@ async def search_interactions(
             boredom_rate=float(row["boredom"]),
             is_entry_point=bool(row["entry_point"]),
             level_from=int(row["level_from"]) if row["level_from"] is not None else 0,
+            transcription_fr=row["transcription_fr"] or "",
         )
         for row in rows
     ]
@@ -228,7 +231,7 @@ async def search_interactions(
     # Calculate combinations
     for candidate in candidates:
         candidate.combination = context.get_combination(
-            candidate.id, candidate.subtopic_id, candidate.intent_ids
+            candidate.id, candidate.subtopic_id, candidate.transcription_fr, candidate.intent_ids
         )
 
     # Sort by combination, then boredom

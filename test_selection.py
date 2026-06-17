@@ -10,6 +10,9 @@
 # READ-ONLY: SessionContext.load, find_best_subtopic_with_fallback, and
 # select_cycle_interactions all only SELECT. This script writes NOTHING.
 #
+# Reflects R32 (transcription-based combination) AS OF 2026-06-17: the transcription
+# axis keys on transcription_fr (the spoken words), not interaction_id.
+#
 # RUN (in the backend repo, with the venv + env loaded):
 #   cd ~/Desktop/tuje-analyze-api
 #   source venv/bin/activate
@@ -74,6 +77,7 @@ async def main():
         print(f"  seen_subtopics      ({len(context.seen_subtopics)}): {sorted(context.seen_subtopics)}")
         print(f"  seen_interaction_ids({len(context.seen_interaction_ids)}): {sorted(context.seen_interaction_ids)}")
         print(f"  seen_intents        ({len(context.seen_intents)}): {sorted(context.seen_intents)}")
+        print(f"  seen_transcriptions ({len(context.seen_transcriptions)}): {sorted(context.seen_transcriptions)}")
         if not context.seen_subtopics and not context.seen_interaction_ids and not context.seen_intents:
             print("  >> NOTE: empty history. Every candidate will resolve to combination 5 (all 'new').")
             print("     This is the cold-start case — selection cannot differentiate by combination.")
@@ -103,7 +107,7 @@ async def main():
         for c in candidates:
             # Re-derive the seen/new breakdown so you can see WHY each combination value.
             st = "seen" if c.subtopic_id in context.seen_subtopics else "new"
-            tr = "seen" if c.id in context.seen_interaction_ids else "new"
+            tr = "seen" if c.transcription_fr in context.seen_transcriptions else "new"
             it = "seen" if any(i in context.seen_intents for i in c.intent_ids) else "new"
             print(f"  {c.id:<22} {c.combination:>4} {c.boredom_rate:>8.2f} "
                   f"{c.level_from:>6} {str(c.is_entry_point):>6}  {st}/{tr}/{it}")

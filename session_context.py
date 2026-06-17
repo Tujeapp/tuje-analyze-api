@@ -14,6 +14,7 @@ class SessionContext:
     seen_subtopics: Set[str]
     seen_interaction_ids: Set[str]
     seen_intents: Set[str]
+    seen_transcriptions: Set[str]
     
     @classmethod
     async def load(cls, user_id: str, db_pool) -> "SessionContext":
@@ -51,6 +52,23 @@ class SessionContext:
             )
             seen_interaction_ids = {row["brain_interaction_id"] for row in interaction_rows}
 
+            # Transcriptions (the spoken words) seen in the last 4 days for this user.
+            # NOTE: keyed on transcription_fr STRING (exact match), not interaction id —
+            # the same words can appear as multiple distinct interactions across subtopics (R32).
+            transcription_rows = await conn.fetch(
+                """
+                SELECT DISTINCT bi.transcription_fr
+                FROM session_interaction si
+                JOIN session s ON si.session_id = s.id
+                JOIN brain_interaction bi ON si.brain_interaction_id = bi.id
+                WHERE s.user_id = $1
+                  AND si.completed_at >= NOW() - INTERVAL '4 days'
+                  AND bi.transcription_fr IS NOT NULL
+                """,
+                user_id,
+            )
+            seen_transcriptions = {row["transcription_fr"] for row in transcription_rows}
+
             # Intents from interactions completed in the last 7 days for this
             # user. brain_interaction.intents is an ARRAY column — unnest it.
             intent_rows = await conn.fetch(
@@ -73,9 +91,11 @@ class SessionContext:
             seen_subtopics=seen_subtopics,
             seen_interaction_ids=seen_interaction_ids,
             seen_intents=seen_intents,
+            seen_transcriptions=seen_transcriptions,
         )
     
-    def get_combination(self, interaction_id: str, subtopic_id: str, intent_ids: List[str]) -> int:
+    def get_combination(self, interaction_id: str, subtopic_id: str,
+                        transcription_fr: str, intent_ids: List[str]) -> int:
         """
         Fast O(1) combination calculation
         
@@ -88,7 +108,7 @@ class SessionContext:
         """
         
         subtopic_status = "seen" if subtopic_id in self.seen_subtopics else "new"
-        transcription_status = "seen" if interaction_id in self.seen_interaction_ids else "new"
+        transcription_status = "seen" if transcription_fr in self.seen_transcriptions else "new"
         intent_status = "seen" if any(iid in self.seen_intents for iid in intent_ids) else "new"
         
         combination_map = {
