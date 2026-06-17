@@ -405,7 +405,7 @@ IMMEDIATE WORKAROUND for testing: match the case the session was stored under, o
 LOWER(user_id) = lower(:id). test_selection.py / SessionContext.load use exact match, so set
 the harness USER_ID to the stored case until fixed.
 
-### R35 — Engine content-starvation root-caused & resolved: NULL level_from (subtopic + interaction)
+### R34 — Engine content-starvation root-caused & resolved: NULL level_from (subtopic + interaction)
 INVESTIGATION (2026-06-17, via diagnose_search.py): the engine appeared to "recycle" the same
 ~7 interactions from 2 subtopics across sessions, looking non-adaptive. Root cause was NOT the
 selection logic — it was NULL level_from data:
