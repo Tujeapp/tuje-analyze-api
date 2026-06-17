@@ -310,6 +310,31 @@ selection alone covers the entire first-session experience; (b)/(c) only matter 
 Testing: see TESTING_TOOLS.md (5 SQL tools + planned selection-trace script) for how to
 exercise selection against real content with a controlled user.
 
+**R31 — Combination classification VALIDATED on real data (2026-06-16):**
+Using test_selection.py against the real DB with a controlled test user
+(D08BC99B-... — note uppercase, see R33), combination classification was validated by
+constructing each seen/new state and confirming get_combination returns the right number:
+  - Combination 1 (seen/seen/seen): validated — played a cycle, re-ran harness, the 7 played
+    interactions read seen/seen/seen.
+  - Combination 2 (seen/new/seen): validated — an unplayed interaction in a seen subtopic
+    whose intent was seen via another played interaction read seen/new/seen.
+  - Combination 3 (seen/new/new): validated — re-tagged that unplayed interaction with a
+    fresh intent (not in seen_intents); it flipped 2→3, single variable changed.
+  - Combination 5 (new/new/new): validated — cold-start run (empty seen-sets) read all new.
+  - Combination 4 (new/seen/seen): NOT validatable — BLOCKED BY R32. Requires "new subtopic /
+    seen transcription", which the current code cannot produce (transcription axis keys on
+    interaction_id, not transcription_fr). Becomes testable only after R32 fix.
+Conclusion: get_combination classification is correct for all patterns the current code can
+produce. The re-tag→re-run loop (edit content intent in Airtable, re-run harness) is a
+reliable way to engineer specific combination states without replaying sessions.
+
+OBSERVATION (open, not yet investigated): across repeat sessions (rank 1 → rank 2), the engine
+re-served the SAME 7 interactions from the same subtopic (SUBT202510161396), never reaching
+the broader content library. Combination 1 dominates repeat play; the engine does not appear
+to advance toward newer content/subtopics across sessions as boredom rises. This is the
+boredom→novelty / sort-direction question (see test_selection_MANUAL.md "Check 2") — the real
+adaptiveness question, still open. Likely the highest-value next investigation.
+
 ### R32 — Combination "transcription" axis keys on interaction_id, not transcription (OPEN — core selection correctness)
 DESIGN INTENT (confirmed by Rémi): the combination system's middle axis tracks whether the
 user has seen the actual SPOKEN WORDS before — transcription_fr — NOT the interaction id. The
