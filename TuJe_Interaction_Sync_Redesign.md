@@ -307,9 +307,10 @@ Helper formulas on Interaction, rollups on Subtopic, Interface zones 2 and 3 bui
 Use the new Interaction system for real authoring. Collect observations. Don't iterate prematurely.
 
 ### Stage 5 — Apply recipe to other tables
-- Mistake first (no media, simplest).
-- Vocab next (audio + optional image).
-- Subtopic and Answer (multiple media types).
+- Subtopic full modernization (complete Path A — Path B done June 17, 2026)
+- Mistake (no media, simplest)
+- Vocab (audio + optional image).
+- Answer (audio + optional image)
 - Per-table recipe: `RecordState` + `IsTest` + sync timestamps + `ContentLastModified` + status formulas + sync button + backend `archived` column.
 
 ### Stage 6 — Cloudinary asset hygiene
