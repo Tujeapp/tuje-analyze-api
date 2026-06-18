@@ -316,12 +316,12 @@ class MistakeEntry(BaseEntry):
     """Pydantic model for Mistake table sync"""
     nameFr: str
     nameEn: str
-    descriptionFr: Optional[str] = None
-    descriptionEn: Optional[str] = None
-    type: Optional[str] = None  # Single select value
-    ruleCode: Optional[str] = None
-    conditions: Optional[str] = None
-    
+    descriptionFr: str
+    descriptionEn: str
+    type: str  # Single select value
+    ruleCode: str
+    conditions: str
+
     @validator('nameFr', 'nameEn')
     def validate_name_fields(cls, v):
         if not v or len(v.strip()) == 0:
@@ -329,30 +329,20 @@ class MistakeEntry(BaseEntry):
         if len(v) > 255:
             raise ValueError('Name fields cannot exceed 255 characters')
         return v.strip()
-    
-    @validator('descriptionFr', 'descriptionEn', 'conditions')
-    def validate_text_fields(cls, v):
-        if v is not None and len(v.strip()) > 0:
-            return v.strip()
-        return v
-    
-    @validator('type')
-    def validate_type(cls, v):
-        if v is not None:
-            v = v.strip()
-            if len(v) == 0:
-                return None
-        return v
-    
+
+    @validator('descriptionFr', 'descriptionEn', 'type', 'conditions')
+    def validate_required_text_fields(cls, v):
+        if not v or len(v.strip()) == 0:
+            raise ValueError('Required text fields cannot be empty')
+        return v.strip()
+
     @validator('ruleCode')
     def validate_rule_code(cls, v):
-        if v is not None:
-            v = v.strip()
-            if len(v) == 0:
-                return None
-            if len(v) > 255:
-                raise ValueError('Rule code cannot exceed 255 characters')
-        return v
+        if not v or len(v.strip()) == 0:
+            raise ValueError('Rule code cannot be empty')
+        if len(v) > 255:
+            raise ValueError('Rule code cannot exceed 255 characters')
+        return v.strip()
 
 class InterestEntry(BaseEntry):
     name: str
@@ -644,7 +634,9 @@ SYNC_CONFIGS = {
             "description_fr", "description_en",
             "type", "rule_code", "conditions",
             "airtable_record_id", "last_modified_time_ref",
-            "created_at", "update_at", "live"]
+            "created_at", "update_at", "live"],
+        "timestamp_field": "LastContentSyncedAt",
+        "use_now_timestamp": True
     },
     "hint": {
         "table_name": "brain_hint",
