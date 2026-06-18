@@ -468,7 +468,7 @@ class SubtopicEntry(BaseEntry):
     descriptionEn: Optional[str] = None
     boredom: Optional[float] = None
     videoCoverUrl: Optional[str] = None
-    imageIconUrl: Optional[str] = None
+    iconUrl: Optional[str] = None
     levelFrom: Optional[int] = None
     levelTo: Optional[int] = None
     topics: Optional[List[str]] = None
@@ -599,10 +599,12 @@ SYNC_CONFIGS = {
         "table_name": "brain_subtopic",
         "airtable_table": "Subtopic",
         "columns": ["id", "name_fr", "name_en", "description_fr", "description_en", "boredom",
-                   "video_cover_url", "image_icon_url",
+                   "video_cover_url", "icon_url",
                    "level_from", "level_to", "topics", "user_goal_ids", "matched_as_variant_ids",
                    "airtable_record_id", "last_modified_time_ref",
-                   "created_at", "update_at", "live"]
+                   "created_at", "update_at", "live"],
+        "timestamp_field": "LastContentSyncedAt",
+        "use_now_timestamp": True
     },
     "interaction_answer": {
         "table_name": "brain_interaction_answer",
@@ -768,7 +770,7 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "videoUrl": "video_url",
         "videoPosterUrl": "video_poster_url",
         "videoCoverUrl": "video_cover_url",
-        "imageIconUrl": "image_icon_url",
+        "iconUrl": "icon_url",
         "userGoalIds": "user_goal_ids",
         "matchedAsVariantIds": "matched_as_variant_ids",
         "imageUrl": "image_url",
