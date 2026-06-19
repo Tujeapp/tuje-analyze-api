@@ -430,13 +430,26 @@ class NotionEntry(BaseEntry):
         return round(v, 2)
 
 class VocabEntry(BaseEntry):
-    transcriptionFr: str
-    transcriptionEn: str
-    transcriptionAdjusted: str
+    # All optional/lenient — Airtable ContentStatus formulas + IsTest enforce strictness
+    transcriptionFr: Optional[str] = None
+    transcriptionEn: Optional[str] = None
+    transcriptionAdjusted: Optional[str] = None
     entityTypeId: Optional[str] = None
-    expectedNotionIds: Optional[List[str]] = []
-    expectedIntentIds: Optional[List[str]] = []  # NEW: Add expected intent IDs
-    
+    entityPriority: Optional[int] = None
+    expectedNotionIds: Optional[List[str]] = None
+    expectedIntentIds: Optional[List[str]] = None
+    description: Optional[str] = None
+    examples: Optional[str] = None
+    gender: Optional[List[str]] = None
+    plural: Optional[List[str]] = None
+    audioNormalUrl: Optional[str] = None
+    audioSlowUrl: Optional[str] = None
+    imageUrl: Optional[str] = None
+    mistakeIds: Optional[List[str]] = None
+    groupVocabIds: Optional[List[str]] = None
+    matchedReferralVocabIds: Optional[List[str]] = None
+    archived: Optional[bool] = False
+
     @validator('entityTypeId')
     def clean_entity_type_id(cls, v):
         """Clean entity type ID - handle empty strings"""
@@ -445,26 +458,17 @@ class VocabEntry(BaseEntry):
             if len(v) == 0:
                 return None
         return v
-    
-    @validator('expectedNotionIds')
-    def clean_expected_notion_ids(cls, v):
-        """Clean expected notion IDs list"""
+
+    @validator('mistakeIds', 'groupVocabIds', 'matchedReferralVocabIds',
+               'gender', 'plural', 'expectedIntentIds', 'expectedNotionIds')
+    def validate_optional_arrays(cls, v):
+        # Allow None or empty arrays
         if v is None:
             return []
         if not isinstance(v, list):
             return []
-        cleaned = [str(notion_id).strip() for notion_id in v if notion_id and str(notion_id).strip()]
-        return cleaned
-    
-    @validator('expectedIntentIds')  # NEW: Add validator for intent IDs
-    def clean_expected_intent_ids(cls, v):
-        """Clean expected intent IDs list"""
-        if v is None:
-            return []
-        if not isinstance(v, list):
-            return []
-        cleaned = [str(intent_id).strip() for intent_id in v if intent_id and str(intent_id).strip()]
-        return cleaned
+        # Filter out None/empty values
+        return [str(item).strip() for item in v if item and str(item).strip()]
 
 class IntentEntry(BaseEntry):
     name: str
@@ -597,9 +601,14 @@ SYNC_CONFIGS = {
         "table_name": "brain_vocab",
         "airtable_table": "Vocab",
         "columns": ["id", "transcription_fr", "transcription_en", "transcription_adjusted",
-                   "entity_type_id", "expected_notion_id", "expected_intent_id",  # NEW: Add expected_intent_id
-                   "airtable_record_id", "last_modified_time_ref", 
-                   "created_at", "update_at", "live"]
+                   "entity_type_id", "entity_priority", "expected_notion_id", "expected_intent_id",
+                   "description", "examples", "gender", "plural",
+                   "audio_normal_url", "audio_slow_url", "image_url",
+                   "mistake_ids", "group_vocab_ids", "matched_referral_vocab_ids",
+                   "airtable_record_id", "last_modified_time_ref",
+                   "created_at", "update_at", "live", "archived"],
+        "timestamp_field": "LastContentSyncedAt",
+        "use_now_timestamp": True
     },
     "intent": {
         "table_name": "brain_intent",
@@ -761,8 +770,11 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "transcriptionAdjusted": "transcription_adjusted",
         "answerOptimumLevel": "answer_optimum_level",
         "entityTypeId": "entity_type_id",
+        "entityPriority": "entity_priority",
         "expectedNotionIds": "expected_notion_id",
         "expectedIntentIds": "expected_intent_id",
+        "groupVocabIds": "group_vocab_ids",
+        "matchedReferralVocabIds": "matched_referral_vocab_ids",
         "expectedEntitiesIds": "expected_entities_id",
         "expectedVocabIds": "expected_vocab_id",
         "goalId": "goal_id",
@@ -864,7 +876,7 @@ async def sync_entity_to_database(entry_data: Dict, config: Dict) -> None:
             for col in columns:
                 value = entry_data.get(col)
                 # CHANGE 1: Add 'expected_intent_id' to this list (just add it to the existing list)
-                if col in ['intents', 'expected_entities_id', 'expected_vocab_id', 'expected_notion_id', 'expected_intent_id', 'interaction_vocab_id', 'session_mood_ids', 'subtopic_ids', 'hint_ids', 'topics', 'user_goal_ids', 'matched_as_variant_ids', 'mistake_ids', 'vocab_ids'] and isinstance(value, list):
+                if col in ['intents', 'expected_entities_id', 'expected_vocab_id', 'expected_notion_id', 'expected_intent_id', 'interaction_vocab_id', 'session_mood_ids', 'subtopic_ids', 'hint_ids', 'topics', 'user_goal_ids', 'matched_as_variant_ids', 'mistake_ids', 'vocab_ids', 'group_vocab_ids', 'matched_referral_vocab_ids', 'gender', 'plural'] and isinstance(value, list):
                     values.append(value)  # PostgreSQL will handle the array
                 else:
                     values.append(value)
