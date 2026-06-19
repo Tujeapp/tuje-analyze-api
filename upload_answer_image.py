@@ -110,11 +110,82 @@ async def upload_answer_image_to_cloudinary(request: AnswerImageUploadRequest):
     except Exception as e:
         elapsed = time.time() - start_time
         logger.error(f"❌ Upload failed after {elapsed:.2f}s: {e}")
-        
+
         return {
             "success": False,
             "message": f"❌ Upload failed: {str(e)}",
             "cloudinary_url": None,
+            "execution_time": f"{elapsed:.2f}s",
+            "error": str(e)
+        }
+
+
+# ================================================
+# ANSWER AUDIO — REQUEST MODEL
+# ================================================
+
+class AnswerAudioUploadRequest(BaseModel):
+    """Request model for answer audio upload (normal + slow speeds)"""
+    answer_id: str
+    audio_normal_url: str
+    audio_slow_url: str
+
+    @validator('answer_id')
+    def validate_answer_id(cls, v):
+        if not v or len(v.strip()) == 0:
+            raise ValueError('Answer ID cannot be empty')
+        return v.strip()
+
+    @validator('audio_normal_url', 'audio_slow_url')
+    def validate_audio_urls(cls, v):
+        if not v or not v.startswith('http'):
+            raise ValueError('Invalid audio URL - must start with http or https')
+        return v.strip()
+
+
+# ================================================
+# ANSWER AUDIO — ENDPOINT
+# ================================================
+
+@router.post("/upload-answer-audio-to-cloudinary")
+async def upload_answer_audio_to_cloudinary(request: AnswerAudioUploadRequest):
+    """Upload an answer's normal + slow audio to Cloudinary (tuje/audio/answers/...)."""
+    start_time = time.time()
+    try:
+        logger.info(f"🔊 Uploading audio for answer {request.answer_id}")
+        result = await CloudinaryService.upload_answer_audio_from_url(
+            answer_id=request.answer_id,
+            audio_normal_url=request.audio_normal_url,
+            audio_slow_url=request.audio_slow_url
+        )
+
+        if not result.get("success"):
+            return {
+                "success": False,
+                "message": f"❌ Audio upload failed: {result.get('error')}",
+                "audio_normal_url": None,
+                "audio_slow_url": None,
+                "execution_time": result.get("execution_time", f"{time.time() - start_time:.2f}s"),
+                "error": result.get("error")
+            }
+
+        logger.info(f"✅ Audio uploaded in {result['execution_time']}")
+        return {
+            "success": True,
+            "message": "✅ Audio uploaded successfully",
+            "audio_normal_url": result["audio_normal_url"],
+            "audio_slow_url": result["audio_slow_url"],
+            "execution_time": result["execution_time"]
+        }
+
+    except Exception as e:
+        elapsed = time.time() - start_time
+        logger.error(f"❌ Audio upload failed after {elapsed:.2f}s: {e}")
+        return {
+            "success": False,
+            "message": f"❌ Upload failed: {str(e)}",
+            "audio_normal_url": None,
+            "audio_slow_url": None,
             "execution_time": f"{elapsed:.2f}s",
             "error": str(e)
         }

@@ -4,6 +4,7 @@ Handles video and image uploads from Airtable to Cloudinary
 """
 
 import os
+import time
 import logging
 import cloudinary
 import cloudinary.uploader
@@ -33,6 +34,7 @@ class CloudinaryService:
     TUTORIAL_FOLDER = "tuje/videos/tutorials"
     UI_FOLDER = "tuje/images/ui"
     ANSWER_IMAGE_FOLDER = "tuje/images/answers"
+    ANSWER_AUDIO_FOLDER = "tuje/audio/answers"
     SUBTOPIC_VIDEO_FOLDER = "tuje/videos/subtopics"
     SUBTOPIC_ICON_FOLDER = "tuje/images/subtopics"
     
@@ -69,6 +71,12 @@ class CloudinaryService:
     'height': 200,
     'crop': 'fill',
     'gravity': 'center'
+    }
+
+    # Audio transformation (Cloudinary handles audio under resource_type="video")
+    AUDIO_TRANSFORMATION = {
+        'audio_codec': 'auto',
+        'quality': 'auto'
     }
 
     @staticmethod
@@ -434,6 +442,71 @@ class CloudinaryService:
             logger.error(f"❌ Failed to upload subtopic video cover {subtopic_id}: {e}")
             logger.exception(e)
             return None
+
+    @staticmethod
+    async def upload_answer_audio_from_url(
+        answer_id: str,
+        audio_normal_url: str,
+        audio_slow_url: str
+    ) -> Dict[str, Any]:
+        """
+        Upload an Answer's normal- and slow-speed audio from Airtable URLs to Cloudinary.
+        Folder: tuje/audio/answers/{answer_id}_normal and {answer_id}_slow
+        Audio uses resource_type="video" (Cloudinary handles audio under video).
+
+        Returns:
+          { "success": True, "audio_normal_url": str, "audio_slow_url": str, "execution_time": "1.23s" }
+          or { "success": False, "audio_normal_url": None, "audio_slow_url": None,
+               "execution_time": "1.23s", "error": str }   (no partial result returned)
+        """
+        start_time = time.time()
+        clean_answer_id = answer_id.replace('-', '_')
+        folder = CloudinaryService.ANSWER_AUDIO_FOLDER
+
+        def _upload(source_url: str, suffix: str) -> str:
+            logger.info(f"📤 Uploading answer audio ({suffix})")
+            logger.info(f"   📁 Folder: {folder}")
+            logger.info(f"   📄 Public ID: {clean_answer_id}_{suffix}")
+            result = cloudinary.uploader.upload(
+                source_url,
+                resource_type="video",
+                folder=folder,
+                public_id=f"{clean_answer_id}_{suffix}",
+                overwrite=True,
+                use_filename=False,
+                unique_filename=False,
+                eager=[CloudinaryService.AUDIO_TRANSFORMATION],
+                eager_async=False,
+                invalidate=True,
+                timeout=120
+            )
+            logger.info(f"   ✅ Cloudinary saved: {result.get('public_id', 'UNKNOWN')}")
+            return cloudinary.CloudinaryVideo(result['public_id']).build_url(
+                **CloudinaryService.AUDIO_TRANSFORMATION
+            )
+
+        try:
+            normal_url = _upload(audio_normal_url, "normal")
+            slow_url = _upload(audio_slow_url, "slow")
+            elapsed = time.time() - start_time
+            logger.info(f"✅ Answer audio uploaded in {elapsed:.2f}s")
+            return {
+                "success": True,
+                "audio_normal_url": normal_url,
+                "audio_slow_url": slow_url,
+                "execution_time": f"{elapsed:.2f}s"
+            }
+        except Exception as e:
+            elapsed = time.time() - start_time
+            logger.error(f"❌ Failed to upload answer audio {answer_id}: {e}")
+            logger.exception(e)
+            return {
+                "success": False,
+                "audio_normal_url": None,
+                "audio_slow_url": None,
+                "execution_time": f"{elapsed:.2f}s",
+                "error": str(e)
+            }
 
     @staticmethod
     async def upload_subtopic_icon_from_url(
