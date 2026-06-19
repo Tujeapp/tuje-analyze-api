@@ -37,6 +37,8 @@ class CloudinaryService:
     ANSWER_AUDIO_FOLDER = "tuje/audio/answers"
     SUBTOPIC_VIDEO_FOLDER = "tuje/videos/subtopics"
     SUBTOPIC_ICON_FOLDER = "tuje/images/subtopics"
+    VOCAB_AUDIO_FOLDER = "tuje/audio/vocab"
+    VOCAB_IMAGE_FOLDER = "tuje/images/vocab"
     
     # Video transformation for mobile optimization
     VIDEO_TRANSFORMATION = {
@@ -507,6 +509,117 @@ class CloudinaryService:
                 "execution_time": f"{elapsed:.2f}s",
                 "error": str(e)
             }
+
+    @staticmethod
+    async def upload_vocab_audio_from_url(
+        vocab_id: str,
+        audio_normal_url: str,
+        audio_slow_url: str
+    ) -> Dict[str, Any]:
+        """
+        Upload a Vocab's normal- and slow-speed audio from Airtable URLs to Cloudinary.
+        Folder: tuje/audio/vocab/{vocab_id}_normal and {vocab_id}_slow
+        Audio uses resource_type="video" (Cloudinary handles audio under video).
+
+        Returns:
+          { "success": True, "audio_normal_url": str, "audio_slow_url": str, "execution_time": "1.23s" }
+          or { "success": False, "audio_normal_url": None, "audio_slow_url": None,
+               "execution_time": "1.23s", "error": str }   (no partial result returned)
+        """
+        start_time = time.time()
+        clean_vocab_id = vocab_id.replace('-', '_')
+        folder = CloudinaryService.VOCAB_AUDIO_FOLDER
+
+        def _upload(source_url: str, suffix: str) -> str:
+            logger.info(f"📤 Uploading vocab audio ({suffix})")
+            logger.info(f"   📁 Folder: {folder}")
+            logger.info(f"   📄 Public ID: {clean_vocab_id}_{suffix}")
+            result = cloudinary.uploader.upload(
+                source_url,
+                resource_type="video",
+                folder=folder,
+                public_id=f"{clean_vocab_id}_{suffix}",
+                overwrite=True,
+                use_filename=False,
+                unique_filename=False,
+                eager=[CloudinaryService.AUDIO_TRANSFORMATION],
+                eager_async=False,
+                invalidate=True,
+                timeout=120
+            )
+            logger.info(f"   ✅ Cloudinary saved: {result.get('public_id', 'UNKNOWN')}")
+            return cloudinary.CloudinaryVideo(result['public_id']).build_url(
+                **CloudinaryService.AUDIO_TRANSFORMATION
+            )
+
+        try:
+            normal_url = _upload(audio_normal_url, "normal")
+            slow_url = _upload(audio_slow_url, "slow")
+            elapsed = time.time() - start_time
+            logger.info(f"✅ Vocab audio uploaded in {elapsed:.2f}s")
+            return {
+                "success": True,
+                "audio_normal_url": normal_url,
+                "audio_slow_url": slow_url,
+                "execution_time": f"{elapsed:.2f}s"
+            }
+        except Exception as e:
+            elapsed = time.time() - start_time
+            logger.error(f"❌ Failed to upload vocab audio {vocab_id}: {e}")
+            logger.exception(e)
+            return {
+                "success": False,
+                "audio_normal_url": None,
+                "audio_slow_url": None,
+                "execution_time": f"{elapsed:.2f}s",
+                "error": str(e)
+            }
+
+    @staticmethod
+    async def upload_vocab_image_from_url(
+        airtable_url: str,
+        vocab_id: str
+    ) -> Optional[str]:
+        """
+        Upload vocab image from Airtable URL to Cloudinary
+
+        Folder structure: tuje/images/vocab/{vocab_id}
+        """
+        try:
+            clean_vocab_id = vocab_id.replace('-', '_')
+            folder = CloudinaryService.VOCAB_IMAGE_FOLDER
+
+            logger.info(f"📤 Uploading vocab image")
+            logger.info(f"   📁 Folder: {folder}")
+            logger.info(f"   📄 Public ID: {clean_vocab_id}")
+
+            result = cloudinary.uploader.upload(
+                airtable_url,
+                resource_type="image",
+                folder=folder,
+                public_id=clean_vocab_id,
+                overwrite=True,
+                use_filename=False,
+                unique_filename=False,
+                eager=[CloudinaryService.ANSWER_IMAGE_TRANSFORMATION],
+                eager_async=False,
+                invalidate=True
+            )
+
+            actual_public_id = result.get('public_id', 'UNKNOWN')
+            logger.info(f"   ✅ Cloudinary saved: {actual_public_id}")
+
+            optimized_url = cloudinary.CloudinaryImage(result['public_id']).build_url(
+                **CloudinaryService.ANSWER_IMAGE_TRANSFORMATION
+            )
+
+            logger.info(f"✅ Vocab image uploaded: {optimized_url}")
+            return optimized_url
+
+        except Exception as e:
+            logger.error(f"❌ Failed to upload vocab image {vocab_id}: {e}")
+            logger.exception(e)
+            return None
 
     @staticmethod
     async def upload_subtopic_icon_from_url(
