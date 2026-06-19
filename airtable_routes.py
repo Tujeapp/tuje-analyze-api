@@ -78,13 +78,36 @@ class BaseEntry(BaseModel):
         return v
 
 class AnswerEntry(BaseEntry):
+    # Strict (required, non-empty)
     transcriptionFr: str
     transcriptionEn: str
     transcriptionAdjusted: str
-    answerOptimumLevel: Optional[int] = None
-    imageUrl: Optional[str] = None
+    answerOptimumLevel: int
+
+    # Lenient (optional, never raise on None)
     timerSeconds: Optional[float] = None
-    displayReady: Optional[bool] = True
+    isButton: Optional[bool] = None
+    audioNormalUrl: Optional[str] = None
+    audioSlowUrl: Optional[str] = None
+    imageUrl: Optional[str] = None
+    mistakeIds: Optional[List[str]] = None
+    vocabIds: Optional[List[str]] = None
+
+    @validator('transcriptionFr', 'transcriptionEn', 'transcriptionAdjusted')
+    def validate_required_text_fields(cls, v):
+        if not v or len(v.strip()) == 0:
+            raise ValueError('Required text fields cannot be empty')
+        return v.strip()
+
+    @validator('mistakeIds', 'vocabIds')
+    def validate_optional_arrays(cls, v):
+        # Allow None or empty arrays
+        if v is None:
+            return []
+        if not isinstance(v, list):
+            return []
+        # Filter out None/empty values
+        return [str(item).strip() for item in v if item and str(item).strip()]
 
 class BonusMalusEntry(BaseEntry):
     nameFr: str
@@ -542,8 +565,11 @@ SYNC_CONFIGS = {
         "table_name": "brain_answer",
         "airtable_table": "Answer",
         "columns": ["id", "transcription_fr", "transcription_en", "transcription_adjusted",
-                   "answer_optimum_level", "image_url", "timer_seconds", "display_ready",
-                   "airtable_record_id", "last_modified_time_ref", "created_at", "update_at", "live"]
+                   "answer_optimum_level", "image_url", "timer_seconds", "is_button",
+                   "audio_normal_url", "audio_slow_url", "mistake_ids", "vocab_ids",
+                   "airtable_record_id", "last_modified_time_ref", "created_at", "update_at", "live"],
+        "timestamp_field": "LastContentSyncedAt",
+        "use_now_timestamp": True
     },
     "interaction": {
         "table_name": "brain_interaction",
@@ -771,7 +797,11 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "answerId": "answer_id",
         "timerSeconds": "timer_seconds",
         "selectionMode": "selection_mode",
-        "displayReady": "display_ready",
+        "isButton": "is_button",
+        "audioNormalUrl": "audio_normal_url",
+        "audioSlowUrl": "audio_slow_url",
+        "mistakeIds": "mistake_ids",
+        "vocabIds": "vocab_ids",
         "answerType": "answer_type"
     }
     
@@ -830,7 +860,7 @@ async def sync_entity_to_database(entry_data: Dict, config: Dict) -> None:
             for col in columns:
                 value = entry_data.get(col)
                 # CHANGE 1: Add 'expected_intent_id' to this list (just add it to the existing list)
-                if col in ['intents', 'expected_entities_id', 'expected_vocab_id', 'expected_notion_id', 'expected_intent_id', 'interaction_vocab_id', 'session_mood_ids', 'subtopic_ids', 'hint_ids', 'topics', 'user_goal_ids', 'matched_as_variant_ids'] and isinstance(value, list):
+                if col in ['intents', 'expected_entities_id', 'expected_vocab_id', 'expected_notion_id', 'expected_intent_id', 'interaction_vocab_id', 'session_mood_ids', 'subtopic_ids', 'hint_ids', 'topics', 'user_goal_ids', 'matched_as_variant_ids', 'mistake_ids', 'vocab_ids'] and isinstance(value, list):
                     values.append(value)  # PostgreSQL will handle the array
                 else:
                     values.append(value)
