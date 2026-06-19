@@ -92,6 +92,7 @@ class AnswerEntry(BaseEntry):
     imageUrl: Optional[str] = None
     mistakeIds: Optional[List[str]] = None
     vocabIds: Optional[List[str]] = None
+    archived: Optional[bool] = False
 
     @validator('transcriptionFr', 'transcriptionEn', 'transcriptionAdjusted')
     def validate_required_text_fields(cls, v):
@@ -295,7 +296,8 @@ class InteractionEntry(BaseEntry):
     videoPosterUrl: Optional[str] = None
     speak: Optional[bool] = False
     selectionMode: Optional[str] = "single"
-    
+    archived: Optional[bool] = False
+
     @validator('transcriptionFr', 'transcriptionEn')
     def validate_transcriptions(cls, v):
         if not v or len(v.strip()) == 0:
@@ -344,6 +346,7 @@ class MistakeEntry(BaseEntry):
     type: str  # Single select value
     ruleCode: str
     conditions: str
+    archived: Optional[bool] = False
 
     @validator('nameFr', 'nameEn')
     def validate_name_fields(cls, v):
@@ -487,6 +490,7 @@ class SubtopicEntry(BaseEntry):
     topics: Optional[List[str]] = None
     userGoalIds: Optional[List[str]] = None
     matchedAsVariantIds: Optional[List[str]] = None
+    archived: Optional[bool] = False
 
     @validator('nameFr', 'nameEn')
     def validate_required_text_fields(cls, v):
@@ -567,7 +571,7 @@ SYNC_CONFIGS = {
         "columns": ["id", "transcription_fr", "transcription_en", "transcription_adjusted",
                    "answer_optimum_level", "image_url", "timer_seconds", "is_button",
                    "audio_normal_url", "audio_slow_url", "mistake_ids", "vocab_ids",
-                   "airtable_record_id", "last_modified_time_ref", "created_at", "update_at", "live"],
+                   "airtable_record_id", "last_modified_time_ref", "created_at", "update_at", "live", "archived"],
         "timestamp_field": "LastContentSyncedAt",
         "use_now_timestamp": True
     },
@@ -581,7 +585,7 @@ SYNC_CONFIGS = {
             "hint_ids", "interaction_type_id",
             "interaction_optimum_level", "level_from", "boredom",
             "airtable_record_id", "last_modified_time_ref",
-            "created_at", "update_at", "live", "video_url", "video_poster_url", "speak", "selection_mode"
+            "created_at", "update_at", "live", "archived", "video_url", "video_poster_url", "speak", "selection_mode"
         ],
         # Per-lifecycle sync timestamp behavior: write the server time at sync
         # completion to LastContentSyncedAt, instead of the default
@@ -618,7 +622,7 @@ SYNC_CONFIGS = {
                    "video_cover_url", "icon_url",
                    "level_from", "level_to", "topics", "user_goal_ids", "matched_as_variant_ids",
                    "airtable_record_id", "last_modified_time_ref",
-                   "created_at", "update_at", "live"],
+                   "created_at", "update_at", "live", "archived"],
         "timestamp_field": "LastContentSyncedAt",
         "use_now_timestamp": True
     },
@@ -660,7 +664,7 @@ SYNC_CONFIGS = {
             "description_fr", "description_en",
             "type", "rule_code", "conditions",
             "airtable_record_id", "last_modified_time_ref",
-            "created_at", "update_at", "live"],
+            "created_at", "update_at", "live", "archived"],
         "timestamp_field": "LastContentSyncedAt",
         "use_now_timestamp": True
     },
