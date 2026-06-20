@@ -528,18 +528,37 @@ class SubtopicEntry(BaseEntry):
         return [str(item).strip() for item in v if item and str(item).strip()]
 
 class InteractionAnswerEntry(BaseEntry):
+    # Strict (required, non-empty)
     interactionId: str
     answerId: str
-    listOfMistakes: Optional[List[str]] = None
-    answerType: Optional[str] = None
-    
-    @validator('listOfMistakes', pre=True, always=True)
-    def clean_list_of_mistakes(cls, v):
+    answerType: str
+    levelAnswerRate: int
+
+    # Lenient (optional, never raise on None)
+    mistakeIds: Optional[List[str]] = None
+    allMatchedSameInteractionIds: Optional[List[str]] = None
+    allMatchedFollowInteractionIds: Optional[List[str]] = None
+    allMatchedBonusMalusIds: Optional[List[str]] = None
+    feedbackIds: Optional[List[str]] = None
+    hintIds: Optional[List[str]] = None
+    archived: Optional[bool] = False
+
+    @validator('interactionId', 'answerId', 'answerType')
+    def validate_required_core_fields(cls, v):
+        if not v or len(v.strip()) == 0:
+            raise ValueError('Required fields cannot be empty')
+        return v.strip()
+
+    @validator('mistakeIds', 'allMatchedSameInteractionIds', 'allMatchedFollowInteractionIds',
+               'allMatchedBonusMalusIds', 'feedbackIds', 'hintIds')
+    def validate_optional_arrays(cls, v):
+        # Allow None or empty arrays
         if v is None:
             return []
-        if isinstance(v, list):
-            return [str(item).strip() for item in v if item and str(item).strip()]
-        return []
+        if not isinstance(v, list):
+            return []
+        # Filter out None/empty values
+        return [str(item).strip() for item in v if item and str(item).strip()]
 
 class InitialInteractionEntry(BaseEntry):
     """Initial session template slot — one row per (goal, level, position) combination.
@@ -638,8 +657,14 @@ SYNC_CONFIGS = {
     "interaction_answer": {
         "table_name": "brain_interaction_answer",
         "airtable_table": "Interaction-Answer",
-        "columns": ["id", "interaction_id", "answer_id", "list_of_mistakes", "answer_type", "airtable_record_id",
-                   "last_modified_time_ref", "created_at", "update_at", "live"]
+        "columns": ["id", "interaction_id", "answer_id", "answer_type", "level_answer_rate",
+                   "mistake_ids", "all_matched_same_interaction_ids",
+                   "all_matched_follow_interaction_ids", "all_matched_bonus_malus_ids",
+                   "feedback_ids", "hint_ids",
+                   "airtable_record_id", "last_modified_time_ref",
+                   "created_at", "update_at", "live", "archived"],
+        "timestamp_field": "LastContentSyncedAt",
+        "use_now_timestamp": True
     },
     "initial_interaction": {
         "table_name": "brain_initial_session_template",
@@ -794,7 +819,11 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "sessionMoodIds": "session_mood_ids",
         "subtopicsIds": "subtopic_ids",
         "subtopicId": "subtopic_id",
-        "listOfMistakes": "list_of_mistakes",
+        "levelAnswerRate": "level_answer_rate",
+        "allMatchedSameInteractionIds": "all_matched_same_interaction_ids",
+        "allMatchedFollowInteractionIds": "all_matched_follow_interaction_ids",
+        "allMatchedBonusMalusIds": "all_matched_bonus_malus_ids",
+        "feedbackIds": "feedback_ids",
         "bonusMalusType": "bonus_malus_type",
         "ruleCode": "rule_code",
         "userLevel": "user_level",
@@ -876,7 +905,7 @@ async def sync_entity_to_database(entry_data: Dict, config: Dict) -> None:
             for col in columns:
                 value = entry_data.get(col)
                 # CHANGE 1: Add 'expected_intent_id' to this list (just add it to the existing list)
-                if col in ['intents', 'expected_entities_id', 'expected_vocab_id', 'expected_notion_id', 'expected_intent_id', 'interaction_vocab_id', 'session_mood_ids', 'subtopic_ids', 'hint_ids', 'topics', 'user_goal_ids', 'matched_as_variant_ids', 'mistake_ids', 'vocab_ids', 'group_vocab_ids', 'matched_referral_vocab_ids', 'gender', 'plural'] and isinstance(value, list):
+                if col in ['intents', 'expected_entities_id', 'expected_vocab_id', 'expected_notion_id', 'expected_intent_id', 'interaction_vocab_id', 'session_mood_ids', 'subtopic_ids', 'hint_ids', 'topics', 'user_goal_ids', 'matched_as_variant_ids', 'mistake_ids', 'vocab_ids', 'group_vocab_ids', 'matched_referral_vocab_ids', 'gender', 'plural', 'all_matched_same_interaction_ids', 'all_matched_follow_interaction_ids', 'all_matched_bonus_malus_ids', 'feedback_ids'] and isinstance(value, list):
                     values.append(value)  # PostgreSQL will handle the array
                 else:
                     values.append(value)
