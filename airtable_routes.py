@@ -298,6 +298,8 @@ class InteractionEntry(BaseEntry):
     videoPosterUrl: Optional[str] = None
     speak: Optional[bool] = False
     selectionMode: Optional[str] = "single"
+    entryPoint: Optional[bool] = None
+    entryPointType: Optional[str] = None
     archived: Optional[bool] = False
 
     @validator('transcriptionFr', 'transcriptionEn')
@@ -610,7 +612,7 @@ SYNC_CONFIGS = {
             "hint_ids", "interaction_type_id",
             "interaction_optimum_level", "level_from", "boredom",
             "airtable_record_id",
-            "created_at", "update_at", "live", "archived", "video_url", "video_poster_url", "speak", "selection_mode"
+            "created_at", "update_at", "live", "archived", "video_url", "video_poster_url", "speak", "selection_mode", "entry_point", "entry_point_type"
         ],
         # Per-lifecycle sync timestamp behavior: write the server time at sync
         # completion to LastContentSyncedAt, instead of the default
@@ -832,6 +834,8 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "answerId": "answer_id",
         "timerSeconds": "timer_seconds",
         "selectionMode": "selection_mode",
+        "entryPoint": "entry_point",
+        "entryPointType": "entry_point_type",
         "isButton": "is_button",
         "audioNormalUrl": "audio_normal_url",
         "audioSlowUrl": "audio_slow_url",
