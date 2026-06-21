@@ -1,4 +1,4 @@
-from pydantic import BaseModel, validator
+from pydantic import BaseModel
 from typing import List, Optional, Dict, Set
 from dataclasses import dataclass
 from datetime import datetime
@@ -14,27 +14,6 @@ class VocabularyEntry(BaseModel):
 class SavedAnswer(BaseModel):
     text: str
     is_correct: bool
-
-class VocabEntry(BaseModel):
-    id: str
-    transcriptionFr: str
-    transcriptionEn: str
-    transcriptionAdjusted: str
-    entityTypeId: Optional[str] = None  # Simple text from lookup column
-    airtableRecordId: str
-    lastModifiedTimeRef: int
-    createdAt: int
-    live: bool = True
-    
-    @validator('entityTypeId')
-    def clean_entity_type_id(cls, v):
-        # Simple cleanup - just strip whitespace and handle empty strings
-        if v is not None:
-            v = str(v).strip()
-            if len(v) == 0:
-                return None
-        return v
-
 
 # -------------------------------
 # Request Payload Models

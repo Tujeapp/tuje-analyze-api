@@ -20,7 +20,7 @@ from user_routes import router as user_router
 from session_management_router import router as adaptive_session_router
 from routers.session_router import router as session_router
 from upload_video_simplified import router as video_router
-from upload_answer_image import router as answer_image_router
+from upload_answer_media import router as answer_media_router
 from upload_subtopic_media import router as subtopic_media_router
 from upload_vocab_media import router as vocab_media_router
 from mistakes_routes import router as mistakes_router
@@ -85,7 +85,7 @@ app.include_router(gpt_fallback_router, prefix="/api/gpt", tags=["gpt_fallback"]
 app.include_router(adaptive_session_router, prefix="/api/session-adaptive", tags=["session_adaptive"])
 app.include_router(session_router, prefix="/api/session", tags=["session_management"])
 app.include_router(video_router)
-app.include_router(answer_image_router)
+app.include_router(answer_media_router)
 app.include_router(subtopic_media_router)
 app.include_router(vocab_media_router)
 app.include_router(mistakes_router, prefix="/api/bubble", tags=["Bubble - Mistakes"])

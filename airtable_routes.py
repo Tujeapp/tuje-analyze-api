@@ -965,7 +965,6 @@ async def generic_sync_webhook(entry: BaseEntry, entity_type: str, background_ta
             "message": f"{entity_type.title()} synced successfully",
             "entry_id": entry.id,
             "airtable_record_id": entry.airtableRecordId,
-            "last_modified_time_ref": entry.lastModifiedTimeRef,
             "execution_time": f"{elapsed:.2f}s"
         }
         
