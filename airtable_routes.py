@@ -56,7 +56,7 @@ db_pool = DatabasePool()
 class BaseEntry(BaseModel):
     id: str
     airtableRecordId: str
-    lastModifiedTimeRef: int
+    lastModifiedTimeRef: Optional[int] = None
     createdAt: int
     live: bool = True
     
@@ -68,6 +68,8 @@ class BaseEntry(BaseModel):
     
     @validator('lastModifiedTimeRef', 'createdAt')
     def validate_timestamps(cls, v):
+        if v is None:
+            return v
         if v <= 0:
             raise ValueError('Timestamp must be positive')
         # Check if timestamp is reasonable (allow 5 years range)
@@ -594,7 +596,7 @@ SYNC_CONFIGS = {
         "columns": ["id", "transcription_fr", "transcription_en", "transcription_adjusted",
                    "answer_optimum_level", "image_url", "timer_seconds", "is_button",
                    "audio_normal_url", "audio_slow_url", "mistake_ids", "vocab_ids",
-                   "airtable_record_id", "last_modified_time_ref", "created_at", "update_at", "live", "archived"],
+                   "airtable_record_id", "created_at", "update_at", "live", "archived"],
         "timestamp_field": "LastContentSyncedAt",
         "use_now_timestamp": True
     },
@@ -607,7 +609,7 @@ SYNC_CONFIGS = {
             "expected_notion_id", "interaction_vocab_id",
             "hint_ids", "interaction_type_id",
             "interaction_optimum_level", "level_from", "boredom",
-            "airtable_record_id", "last_modified_time_ref",
+            "airtable_record_id",
             "created_at", "update_at", "live", "archived", "video_url", "video_poster_url", "speak", "selection_mode"
         ],
         # Per-lifecycle sync timestamp behavior: write the server time at sync
@@ -624,7 +626,7 @@ SYNC_CONFIGS = {
                    "description", "examples", "gender", "plural",
                    "audio_normal_url", "audio_slow_url", "image_url",
                    "mistake_ids", "group_vocab_ids", "matched_referral_vocab_ids",
-                   "airtable_record_id", "last_modified_time_ref",
+                   "airtable_record_id",
                    "created_at", "update_at", "live", "archived"],
         "timestamp_field": "LastContentSyncedAt",
         "use_now_timestamp": True
@@ -633,14 +635,14 @@ SYNC_CONFIGS = {
         "table_name": "brain_intent",
         "airtable_table": "Intent",
         "columns": ["id", "name", "description", "airtable_record_id",
-                   "last_modified_time_ref", "created_at", "update_at", "live"]
+                   "created_at", "update_at", "live"]
     },
     "notion": {
         "table_name": "brain_notion",
         "airtable_table": "Notion",
         "columns": ["id", "name_fr", "name_en", "description", "rank", "live", 
                    "score", "level_from", "level_owned", "weightiness",
-                   "airtable_record_id", "last_modified_time_ref", 
+                   "airtable_record_id", 
                    "created_at", "update_at"]
     },
     "subtopic": {
@@ -649,7 +651,7 @@ SYNC_CONFIGS = {
         "columns": ["id", "name_fr", "name_en", "description_fr", "description_en", "boredom",
                    "video_cover_url", "icon_url",
                    "level_from", "level_to", "topics", "user_goal_ids", "matched_as_variant_ids",
-                   "airtable_record_id", "last_modified_time_ref",
+                   "airtable_record_id",
                    "created_at", "update_at", "live", "archived"],
         "timestamp_field": "LastContentSyncedAt",
         "use_now_timestamp": True
@@ -661,7 +663,7 @@ SYNC_CONFIGS = {
                    "mistake_ids", "all_matched_same_interaction_ids",
                    "all_matched_follow_interaction_ids", "all_matched_bonus_malus_ids",
                    "feedback_ids", "hint_ids",
-                   "airtable_record_id", "last_modified_time_ref",
+                   "airtable_record_id",
                    "created_at", "update_at", "live", "archived"],
         "timestamp_field": "LastContentSyncedAt",
         "use_now_timestamp": True
@@ -673,22 +675,15 @@ SYNC_CONFIGS = {
         # synced entities (inherited typo — semantically means "updated_at").
         # Preserved for consistency with the 15 other brain_* tables.
         "columns": ["id", "goal_id", "user_level", "position", "interaction_id",
-                   "airtable_record_id", "last_modified_time_ref",
+                   "airtable_record_id",
                    "created_at", "update_at", "live"]
     },
     "entity": {
         "table_name": "brain_entity",
         "airtable_table": "Entity",
-        "columns": ["id", "name", "description", "priority", 
-                   "created_at", "update_at", "airtable_record_id", 
-                   "last_modified_time_ref", "live"]
-    },
-    "bonus_malus": {
-        "table_name": "brain_bonus_malus",
-        "airtable_table": "Bonus-Malus",
-        "columns": ["id", "name_fr", "name_en", "description", "level_from", "level_to",
-                   "airtable_record_id", "last_modified_time_ref", 
-                   "created_at", "update_at", "live"]
+        "columns": ["id", "name", "description", "priority",
+                   "created_at", "update_at", "airtable_record_id",
+                   "live"]
     },
     "mistake": {
         "table_name": "brain_mistake",
@@ -697,7 +692,7 @@ SYNC_CONFIGS = {
             "id", "name_fr", "name_en", 
             "description_fr", "description_en",
             "type", "rule_code", "conditions",
-            "airtable_record_id", "last_modified_time_ref",
+            "airtable_record_id",
             "created_at", "update_at", "live", "archived"],
         "timestamp_field": "LastContentSyncedAt",
         "use_now_timestamp": True
@@ -706,7 +701,7 @@ SYNC_CONFIGS = {
         "table_name": "brain_hint",
         "airtable_table": "Hint",
         "columns": ["id", "name", "value", "description", "level_from", "level_to",
-                   "airtable_record_id", "last_modified_time_ref", 
+                   "airtable_record_id", 
                    "created_at", "update_at", "live"]
     },
     "interaction_type": {
@@ -714,34 +709,34 @@ SYNC_CONFIGS = {
         "airtable_table": "Type",
         "columns": ["id", "name", "boredom", "description", "session_mood_ids",
                    "answer_mode",
-                   "airtable_record_id", "last_modified_time_ref", 
+                   "airtable_record_id", 
                    "created_at", "update_at", "live"]
     },
     "combination": {
         "table_name": "brain_combination",
         "airtable_table": "Combination",
         "columns": ["id", "name", "boredom", "subtopic", "transcription", "intent",
-                   "airtable_record_id", "last_modified_time_ref", 
+                   "airtable_record_id", 
                    "created_at", "update_at", "live"]
     },
     "session_mood": {
         "table_name": "brain_session_mood",
         "airtable_table": "SessionMood",
         "columns": ["id", "name", "description",
-                   "airtable_record_id", "last_modified_time_ref", 
+                   "airtable_record_id", 
                    "created_at", "update_at", "live"]
     },
     "interest": {
         "table_name": "brain_interest",
         "airtable_table": "Interest",
         "columns": ["id", "name", "subtopic_ids",
-                   "airtable_record_id", "last_modified_time_ref", 
+                   "airtable_record_id", 
                    "created_at", "update_at", "live"]
     },
     "user_goal": {
         "table_name": "brain_user_goal",
         "airtable_table": "User Goal",
-        "columns": ["id", "name", "airtable_record_id", "last_modified_time_ref",
+        "columns": ["id", "name", "airtable_record_id",
                    "created_at", "update_at", "live"]
     },
     "bonus_malus": {
@@ -755,7 +750,7 @@ SYNC_CONFIGS = {
             "value",
             "priority",
             "conditions",
-            "airtable_record_id", "last_modified_time_ref", 
+            "airtable_record_id", 
             "created_at", "update_at", "live"
         ]
     }
@@ -763,25 +758,20 @@ SYNC_CONFIGS = {
 
 # Utility functions
 def convert_timestamps(entry_data: Dict) -> Dict:
-    """Convert timestamp fields from milliseconds to datetime"""
-    result = entry_data.copy()
-    if 'createdAt' in result:
-        result['created_at'] = datetime.utcfromtimestamp(result.pop('createdAt') / 1000)
-    if 'lastModifiedTimeRef' in result:
-        timestamp = result.pop('lastModifiedTimeRef')
-        result['last_modified_time_ref'] = timestamp
-        result['update_at'] = datetime.utcfromtimestamp(timestamp / 1000)  # ✅ Now matches your schema
-    return result
+    """Convert timestamp fields from milliseconds to datetime.
 
-def convert_timestamps(entry_data: Dict) -> Dict:
-    """Convert timestamp fields from milliseconds to datetime"""
+    lastModifiedTimeRef is deprecated (per-lifecycle sync timestamps replace it).
+    When present, it still drives update_at; when absent, update_at falls back to
+    the current server time. It is no longer written to last_modified_time_ref.
+    """
     result = entry_data.copy()
     if 'createdAt' in result:
         result['created_at'] = datetime.utcfromtimestamp(result.pop('createdAt') / 1000)
-    if 'lastModifiedTimeRef' in result:
-        timestamp = result.pop('lastModifiedTimeRef')
-        result['last_modified_time_ref'] = timestamp
-        result['update_at'] = datetime.utcfromtimestamp(timestamp / 1000)
+    last_modified = result.pop('lastModifiedTimeRef', None)
+    if last_modified is not None:
+        result['update_at'] = datetime.utcfromtimestamp(last_modified / 1000)
+    else:
+        result['update_at'] = datetime.utcnow()
     return result
 
 def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
@@ -958,7 +948,7 @@ async def generic_sync_webhook(entry: BaseEntry, entity_type: str, background_ta
         if config.get("use_now_timestamp", False):
             sync_timestamp = int(time.time() * 1000)
         else:
-            sync_timestamp = entry.lastModifiedTimeRef
+            sync_timestamp = entry.lastModifiedTimeRef or int(time.time() * 1000)
 
         background_tasks.add_task(
             background_airtable_update,
