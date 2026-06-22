@@ -258,7 +258,7 @@ session-adaptive/ namespace) — works, but inconsistent URL shape vs all other 
 Verify intentional when touching the answer path; may need alignment if API gateway or
 prefix routing is ever enforced.
 
-### R30 — Cycle/session boundary handling (Piece 1 FIXED / Piece 2 OPEN)
+### R30 — Cycle/session boundary handling (Piece 1 FIXED / Piece 2 PLUMBING DONE)
 Full-session simulator test exposed the cycle boundary stub. Split into two pieces:
 
 PIECE 1 — FIXED (iOS commit <fill hash>). advanceAdaptive's cycleComplete branch
@@ -269,14 +269,18 @@ interactionsCompletedInCycle, and loads the next cycle's first interaction. Sess
 complete still dismisses to HomeView (correct). Simulator-verified end-to-end: full
 session = 3 cycles x 7 interactions, both boundaries advance, completes to HomeView.
 
-PIECE 2 — OPEN (design + build). The intended UX has a feedback/summary screen between
-cycles ("quick feedback appears, next cycle loads behind it, user continues") and a
-complete-feedback screen at session end before returning to HomeView. Currently cycles
-advance directly with no feedback screen (functional but abrupt). Data exists
-(CycleSummary/SessionSummary structs decoded into lastCycleSummary/lastSessionSummary;
-onFeedbackContinue() already routes to advanceAdaptive for adaptive mode) but no
-adaptive cycle-feedback VIEW is built. This is the next work item — design-heavy
-(what the feedback screen shows/feels like), not a patch.
+PIECE 2 — PLUMBING DONE (real design pending). The opening + closing cycle screens and
+the closing-session screen are built as placeholders with Continue buttons, verified
+end-to-end. The adaptiveScreen state machine (none/closingCycle/openingCycle/closingSession)
+drives all three boundary paths: session start → opening-cycle → cycle 1; between cycles →
+closing-cycle → opening-cycle → next cycle; session end → closing-cycle → closing-session →
+dismiss. Disambiguated by pendingNextCycle (between-cycle) and pendingFirstBrainInteractionId
+(cycle-1 start). The intended UX has a feedback/summary screen between cycles ("quick
+feedback appears, next cycle loads behind it, user continues") and a complete-feedback screen
+at session end before returning to HomeView. Remaining: real design + surfacing
+CycleSummary/SessionSummary data (currently decoded into lastCycleSummary/lastSessionSummary
+and available, but not displayed on the placeholder screens). Design-heavy (what the feedback
+screen shows/feels like), not a patch.
 
 ### R31 — Adaptive interaction selection (RE-CHARACTERIZED — mostly BUILT, not random)
 CORRECTION: R31 was previously logged as "selection is placeholder/random — core engine
@@ -335,7 +339,7 @@ to advance toward newer content/subtopics across sessions as boredom rises. This
 boredom→novelty / sort-direction question (see test_selection_MANUAL.md "Check 2") — the real
 adaptiveness question, still open. Likely the highest-value next investigation.
 
-### R32 — Combination "transcription" axis keys on interaction_id, not transcription (OPEN — core selection correctness)
+### R32 — Combination "transcription" axis keys on interaction_id, not transcription (FIXED 2026-06-17 — validation pending)
 DESIGN INTENT (confirmed by Rémi): the combination system's middle axis tracks whether the
 user has seen the actual SPOKEN WORDS before — transcription_fr — NOT the interaction id. The
 same transcription (e.g. "comment ça va?") deliberately exists as multiple distinct
@@ -355,21 +359,28 @@ UNREACHABLE under current code (can't have a seen interaction_id without seeing 
 but you CAN have a seen transcription without seeing the subtopic). Combination 2 also
 affected. Combinations 1, 3, 5 unaffected and testable as-is.
 
-FIX (scoped, deferred — own focused pass):
-  - Add SessionContext.seen_transcriptions: Set[str] = recent transcription_fr strings the
-    user encountered (4-day window, mirroring current interaction window). Loaded by joining
-    session_interaction -> brain_interaction, collecting transcription_fr.
-  - get_combination transcription_status must check candidate's transcription_fr against
-    seen_transcriptions, NOT interaction_id against seen_interaction_ids.
-  - "Same transcription" = EXACT transcription_fr string match (Rémi's decision: no
-    normalization, grouping, or punctuation-insensitivity).
-  - Verify whether seen_interaction_ids is still needed elsewhere (e.g. recent-repeat
-    avoidance) before removing.
+FIXED (2026-06-17), in 3 chunks (additive plumbing → behavior change → mirrored tools):
+  - InteractionCandidate now carries transcription_fr (models.py); search_interactions SELECTs
+    it through the CTE + final query and populates each candidate (interaction_search.py).
+  - SessionContext.seen_transcriptions: Set[str] added — recent transcription_fr strings the
+    user encountered (4-day window, mirroring the interaction window), loaded by joining
+    session_interaction -> brain_interaction and collecting transcription_fr (exact string match;
+    Rémi's decision: no normalization, grouping, or punctuation-insensitivity).
+  - get_combination signature now takes transcription_fr; transcription_status checks
+    transcription_fr against seen_transcriptions (NOT interaction_id against seen_interaction_ids).
+    The lone caller (interaction_search.py) passes candidate.transcription_fr.
+  - Mirrored diagnostic tools updated to match (test_selection.py prints seen_transcriptions and
+    derives the transcription axis from it; diagnose_search.py header notes R32 — it has no
+    combination logic of its own).
+  - seen_interaction_ids RETAINED in the dataclass and load() pending a check for other consumers
+    (e.g. recent-repeat avoidance) — removal is a separate later cleanup, not part of this fix.
 
-TESTING IMPACT: combinations 2 & 4 cannot be validated against current code regardless of
-content volume (code/design mismatch, not content gap). Validate 1/3/5 now; 2/4 after fix.
+VALIDATION STILL PENDING: combination 4 (the language-TRANSFER case) needs a crafted state — a
+fresh user who saw transcription X via one subtopic, then tested against an UNSEEN subtopic that
+shares transcription X — not yet validated on-device. Combinations 1/3/5 already validated
+(see R31 note, 2026-06-16); combination 2 now reachable but also wants a targeted check.
 CONTENT NOTE: deliberate transcription reuse across subtopics is what makes combinations 2 & 4
-reachable/testable post-fix — worth tracking which transcriptions repeat where.
+reachable/testable — worth tracking which transcriptions repeat where.
 
 ### R33 — user_id stored case-sensitively with inconsistent case (OPEN — data integrity, silently breaks seen/new)
 SYMPTOM (caught live this session): a session played in-app was stored with user_id
@@ -485,3 +496,58 @@ binding constraint is named. Mirrors interaction_search.py as of 2026-06-17.
 ## 7. Recommended next concrete step
 
 Start **Chunk 0**: the surgical wiring fix plus its embedded discovery (does CRUD `submit-answer`/scoring depend on the CRUD `start-cycle`?). It's low-risk, unblocks everything, and its discovery answer may reorder chunk 6. Once chunk 0 is green, proceed to Chunk 1 — and stop there to reassess, since it's the first real run of cold adaptive code.
+
+---
+
+## 8. Stage 5 Recipe: Modernizing a brain_* table
+
+Reusable process for bringing a `brain_*` table up to the modern sync standard (per-lifecycle
+status/timestamps, honest field strictness, no drift). Referenced from the deferred-work items
+above ("Stage 5 recipe", "Stage 1-3 from the recipe") and from R31.
+
+### Pre-work (before any edits)
+1. Discovery: read the current Pydantic model, SYNC_CONFIGS entry, Airtable field list, and
+   existing sync scripts. Document what's there.
+2. Identify what fields the app actually consumes vs. what's authoring-only.
+3. Identify field type drift (numeric where integer should be, etc.).
+4. Identify stale validators (Optional fields with strict validators).
+
+### Design decisions per table
+1. **Media lifecycles**: how many distinct media types? (video, audio, image, none). Each gets
+   its own VideoStatus / AudioStatus / etc., own sync timestamp, own modtime formula.
+2. **Field strictness**: which fields are functionally required vs. polish? Functionally
+   required → strict Pydantic. Polish → lenient.
+3. **IsTest**: needed for this table? (yes if media-bypass is useful, probably no if no media).
+4. **Cleanup scope**: which existing fields are dead? Renames needed?
+
+### Stage 0: Cleanup
+- Drop dead fields after consumer audit
+- Rename for consistency (cross-table naming patterns)
+- Drop deprecated sync helpers (like `Look up (X)` fields)
+
+### Stage 1: Add new fields
+- RecordState (always)
+- IsTest (when media exists)
+- One LastXSyncedAt per lifecycle
+- One XLastModified formula per lifecycle
+
+### Stage 2: Status formulas
+- One sub-status per lifecycle
+- Composite Status combining all sub-statuses with priority order
+
+### Stage 3: Backend wiring
+- Add timestamp_field + use_now_timestamp to SYNC_CONFIGS
+- Fix stale validators (relax or tighten per table decisions)
+- Update field_mappings and column lists for any new fields
+- Add archived boolean column
+
+### Stage 4: Script updates
+- Update content sync script
+- Split media uploads into per-lifecycle buttons
+- Add pre-flight required-fields check if Pydantic is strict
+- Apply DEBUG_MODE pattern for clean console output
+
+### Stage 5: Test
+- End-to-end sync verification per lifecycle
+- TablePlus query to verify column values
+- Status transitions through expected states

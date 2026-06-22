@@ -22,7 +22,7 @@ from session_calculations import (
     get_seen_subtopics,
     get_last_session_data
 )
-from notion_management import process_notions_for_session_start
+from notion_management import process_notions_for_session_start, populate_intents_from_seen
 
 logger = logging.getLogger(__name__)
 
@@ -256,7 +256,10 @@ async def initialize_early_user(
     
     # K. List of intents seen
     seen_intents = await get_seen_intents(user_id, db_pool)
-    
+
+    # §7: upsert session_intents from the seen set (placeholder scores, pending §8).
+    await populate_intents_from_seen(user_id, seen_intents, db_pool)
+
     # L. List of subtopics seen
     seen_subtopics = await get_seen_subtopics(user_id, db_pool)
     
@@ -541,7 +544,10 @@ async def initialize_active_user(
     
     # K. List of intents seen (last 7 days)
     seen_intents = await get_seen_intents(user_id, db_pool)
-    
+
+    # §7: upsert session_intents from the seen set (placeholder scores, pending §8).
+    await populate_intents_from_seen(user_id, seen_intents, db_pool)
+
     # L. List of subtopics seen (last 7 days)
     seen_subtopics = await get_seen_subtopics(user_id, db_pool)
     

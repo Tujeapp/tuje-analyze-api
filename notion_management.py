@@ -529,6 +529,56 @@ async def initialize_notions_for_new_user(
         return inserted
 
 
+async def populate_intents_from_seen(
+    user_id: str,
+    seen_intent_ids: list,
+    db_pool,
+) -> int:
+    """
+    Upsert session_intents rows from the user's recently-seen intents.
+
+    Per TuJe_Session_RampUp_and_Cycle_Goal_Logic.md §7: session_intents rows
+    are created/updated as the user encounters intents. We do this at session
+    setup (mirroring how all session_notion maintenance happens at setup),
+    upserting the last-7-days seen-intent set: new intents get a row, existing
+    intents get their updated_at refreshed (which keeps them out of the §7
+    30-day prune).
+
+    Scores are PLACEHOLDERS (intent_score = 0, intent_priority_score = 0) per
+    Option A — the real formulas are deferred to §8 (vocabulary design). The
+    rows function for selection ordering but do not yet prioritise intelligently.
+
+    Returns the number of intents upserted.
+    """
+    if not seen_intent_ids:
+        return 0
+
+    upserted = 0
+    async with db_pool.acquire() as conn:
+        for intent_id in seen_intent_ids:
+            if not intent_id:
+                continue
+            await conn.execute(
+                """
+                INSERT INTO session_intents (
+                    user_id, intent_id, intent_score, intent_priority_score,
+                    intent_introduction_date, created_at, updated_at
+                )
+                VALUES ($1, $2, 0.0, 0.0, NOW(), NOW(), NOW())
+                ON CONFLICT (user_id, intent_id)
+                DO UPDATE SET updated_at = NOW()
+                """,
+                user_id, intent_id,
+            )
+            upserted += 1
+
+    logger.info(
+        f"Upserted {upserted} session_intents rows for user {user_id} "
+        f"(placeholder scores, pending §8)."
+    )
+    return upserted
+
+
 # ============================================================================
 # HELPER: Full Notion Processing Pipeline for Session Start
 # ============================================================================

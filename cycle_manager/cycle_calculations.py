@@ -177,14 +177,27 @@ async def calculate_cycle_goal(
     """
     # First-regular-session override.
     async with db_pool.acquire() as conn:
-        session_rank = await conn.fetchval(
-            "SELECT session_rank FROM session WHERE id = $1",
+        session_row = await conn.fetchrow(
+            "SELECT session_rank, user_id FROM session WHERE id = $1",
             session_id,
         )
+    session_rank = session_row["session_rank"] if session_row else None
+    user_id = session_row["user_id"] if session_row else None
 
     if session_rank == 1:
         logger.debug(f"Cycle {cycle_number} goal: story (session_rank=1, all cycles forced to story)")
         return "story"
+
+    # §6 empty-intent exception: if the user has no tracked intents yet,
+    # "intent" cannot be a cycle goal — choose only story/notion.
+    # (session_intents is populated as the user completes intent-carrying
+    # interactions; a brand-new or long-inactive user has none.)
+    async with db_pool.acquire() as conn:
+        intent_count = await conn.fetchval(
+            "SELECT COUNT(*) FROM session_intents WHERE user_id = $1",
+            user_id,
+        )
+    intents_available = (intent_count or 0) > 0
 
     # Rotation pattern for session_rank >= 2 (placeholder; full algorithm
     # in §6 of the ramp-up doc is deferred).
@@ -198,6 +211,12 @@ async def calculate_cycle_goal(
         7: "story",
     }
     goal = rotation_pattern.get(cycle_number, "story")
+    if goal == "intent" and not intents_available:
+        logger.debug(
+            f"Cycle {cycle_number}: rotation said 'intent' but session_intents is "
+            f"empty for user {user_id} → falling back to 'story' (§6 exception)."
+        )
+        goal = "story"
     logger.debug(f"Cycle {cycle_number} goal: {goal} (session_rank={session_rank})")
     return goal
 
