@@ -54,12 +54,65 @@ when warranted.
   a good answer should produce). Using **more complex** notions than expected also
   scores 1.
 
+### Passive / active score — confidence-weighted (LOCKED)
+
+`passive_score` and `active_score` measure how well the user handles a notion this
+session, **dampened by how much evidence there is** — a perfect 2/2 is not trusted
+like a 13/14, because two observations could be luck. This is confidence-weighted
+(shrinkage) scoring.
+
+**Counts tracked per `session_notion` row (per side):**
+- `passive_mentioned_total` (T) — starts at 0; +1 each time an interaction's
+  `interaction_notion` contains this notion.
+- `passive_mentioned_succeed` (S) — starts at 0; +1 each time interaction analysis
+  says the user understood it.
+- (active side identical: `active_mentioned_total`, `active_mentioned_succeed`, where
+  "total" = times the notion was warranted per `expected_notions`, "succeed" = times
+  the user produced it — producing a *more complex* notion than expected also counts.)
+
+**The formula (Option 1 — shrinkage toward a baseline):**
+
+```
+passive_score = (S + k·m) / (T + k)        # with m = 0  →  S / (T + k)
+active_score  = (S_active + k·m) / (T_active + k)
+```
+
+- **m = 0** — the baseline a score drifts toward with little evidence ("assume
+  not-yet-understood until proven"). Pedagogically honest "prove it" stance.
+- **k = 7** — evidence-strength knob: how many observations before a high ratio is
+  trusted. Chosen because a user works ~5–10 notions at a level across 21
+  interactions/session, so a notion recurs several times; k=7 dampens low-evidence
+  scores without over-penalising normal counts. **Tunable** once real session data
+  exists.
+- Computed at **session end** (moment 3), rounded to 2.
+
+**Behaviour (why this is right):** few mentions pull a high ratio down (2/2 → 0.22 at
+k=7); many mentions let it settle near the true ratio (13/14 → 0.62). A notion needs
+*both* good performance *and* enough exposure to score high.
+
+**Important property — scores compress toward the low end.** With m=0 and k=7, even a
+perfect 7/7 only reaches 0.50; high scores require heavy exposure. So when these feed
+priority/the list, what matters is notions' scores **relative to each other**, not
+absolute values — a 0.50 is "perfect, solid evidence," not "mediocre." If higher
+absolute scores are ever wanted, raise m above 0 (e.g. m=0.5 = "assume neutral until
+evidenced").
+
+**Feedback-UI caveat:** because the score conflates performance and evidence, the
+*user-facing feedback* should show the **raw ratio (S/T) and the evidence (T)
+separately** — a user seeing "0.22" on a notion they got 2/2 on would be confused.
+The dampened score is for the *engine* (priority/list); the breakdown is for the user.
+
 ### Rates (unchanged definitions, now fed by the above)
 
 - **Notion passive rate** = (this notion's passive mentions ÷ all notions' passive
   mentions), across all sessions in the last 7 days.
 - **Notion active rate** = (this notion's active mentions ÷ all notions' active
   mentions), across all sessions in the last 7 days.
+
+> **Note — passive/active SCORE vs RATE.** The *score* (above) = how well the user
+> handles the notion this session, confidence-weighted. The *rate* = how often the
+> notion appeared relative to all notions over 7 days. Different things. (See the
+> critical-path note in §5.)
 
 ---
 
@@ -128,6 +181,23 @@ interactions total, once-per-subtopic ordering — live in *Details of logic of 
 and are built **on top of** this model. They are out of scope for this document, which
 defines the mastery model the search consumes.)
 
+### Critical path vs. feedback layer
+
+Not everything in this model gates the notion-goal cycle. Two tiers:
+
+- **Critical path (needed to build the list → the cycle):** notion score, priority
+  score, complexity score, and the passive/active **rate** (7-day relative frequency,
+  which feeds priority's coefficient B and complexity). These determine *which notions
+  get drilled*.
+- **Feedback layer (NOT needed for the list):** the `passive_notion_understood` /
+  `active_notion_mentioned` lists and any per-notion quality breakdown shown to the
+  user. These are the "rational mirror" for user feedback and can be built as a
+  separate workstream, later, without blocking the notion-goal cycle.
+
+The passive/active **score** (the confidence-weighted §3 value) sits between: it feeds
+the notion score (critical path) but is *also* surfaced (with its raw-ratio/evidence
+breakdown) in feedback. Build it on the critical-path side; expose it in feedback later.
+
 ---
 
 ## 6. What exists vs. what this changes (build gap)
@@ -170,9 +240,11 @@ defines the mastery model the search consumes.)
 4. **The decay model's fate** — current code decays score at session start. Does the
    new passive/active-driven score *replace* decay, or do they coexist (decay between
    sessions, passive/active within)?
-5. **Score formula** — how exactly do passive-understood-score and
-   active-mentioned-score combine into notion score? (The mastery-needs-both principle
-   is clear; the precise combination formula is not yet specified here.)
+5. **Score formula** — RESOLVED for passive/active score: confidence-weighted
+   shrinkage `(S + k·m)/(T + k)`, m=0, k=7 (see §3). **Still open:** how the
+   passive_score and active_score (and the rates) combine into the overall **notion
+   score** — the mastery-needs-both principle is clear, the exact combination is not
+   yet specified. And how this relates to the existing decay model (§7.4).
 
 ---
 
