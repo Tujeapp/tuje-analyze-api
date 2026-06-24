@@ -288,6 +288,7 @@ class InteractionEntry(BaseEntry):
     expectedEntitiesIds: Optional[List[str]] = None
     expectedVocabIds: Optional[List[str]] = None
     expectedNotionIds: Optional[List[str]] = None
+    interactionNotion: Optional[List[str]] = None
     interactionVocabIds: Optional[List[str]] = None
     hintIds: Optional[List[str]] = None
     interactionTypeId: Optional[str] = None
@@ -331,7 +332,7 @@ class InteractionEntry(BaseEntry):
         return v
     
     @validator('hintIds', 'expectedEntitiesIds', 'expectedVocabIds',
-               'expectedNotionIds', 'interactionVocabIds', 'intents')
+               'expectedNotionIds', 'interactionNotion', 'interactionVocabIds', 'intents')
     def validate_optional_arrays(cls, v):
         # Allow None or empty arrays
         if v is None:
@@ -608,7 +609,7 @@ SYNC_CONFIGS = {
         "columns": [
             "id", "transcription_fr", "transcription_en", "subtopic_id",
             "intents", "expected_entities_id", "expected_vocab_id",
-            "expected_notion_id", "interaction_vocab_id",
+            "expected_notion_id", "interaction_notion", "interaction_vocab_id",
             "hint_ids", "interaction_type_id",
             "interaction_optimum_level", "level_from", "boredom",
             "airtable_record_id",
@@ -789,6 +790,7 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "entityTypeId": "entity_type_id",
         "entityPriority": "entity_priority",
         "expectedNotionIds": "expected_notion_id",
+        "interactionNotion": "interaction_notion",
         "expectedIntentIds": "expected_intent_id",
         "groupVocabIds": "group_vocab_ids",
         "matchedReferralVocabIds": "matched_referral_vocab_ids",
@@ -899,7 +901,7 @@ async def sync_entity_to_database(entry_data: Dict, config: Dict) -> None:
             for col in columns:
                 value = entry_data.get(col)
                 # CHANGE 1: Add 'expected_intent_id' to this list (just add it to the existing list)
-                if col in ['intents', 'expected_entities_id', 'expected_vocab_id', 'expected_notion_id', 'expected_intent_id', 'interaction_vocab_id', 'session_mood_ids', 'subtopic_ids', 'hint_ids', 'topics', 'user_goal_ids', 'matched_as_variant_ids', 'mistake_ids', 'vocab_ids', 'group_vocab_ids', 'matched_referral_vocab_ids', 'gender', 'plural', 'all_matched_same_interaction_ids', 'all_matched_follow_interaction_ids', 'all_matched_bonus_malus_ids', 'feedback_ids'] and isinstance(value, list):
+                if col in ['intents', 'expected_entities_id', 'expected_vocab_id', 'expected_notion_id', 'interaction_notion', 'expected_intent_id', 'interaction_vocab_id', 'session_mood_ids', 'subtopic_ids', 'hint_ids', 'topics', 'user_goal_ids', 'matched_as_variant_ids', 'mistake_ids', 'vocab_ids', 'group_vocab_ids', 'matched_referral_vocab_ids', 'gender', 'plural', 'all_matched_same_interaction_ids', 'all_matched_follow_interaction_ids', 'all_matched_bonus_malus_ids', 'feedback_ids'] and isinstance(value, list):
                     values.append(value)  # PostgreSQL will handle the array
                 else:
                     values.append(value)
@@ -918,6 +920,7 @@ async def sync_entity_to_database(entry_data: Dict, config: Dict) -> None:
                            f"expected_entities_id={entry_data.get('expected_entities_id')}, "
                            f"expected_vocab_id={entry_data.get('expected_vocab_id')}, "
                            f"expected_notion_id={entry_data.get('expected_notion_id')}, "
+                           f"interaction_notion={entry_data.get('interaction_notion')}, "
                            f"interaction_vocab_id={entry_data.get('interaction_vocab_id')}")
 
 # Background task for Airtable updates
