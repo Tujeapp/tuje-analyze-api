@@ -76,25 +76,89 @@ Two distinct write events on session_notion:
 
 ## Build pieces (execute in order, verify each)
 
-### Piece 1 — Schema (TablePlus)
-- `ALTER TABLE session_notion ADD COLUMN session_id varchar;` (match session id type)
-- Drop `unique_user_notion`; recreate as `UNIQUE (user_id, notion_id, session_id)`.
-- Update the seed's `ON CONFLICT (user_id, notion_id)` (notion_management.py L519) to
-  `(user_id, notion_id, session_id)`, and add session_id to that INSERT (L514-518).
-- **Transition note:** existing rows have no session_id. Either backfill, or treat as a
-  clean start (the carry-forward only works forward from the first session that writes
-  session-stamped rows). Decide at build time.
+### Piece 1 — Schema (TablePlus) — DONE
+Applied (TablePlus, not in a migration file — recorded here per R21):
+```sql
+ALTER TABLE session_notion ADD COLUMN session_id varchar;   -- matches session.id (varchar)
+DELETE FROM session_notion;                                  -- clean start (was 5 obsolete rows, 1 user)
+ALTER TABLE session_notion DROP CONSTRAINT unique_user_notion;
+ALTER TABLE session_notion ADD CONSTRAINT unique_user_notion_session
+    UNIQUE (user_id, notion_id, session_id);
+```
+Verified: only `unique_user_notion_session` remains; table empty (0 rows); `session_id
+varchar` present.
 
-### Piece 2 — Calculate the carried-forward list (in memory, pure)
-- New function: read the **previous session's** session_notion rows (0 < score < 1),
-  apply the decay (reuse `_calculate_coefficient_a` / `_calculate_coefficient_b`),
-  return the carried-forward, decayed notion list. **No writes. No session_id needed.**
-- "Previous session's rows" = rows whose session_id = the user's last completed session.
-  (The decay fn already finds the last completed session, L64-75, for coefficient data —
-  reuse that to know which session's rows to carry forward.)
-- This *is* "update the list." It can drive the cycle immediately.
-- Likely lives on / near SessionContext so both cycle-building and the persist hook can
-  reach it.
+**Deferred out of Piece 1 (the seed's session_id):** `initialize_notions_for_new_user`
+(notion_management.py L465, called from the orchestrator L626) writes session_notion
+rows but has NO session_id in scope (same timing problem as the decay). Its `ON CONFLICT
+(user_id, notion_id)` (L519) and INSERT still need updating — but how it gets session_id
+is the same question as Piece 2/3, so it's handled there, not in the schema step. Until
+resolved, the seed would write NULL-session_id rows (unreadable by carry-forward).
+
+**Consequence:** schema is ready but NOTHING writes valid session-stamped rows yet
+(seed deferred, persist not built). Expected for a foundation piece.
+
+**Follow-up:** once all writers stamp session_id, consider `ALTER ... session_id SET NOT
+NULL` as a safety net (Postgres treats NULLs as distinct in unique constraints, so NULL
+rows wouldn't dedupe).
+
+### Piece 2 — Calculate the carried-forward list — DISCOVERY DONE, DECISION PENDING
+
+**The assumption that didn't survive discovery:** the plan said "calculate the list in
+memory, pure function, no writes." But the existing session-start pipeline
+(`process_notions_for_session_start`, L586-647) is **write-then-read DB-coupled**:
+1. `update_notion_rates_on_session_start` — UPDATEs notion_rate in place.
+2. `calculate_notion_priority_rates` — reads rate, WRITES notion_priority_rate.
+3. `calculate_notion_complexity_rates` — reads, WRITES notion_complexity_rate.
+4. `get_top_notions_list` — reads all three back, sorts, returns.
+So "calculate the *list* in memory" means either reimplementing priority/complexity
+in-memory (duplication, drift risk) or restructuring the pipeline.
+
+**The core tension (three constraints that pull against each other):**
+- The notion **list is needed BEFORE cycle 1** (a rank-2 session's cycle 1 can be a
+  notion cycle, needing the list to select interactions).
+- **session_id is only reliably available AT cycle 1** (`start_new_cycle`) — the reason
+  for the calculate/persist decouple.
+- Want to **avoid reimplementing** priority/complexity (reuse existing functions) and
+  **avoid the invasive session-init reorder**.
+
+**Three approaches considered:**
+1. **In-memory everything** — new function computes decay + priority + complexity in
+   memory, returns sorted list, writes nothing; persist at cycle 1. *Keeps decouple
+   pure, but duplicates priority/complexity logic.*
+2. **Persist early** — write session-stamped rows at session start, reuse existing
+   functions with a session_id filter. *No duplication, but needs session_id at session
+   start (the timing problem).*
+3. **Decay-in-memory, then reuse pipeline after persist** — Piece 2 = decay only
+   (in-memory, small); persist at cycle 1; then existing priority/complexity/list run on
+   persisted rows. *Smallest Piece 2, but priority/list then compute AFTER cycle 1 —
+   too late for cycle 1's own selection. Circular.*
+
+**Decision pending** — pick deliberately next session; the choice shapes Pieces 2-4.
+
+### Piece 2 (revised direction) — REDESIGN THE SESSION-START PIPELINE
+
+Rather than contort to avoid touching the pipeline, the likely right move is to
+**deliberately redesign the pre-cycle-1 phase** so it computes EVERYTHING cycle 1 needs,
+in the correct order, before cycle 1 runs. The notion list joins that set — not as a
+bolt-on, but as one of the things the session-start phase produces.
+
+**Include `modulo` in this:** `modulo` (seen at session_init.py L72, `modulo = 0.5`) is
+one of the session-start computed values cycle 1 depends on. The redesigned pre-cycle-1
+phase must compute `modulo` (and the other pre-cycle values: streaks, boredom, mood,
+level direction, ...) **before the first cycle**, alongside the notion list — so that by
+the time cycle 1 is built, everything is ready in one coherent preparation step.
+
+So Piece 2 becomes: **"design the session-start / pre-cycle-1 phase to compute the notion
+list + modulo + all other pre-cycle-1 values in the right order, then build cycle 1 from
+them."** This resolves the tension by owning the pipeline structure rather than working
+around it — but it's a more deliberate redesign, hence banked for a fresh, focused
+session.
+
+Open within this: where session_id comes from for persistence (still the decouple —
+calculate the list/modulo without session_id, persist session-stamped rows at cycle 1);
+how the existing priority/complexity functions are reused or refactored; the order of the
+pre-cycle-1 computations.
 
 ### Piece 3 — Persist at cycle 1
 - In `start_new_cycle`, when `cycle_number == 1`, write the carried-forward rows to
