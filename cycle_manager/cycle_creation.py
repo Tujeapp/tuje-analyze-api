@@ -93,7 +93,20 @@ async def start_new_cycle(
             interaction_number, status, started_at
         ) VALUES ($1, $2, $3, $4, 1, 'active', NOW())
     """, first_interaction_id, session_id, cycle_id, ordered_ids[0])
-    
+
+    # Cycle-1 backfill (NULL-marker notion model): the carry-forward / seed wrote this
+    # session's notion rows with session_id NULL at session start (session_id did not
+    # exist yet). Now that cycle 1 confirms the session is live, stamp those NULL rows
+    # with the real session_id so they become this session's permanent history — which
+    # next session's carry-forward reads as the "previous session". Runs once per session.
+    if cycle_number == 1:
+        backfilled = await db_pool.execute("""
+            UPDATE session_notion
+            SET session_id = $1, updated_at = NOW()
+            WHERE user_id = $2 AND session_id IS NULL
+        """, session_id, context.user_id)
+        logger.info(f"Cycle-1 notion backfill: stamped NULL-session rows with {session_id} for user {context.user_id} ({backfilled})")
+
     logger.info(f"✅ Cycle {cycle_number} started successfully")
     
     return {
