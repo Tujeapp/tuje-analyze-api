@@ -1,8 +1,64 @@
 # TuJe — Notion List Build Plan (carry-forward, decoupled calculate/persist)
 
-**Status:** Build plan, ready to execute. Companion to `TuJe_Notion_Model_Redesign.md`
-(the model spec). This doc is the *how-to-build-the-list* plan, worked out through live
-discovery. Not yet started.
+**Status:** PIECE 2 COMPLETE — all 6 steps built and verified (see status block below).
+Companion to `TuJe_Notion_Model_Redesign.md` (the model) and `NOTION_TESTING.md` (the
+test tools). The NULL-marker approach replaced the in-memory decouple (a user can have
+only one open session, so a session_notion row with session_id NULL = the about-to-start
+session's row; backfilled at cycle 1).
+
+**Goal:** get the **list of notions** working so a notion-goal cycle can be set. DONE —
+the session-start notion pipeline produces a correct, history-protected list end-to-end.
+
+---
+
+## STATUS BLOCK (Piece 2 — all steps verified)
+
+- **Step 1 — orphan cleanup** DONE/verified. process_notions_for_session_start top:
+  DELETE session_notion WHERE user_id AND session_id IS NULL (clears stale NULLs before
+  writes; protects history; makes NULL marker reliable).
+- **Step 2 — carry-forward-new-rows** DONE/verified. update_notion_rates_on_session_start
+  reads previous session (highest session_rank, completed), decays, INSERTs new
+  session_id-NULL rows + carried introduction_date + reset counts; history preserved
+  (0.50->0.15, 0.30->0.09 on real data).
+- **Step 3 — priority/complexity scoping** DONE/verified. Both functions scope SELECT
+  and UPDATE to session_id IS NULL — compute on current rows only, history untouched
+  (proven via sentinel values 0.99/0.88).
+- **Step 4 — list scoping** DONE/verified. get_top_notions_list scopes to
+  session_id IS NULL — returns only current notions, sorted priority desc, complexity
+  desc; no history leak.
+- **Step 5 — cycle-1 backfill** DONE/verified. start_new_cycle (cycle_number==1):
+  UPDATE session_notion SET session_id=<this session> WHERE user_id AND session_id IS
+  NULL -> NULL rows become permanent history. Closes the lifecycle loop.
+- **Step 6 — seed NULL-marker** DONE/verified. initialize_notions_for_new_user writes
+  session_id NULL + dead ON CONFLICT removed (guard + orphan-cleanup prevent duplicate
+  seeding). Seeds 5 score-0 NULL rows; guard skips re-seed.
+
+**Test tools:** test_notion_carryforward.py (steps 2+3+4), test_notion_seed.py (step 6).
+See NOTION_TESTING.md.
+
+## REMAINING (post-Piece-2 roadmap)
+
+1. **Full real-session integration run** — the 6 steps are UNIT-verified, not yet
+   exercised together in one live session. Start a real session, reach cycle 1, confirm
+   NULL rows flip to the session_id at cycle 1, and a second session reads them as the
+   previous session. The natural final validation.
+2. **§8 inverted Coefficient B** — decay currently uses the OLD buckets (observed steep:
+   0.50->0.15). Implement the inverted/recalibrated buckets from the redesign doc §8,
+   then validate on real data. (Also the passive/active rate->score rename +
+   confidence-weighted formula, deferred from this build per Option 1.)
+3. **Double-session guard** — the NULL-marker rests on one-open-session, currently
+   unenforced. Orphan-cleanup protects Piece 2 meanwhile; a real guard is its own task.
+4. **Moment 2 — per-interaction tracking** — increment passive/active counts during the
+   session (passive buildable now via interaction_notion; active needs answer-notion
+   detail). This raises seed rows above score 0 so they enter the list.
+5. **Piece 4 — notion-goal cycle SEARCH** — the list is built but nothing consumes it for
+   cycle selection yet. Build interaction_search_notion.py (separate file, story
+   untouched) that takes the top notion(s) and finds interactions; once-per-subtopic
+   ordering. Read LIVE interaction_search.py (project-knowledge copy is stale).
+
+---
+
+## (Original plan detail below — retained for reference)
 
 **Goal:** get the **list of notions** working so a notion-goal cycle can be set —
 without the invasive session-init reordering the naive approach would require.
