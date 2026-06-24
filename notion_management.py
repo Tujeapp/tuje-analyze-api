@@ -474,6 +474,10 @@ async def initialize_notions_for_new_user(
     not yet practiced). This is the seed that gives the second regular
     session its first readable notion history.
 
+    Rows are written with session_id = NULL (NULL-marker model) — the cycle-1
+    backfill in start_new_cycle stamps them with the real session_id once the
+    session is live.
+
     There is no "owned" pre-seeding for notions below user_level — the
     notion-mastery model in the doc has no such concept.
 
@@ -510,11 +514,10 @@ async def initialize_notions_for_new_user(
             await conn.execute(
                 """
                 INSERT INTO session_notion (
-                    user_id, notion_id, notion_rate,
+                    user_id, notion_id, session_id, notion_rate,
                     notion_introduction_date, created_at, updated_at
                 )
-                VALUES ($1, $2, 0.0, NOW(), NOW(), NOW())
-                ON CONFLICT (user_id, notion_id) DO NOTHING
+                VALUES ($1, $2, NULL, 0.0, NOW(), NOW(), NOW())
                 """,
                 user_id, row["id"],
             )
