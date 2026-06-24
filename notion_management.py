@@ -25,72 +25,51 @@ async def update_notion_rates_on_session_start(
     db_pool: asyncpg.Pool
 ) -> int:
     """
-    Update notion rates at session start (decay formula)
-    
-    Documentation: "Every time a user starts a new session (before first cycle),
-    update notions with rate between 0 and 1"
-    
+    Carry forward notion rates at session start (NULL-marker model).
+
+    Reads the previous session's carryable rows (0 < rate < 1), applies the decay
+    formula, and INSERTs NEW session_notion rows for the about-to-start session with
+    session_id = NULL (backfilled at cycle 1). Old rows are left untouched (history).
+    Carries notion_id + notion_introduction_date forward; resets per-session mentioned
+    counts to 0. "Previous session" = the user's completed session with the highest
+    session_rank. First regular session (no previous completed session) returns 0.
+
     Formula: new_rate = last_rate - (last_rate × (coefficient_A + coefficient_B))
-    
-    Pre-conditions (from docs):
-    - Only update notions with rate > 0 AND rate < 1
-    - If first session (no notions in session_notion), skip
-    
+
     Args:
         user_id: User ID
         streak7: 7-day streak rate
         streak30: 30-day streak rate
         session_mood: Selected session mood
         db_pool: Database connection pool
-    
+
     Returns:
-        Number of notions updated
+        Number of carry-forward rows created
     """
     async with db_pool.acquire() as conn:
-        # Check if user has any notions to update
-        notion_count = await conn.fetchval("""
-            SELECT COUNT(*) 
-            FROM session_notion 
-            WHERE user_id = $1 
-            AND notion_rate > 0 
-            AND notion_rate < 1
-        """, user_id)
-        
-        if notion_count == 0:
-            logger.info(f"No notions to decay for user {user_id} (first session or all complete)")
-            return 0
-        
-        # Get last session data for coefficient A calculation
+        # Find the previous session = highest session_rank, completed.
+        # Select its id (to match its rows) + the data Coefficient A needs.
         last_session = await conn.fetchrow("""
-            SELECT 
+            SELECT
+                id,
                 session_level_direction,
                 session_score,
                 session_nbr_cycle,
                 completed_at
             FROM session
-            WHERE user_id = $1 
+            WHERE user_id = $1
             AND status = 'completed'
-            ORDER BY completed_at DESC
+            ORDER BY session_rank DESC
             LIMIT 1
         """, user_id)
-        
+
         if not last_session:
-            logger.info(f"No completed sessions for user {user_id}, skipping notion decay")
+            logger.info(f"No completed session for user {user_id}; skipping notion carry-forward (first regular session).")
             return 0
-        
-        # Calculate Coefficient A (same for all notions)
-        coef_a = _calculate_coefficient_a(
-            streak30=streak30,
-            streak7=streak7,
-            session_mood=session_mood,
-            last_level_direction=last_session['session_level_direction'],
-            last_session_rate=last_session['session_score'] / (last_session['session_nbr_cycle'] * 700) if last_session['session_nbr_cycle'] else 0,
-            last_session_date=last_session['completed_at']
-        )
-        
-        # Get all notions that need updating
+
+        # Read the PREVIOUS session's carryable rows (0 < rate < 1).
         notions = await conn.fetch("""
-            SELECT 
+            SELECT
                 sn.notion_id,
                 sn.notion_rate,
                 sn.notion_introduction_date,
@@ -100,15 +79,29 @@ async def update_notion_rates_on_session_start(
             FROM session_notion sn
             JOIN brain_notion bn ON sn.notion_id = bn.id
             WHERE sn.user_id = $1
+            AND sn.session_id = $2
             AND sn.notion_rate > 0
             AND sn.notion_rate < 1
-        """, user_id)
-        
-        updated_count = 0
+        """, user_id, last_session['id'])
+
+        if not notions:
+            logger.info(f"No carryable notions (0<rate<1) in previous session for user {user_id}; nothing to carry forward.")
+            return 0
+
+        # Coefficient A (same for all notions this session).
+        coef_a = _calculate_coefficient_a(
+            streak30=streak30,
+            streak7=streak7,
+            session_mood=session_mood,
+            last_level_direction=last_session['session_level_direction'],
+            last_session_rate=last_session['session_score'] / (last_session['session_nbr_cycle'] * 700) if last_session['session_nbr_cycle'] else 0,
+            last_session_date=last_session['completed_at']
+        )
+
+        created_count = 0
         now = datetime.now()
-        
+
         for notion in notions:
-            # Calculate Coefficient B (specific to each notion)
             coef_b = _calculate_coefficient_b(
                 notion_introduction_date=notion['notion_introduction_date'],
                 notion_passive_rate=float(notion['notion_passive_rate'] or 0),
@@ -116,27 +109,29 @@ async def update_notion_rates_on_session_start(
                 notion_weightiness=float(notion['weightiness'] or 0.5),
                 current_time=now
             )
-            
-            # Apply decay formula: new_rate = last_rate - (last_rate × (coef_A + coef_B))
+
             last_rate = float(notion['notion_rate'])
             decay_factor = last_rate * (coef_a + coef_b)
-            new_rate = last_rate - decay_factor
-            
-            # Clamp to 0.01 - 0.99 (never 0 or 1 per documentation)
-            new_rate = round(max(0.01, min(0.99, new_rate)), 2)
-            
-            # Update in database
+            new_rate = round(max(0.01, min(0.99, last_rate - decay_factor)), 2)
+
+            # INSERT a NEW row for the about-to-start session (session_id NULL,
+            # backfilled at cycle 1). Carry forward notion_id + introduction_date;
+            # reset the per-session mentioned counts to 0.
             await conn.execute("""
-                UPDATE session_notion
-                SET notion_rate = $1, updated_at = NOW()
-                WHERE user_id = $2 AND notion_id = $3
-            """, new_rate, user_id, notion['notion_id'])
-            
-            updated_count += 1
-            logger.debug(f"Notion {notion['notion_id']}: {last_rate:.2f} → {new_rate:.2f} (decay: {decay_factor:.3f})")
-        
-        logger.info(f"Updated {updated_count} notion rates for user {user_id}")
-        return updated_count
+                INSERT INTO session_notion (
+                    user_id, notion_id, session_id, notion_rate,
+                    notion_introduction_date,
+                    notion_passive_mentioned, notion_active_mentioned,
+                    created_at, updated_at
+                )
+                VALUES ($1, $2, NULL, $3, $4, 0, 0, NOW(), NOW())
+            """, user_id, notion['notion_id'], new_rate, notion['notion_introduction_date'])
+
+            created_count += 1
+            logger.debug(f"Carry-forward notion {notion['notion_id']}: {last_rate:.2f} -> {new_rate:.2f} (new NULL-session row)")
+
+        logger.info(f"Carried forward {created_count} notions as new rows (session_id NULL) for user {user_id}.")
+        return created_count
 
 
 def _calculate_coefficient_a(
@@ -620,7 +615,18 @@ async def process_notions_for_session_start(
         "top_notions": [],
         "skipped_reason": None
     }
-    
+
+    # Orphan cleanup (NULL-marker approach): remove any session_notion rows for this
+    # user that were left with session_id IS NULL by a failed/abandoned prior session
+    # start. Only NULL rows are touched — the NOT-NULL history (previous sessions) is
+    # preserved. This guarantees the NULL rows we are about to write reflect THIS start.
+    async with db_pool.acquire() as conn:
+        deleted = await conn.execute(
+            "DELETE FROM session_notion WHERE user_id = $1 AND session_id IS NULL",
+            user_id,
+        )
+    logger.info(f"Orphan-cleanup: removed NULL-session_id session_notion rows for user {user_id} ({deleted})")
+
     if is_new_user:
         # Initialize notions for brand new user
         initialized = await initialize_notions_for_new_user(
