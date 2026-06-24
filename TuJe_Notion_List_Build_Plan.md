@@ -136,29 +136,78 @@ in-memory (duplication, drift risk) or restructuring the pipeline.
 
 **Decision pending** — pick deliberately next session; the choice shapes Pieces 2-4.
 
-### Piece 2 (revised direction) — REDESIGN THE SESSION-START PIPELINE
+### Piece 2 (ADOPTED APPROACH) — NULL-session_id marker, update one centralized function
 
-Rather than contort to avoid touching the pipeline, the likely right move is to
-**deliberately redesign the pre-cycle-1 phase** so it computes EVERYTHING cycle 1 needs,
-in the correct order, before cycle 1 runs. The notion list joins that set — not as a
-bolt-on, but as one of the things the session-start phase produces.
+**Key discovery — the pipeline is ALREADY centralized.** The four initializers
+(brand_new / returning / early / active in session_init.py) all already call
+`process_notions_for_session_start` (L80, 247, 384, 535) for notions, and it already
+RETURNS `top_notions` in its result. The pre-cycle calc functions
+(`calculate_top_session_mood`, `calculate_session_boredom_full`,
+`calculate_mood_recommendation`, `calculate_modulo`) are already standalone functions the
+initializers call. So the steps are already modular; the four initializers differ
+*deliberately* by user type (brand_new hardcodes 0s; active computes from full history;
+returning uses special boredom/modulo). **We do NOT need to refactor the four
+initializers.** To change the notion calculation, change `process_notions_for_session_start`
+(one place) — all four inherit it.
 
-**Include `modulo` in this:** `modulo` (seen at session_init.py L72, `modulo = 0.5`) is
-one of the session-start computed values cycle 1 depends on. The redesigned pre-cycle-1
-phase must compute `modulo` (and the other pre-cycle values: streaks, boredom, mood,
-level direction, ...) **before the first cycle**, alongside the notion list — so that by
-the time cycle 1 is built, everything is ready in one coherent preparation step.
+So Piece 2 = rewrite the notion path inside that one function (and the functions it
+calls) to the carry-forward model, incrementally, one step at a time.
 
-So Piece 2 becomes: **"design the session-start / pre-cycle-1 phase to compute the notion
-list + modulo + all other pre-cycle-1 values in the right order, then build cycle 1 from
-them."** This resolves the tension by owning the pipeline structure rather than working
-around it — but it's a more deliberate redesign, hence banked for a fresh, focused
-session.
+**The session_id-timing solution — Rémi's NULL-marker approach (ADOPTED, replaces the
+in-memory decouple):** since a user can only have ONE open session at a time, a
+session_notion row with `user_id` set and `session_id` NULL unambiguously means "the rows
+for the session this user is about to start." So:
 
-Open within this: where session_id comes from for persistence (still the decouple —
-calculate the list/modulo without session_id, persist session-stamped rows at cycle 1);
-how the existing priority/complexity functions are reused or refactored; the order of the
-pre-cycle-1 computations.
+1. **Orphan cleanup (REQUIRED for safety):** at session-start notion processing,
+   `DELETE FROM session_notion WHERE user_id = $1 AND session_id IS NULL` — clears any
+   stale NULL rows from a failed/abandoned prior start, so the NULL rows always reflect
+   THIS start.
+2. **Carry-forward as new NULL rows:** read the **previous session's** rows (the user's
+   most recent rows WITH a session_id, where 0 < score < 1), INSERT NEW rows with
+   `user_id` + `session_id = NULL` + decayed scores.
+3. **Priority / complexity / list** run on these new rows (found by `user_id` +
+   `session_id IS NULL`) — existing functions, adjusted to that filter. The list is
+   available immediately for cycle 1 selection (no in-memory threading needed — it's in
+   the table, just not yet session-stamped).
+4. **Backfill session_id at cycle 1:** in `start_new_cycle` when `cycle_number == 1`,
+   `UPDATE session_notion SET session_id = $1 WHERE user_id = $2 AND session_id IS NULL`.
+
+**Clean separation:** `session_id IS NULL` = the about-to-start session's rows;
+`session_id IS NOT NULL` = history (previous sessions, backfilled when they were created).
+Carry-forward reads the NOT-NULL history; the list reads the NULL current rows.
+
+**Why this beats the in-memory decouple:** it reuses the existing write-then-read pipeline
+(which already writes rows and returns the list) instead of reimplementing
+priority/complexity in memory. Smaller change, plays to the pipeline's existing shape.
+
+### `modulo` and the other pre-cycle values
+`modulo` (session_init.py L72/244/359/530 — hardcoded for brand_new/returning, computed
+via `calculate_modulo` for early/active) plus streaks, boredom, mood, level direction are
+all already computed before cycle 1 in each initializer. They are NOT broken — just
+confirming the full pre-cycle-1 set is: top_session_mood, streak30, streak7,
+session_boredom, mood_recommendation, modulo, + the notion steps (update score, priority,
+complexity, list). The notion steps are the only ones changing (Piece 2); the rest already
+work.
+
+### Incremental step order inside `process_notions_for_session_start` (and callees)
+1. Orphan cleanup (DELETE NULL rows for user).
+2. Rewrite `update_notion_rates_on_session_start`: update-in-place → read previous
+   session's rows, INSERT new NULL-session_id rows with decayed scores.
+3. Adjust `calculate_notion_priority_rates` / `_complexity_rates` to operate on the new
+   NULL rows.
+4. Adjust `get_top_notions_list` to read the NULL rows (current session).
+5. Backfill session_id at cycle 1 (`start_new_cycle`, cycle_number == 1).
+6. The seed (`initialize_notions_for_new_user`) likewise writes NULL-session_id rows,
+   backfilled at cycle 1 — resolves the deferred seed-session_id question the same way.
+Each step verifiable; test with crafted previous-session rows.
+
+### SEPARATE TASK (not part of Piece 2) — double-session guard
+The NULL-marker safety rests on "one open session per user," which is currently NOT
+enforced — there is no guard against a user starting two sessions. The orphan-cleanup
+(step 1) protects the notion rows specifically, so Piece 2 is safe without the guard. But
+a proper **double-session guard** (session creation refuses/reuses if the user already has
+an active session) is genuinely needed (two open sessions would break far more than
+notion) and should be its own task. Logged here so it isn't lost.
 
 ### Piece 3 — Persist at cycle 1
 - In `start_new_cycle`, when `cycle_number == 1`, write the carried-forward rows to
