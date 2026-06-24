@@ -298,7 +298,8 @@ async def calculate_notion_priority_rates(
             FROM brain_notion bn
             WHERE sn.notion_id = bn.id
             AND sn.user_id = $1
-            AND sn.notion_rate > 0 
+            AND sn.session_id IS NULL
+            AND sn.notion_rate > 0
             AND sn.notion_rate < 1
         """, user_id)
         
@@ -345,7 +346,8 @@ async def calculate_notion_complexity_rates(
                 notion_active_rate
             FROM session_notion
             WHERE user_id = $1
-            AND notion_rate > 0 
+            AND session_id IS NULL
+            AND notion_rate > 0
             AND notion_rate < 1
         """, user_id)
         
@@ -382,7 +384,7 @@ async def calculate_notion_complexity_rates(
             await conn.execute("""
                 UPDATE session_notion
                 SET notion_complexity_rate = $1, updated_at = NOW()
-                WHERE user_id = $2 AND notion_id = $3
+                WHERE user_id = $2 AND notion_id = $3 AND session_id IS NULL
             """, complexity, user_id, notion['notion_id'])
             
             updated_count += 1
