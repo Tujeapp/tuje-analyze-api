@@ -430,9 +430,10 @@ async def get_top_notions_list(
             FROM session_notion sn
             JOIN brain_notion bn ON sn.notion_id = bn.id
             WHERE sn.user_id = $1
-            AND sn.notion_rate > 0 
+            AND sn.session_id IS NULL
+            AND sn.notion_rate > 0
             AND sn.notion_rate < 1
-            ORDER BY 
+            ORDER BY
                 sn.notion_priority_rate DESC,
                 sn.notion_complexity_rate DESC
             LIMIT $2

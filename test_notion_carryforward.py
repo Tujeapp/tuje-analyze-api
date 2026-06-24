@@ -1,23 +1,19 @@
 #!/usr/bin/env python3
 # ============================================================================
-# test_notion_carryforward.py - Test tool for notion carry-forward + scoping
+# test_notion_carryforward.py - Test tool for notion session-start pipeline
 # ============================================================================
-# Verifies the notion session-start pipeline pieces (steps 2 & 3):
+# Verifies steps 2, 3, 4 of the notion build (NULL-marker model):
 #
 #  STEP 2 - update_notion_rates_on_session_start (carry-forward):
-#    - reads the previous session's rows (highest-rank completed session)
-#    - creates NEW rows with session_id NULL and DECAYED rates
-#    - preserves the previous session's rows (history untouched)
+#    reads previous session's rows, creates NEW session_id-NULL rows (decayed),
+#    preserves history.
+#  STEP 3 - calculate_notion_priority_rates / _complexity_rates:
+#    compute on the current (NULL) rows only; history priority/complexity untouched.
+#  STEP 4 - get_top_notions_list:
+#    returns ONLY the current session's notions (NULL rows), not history.
 #
-#  STEP 3 - calculate_notion_priority_rates / _complexity_rates (NULL scoping):
-#    - compute priority/complexity ONLY on the current (NULL-session) rows
-#    - history rows' priority/complexity are NOT touched
-#
-# Reusable: auto-detects the previous session, crafts its rows (with DISTINCT
-# priority/complexity sentinel values so we can prove history is protected),
-# runs the pipeline, verifies, and tears down. Re-run safe.
-#
-# WRITES session_notion. Test-user only. Throwaway-style - not imported by app.
+# Crafts history rows with sentinel priority/complexity (to prove protection),
+# runs the pipeline, verifies, tears down. Re-run safe. Test-user only. WRITES.
 #
 # RUN:
 #   cd ~/Desktop/tuje-analyze-api
@@ -34,14 +30,13 @@ from notion_management import (
     update_notion_rates_on_session_start,
     calculate_notion_priority_rates,
     calculate_notion_complexity_rates,
+    get_top_notions_list,
 )
 
 # ---- CONFIG ----------------------------------------------------------------
 USER_ID = "D08BC99B-0996-4E2B-B4FB-80CF9E0B33DC"
 TEST_NOTIONS = ["NOT202408090927", "NOT202408130245"]
 START_RATES = [0.50, 0.30]
-# Sentinel priority/complexity on the HISTORY rows - if step 3 is correctly
-# scoped, these must remain UNCHANGED after the pipeline runs.
 HISTORY_PRIORITY = 0.99
 HISTORY_COMPLEXITY = 0.88
 SETUP = True
@@ -127,14 +122,14 @@ async def main():
         print(f"Previous session (highest-rank completed): {prev_id}")
 
         if SETUP:
-            hr("SETUP - craft previous-session rows (history priority/complexity = sentinels)")
+            hr("SETUP - craft previous-session rows (history prio/cplx = sentinels)")
             await setup_rows(pool, prev_id)
             print(f"  crafted {len(TEST_NOTIONS)} rows; history prio={HISTORY_PRIORITY} cplx={HISTORY_COMPLEXITY}")
 
         hr("BEFORE")
         await show_rows(pool, "before")
 
-        hr("RUN - full session-start notion pipeline (steps 2 + 3)")
+        hr("RUN - full session-start notion pipeline (steps 2 + 3 + 4)")
         created = await update_notion_rates_on_session_start(
             user_id=USER_ID, streak7=STREAK7, streak30=STREAK30,
             session_mood=SESSION_MOOD, db_pool=pool,
@@ -144,33 +139,49 @@ async def main():
         print(f"  priority updated: {prio_n}")
         cplx_n = await calculate_notion_complexity_rates(USER_ID, pool)
         print(f"  complexity updated: {cplx_n}")
+        top = await get_top_notions_list(USER_ID, limit=10, db_pool=pool)
+        print(f"  top notions list returned: {len(top)} entries")
 
         hr("AFTER")
         after = await show_rows(pool, "after")
 
+        hr("LIST (get_top_notions_list output)")
+        if not top:
+            print("    (empty)")
+        for n in top:
+            print(f"    {n['notion_id']:<20} rate={n['notion_rate']:.2f} "
+                  f"prio={n['priority_rate']:.2f} cplx={n['complexity_rate']:.2f}")
+
         hr("VERDICT")
-        # 1. NULL rows exist and got priority/complexity populated (non-zero).
         null_rows = [r for r in after if r["session_id"] is None]
         hist_rows = [r for r in after if r["session_id"] == prev_id]
         null_have_prio = all(float(r["notion_priority_rate"] or 0) > 0 for r in null_rows)
         null_have_cplx = all(float(r["notion_complexity_rate"] or 0) > 0 for r in null_rows)
-        # 2. History rows kept their sentinel priority/complexity (untouched).
         hist_protected = all(
             abs(float(r["notion_priority_rate"] or 0) - HISTORY_PRIORITY) < 0.001
             and abs(float(r["notion_complexity_rate"] or 0) - HISTORY_COMPLEXITY) < 0.001
             for r in hist_rows
         )
+        # Step 4: list returns exactly the current notions, no history duplication.
+        list_count_ok = len(top) == len(TEST_NOTIONS)
+        # The list should reflect current (decayed) priorities, NOT the history sentinel 0.99.
+        list_not_history = all(abs(n["priority_rate"] - HISTORY_PRIORITY) > 0.001 for n in top)
+
         print(f"  NULL rows: {len(null_rows)} (expect {len(TEST_NOTIONS)})")
         print(f"  NULL rows have priority > 0: {null_have_prio}")
         print(f"  NULL rows have complexity > 0: {null_have_cplx}")
-        print(f"  history rows priority/complexity UNCHANGED ({HISTORY_PRIORITY}/{HISTORY_COMPLEXITY}): {hist_protected}")
-        if (len(null_rows) == len(TEST_NOTIONS) and null_have_prio
-                and null_have_cplx and hist_protected):
-            print("  PASS: step 3 scoping correct - current rows computed, history protected.")
+        print(f"  history prio/cplx UNCHANGED ({HISTORY_PRIORITY}/{HISTORY_COMPLEXITY}): {hist_protected}")
+        print(f"  list returns {len(top)} entries (expect {len(TEST_NOTIONS)}, no history dupes): {list_count_ok}")
+        print(f"  list uses current priorities (not history sentinel {HISTORY_PRIORITY}): {list_not_history}")
+        if (len(null_rows) == len(TEST_NOTIONS) and null_have_prio and null_have_cplx
+                and hist_protected and list_count_ok and list_not_history):
+            print("  PASS: steps 2+3+4 all correct - current rows computed/listed, history protected.")
         else:
-            print("  CHECK: inspect the AFTER table above.")
+            print("  CHECK: inspect the tables above.")
             if not hist_protected:
-                print("  >> HISTORY WAS MODIFIED - the session_id IS NULL scope is missing somewhere!")
+                print("  >> HISTORY MODIFIED - a session_id IS NULL scope is missing!")
+            if not list_count_ok or not list_not_history:
+                print("  >> LIST LEAKED HISTORY - get_top_notions_list scope missing!")
 
         if TEARDOWN:
             await pool.execute("DELETE FROM session_notion WHERE user_id = $1", USER_ID)
