@@ -9,6 +9,7 @@ from models import InteractionCandidate
 from session_context import SessionContext
 from interaction_search import find_best_subtopic_with_fallback
 from interaction_search_notion import find_best_notion_interactions_with_fallback
+from interaction_search_intent import find_best_intent_interactions_with_fallback
 from helpers import generate_id
 from .interaction_selection import select_cycle_interactions
 
@@ -60,6 +61,15 @@ async def start_new_cycle(
     # gets its own branch when built.
     if cycle_goal == "notion":
         interactions = await find_best_notion_interactions_with_fallback(
+            db_pool=db_pool,
+            interaction_user_level=interaction_user_level,
+            cycle_boredom=cycle_boredom,
+            session_mood=session_mood,
+            context=context,
+            cycle_goal=cycle_goal
+        )
+    elif cycle_goal == "intent":
+        interactions = await find_best_intent_interactions_with_fallback(
             db_pool=db_pool,
             interaction_user_level=interaction_user_level,
             cycle_boredom=cycle_boredom,
