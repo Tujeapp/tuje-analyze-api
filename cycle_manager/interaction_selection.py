@@ -39,25 +39,43 @@ async def select_cycle_interactions(
             cycle_level=cycle_level,
             cycle_boredom=cycle_boredom
         )
+    elif cycle_goal == "notion":
+        first = await select_first_interaction_notion(
+            interactions=interactions,
+            cycle_level=cycle_level,
+            cycle_boredom=cycle_boredom
+        )
     else:
-        # Notion/Intent cycles: just pick first from sorted list
+        # Intent (design-blocked): pick first from sorted list for now
         first = interactions[0]
     
     selected_ids.append(first.id)
     used_ids.add(first.id)
+    used_subtopics: Set[str] = {first.subtopic_id}
     last_interaction = first
-    
+
     # INTERACTIONS 2-7: Sequential selection
     for position in range(2, 8):
-        next_interaction = await select_next_interaction(
-            interactions=interactions,
-            used_ids=used_ids,
-            last_interaction=last_interaction
-        )
-        
+        if cycle_goal == "notion":
+            next_interaction = await select_next_interaction_notion(
+                interactions=interactions,
+                used_ids=used_ids,
+                used_subtopics=used_subtopics,
+                last_interaction=last_interaction,
+            )
+        else:
+            next_interaction = await select_next_interaction(
+                interactions=interactions,
+                used_ids=used_ids,
+                last_interaction=last_interaction
+            )
+
         selected_ids.append(next_interaction.id)
         used_ids.add(next_interaction.id)
+        used_subtopics.add(next_interaction.subtopic_id)
         last_interaction = next_interaction
+
+        logger.debug(f"Selected interaction {position}: combination={next_interaction.combination}")
         
         logger.debug(f"Selected interaction {position}: combination={next_interaction.combination}")
     
@@ -115,6 +133,35 @@ async def select_first_interaction_story(
     return best
 
 
+async def select_first_interaction_notion(
+    interactions: List[InteractionCandidate],
+    cycle_level: int,
+    cycle_boredom: float,
+) -> InteractionCandidate:
+    """
+    Select first interaction for a NOTION cycle (Part 4).
+    - level_from within [cycle_level - 50, cycle_level] (cycle level or up to 50 below)
+    - boredom closest to cycle_boredom
+    - NO entry-point requirement (unlike story)
+    Falls back to relaxing the level window if nothing matches.
+    """
+    in_window = [
+        i for i in interactions
+        if (cycle_level - 50) <= i.level_from <= cycle_level
+    ]
+    pool = in_window if in_window else interactions
+    if not in_window:
+        logger.warning("Notion first-interaction: no candidate in level window "
+                       f"[{cycle_level - 50}, {cycle_level}]; relaxing level constraint.")
+
+    # boredom closest to cycle_boredom
+    best = min(pool, key=lambda i: abs(i.boredom_rate - cycle_boredom))
+    logger.info(f"Notion first interaction: {best.id} "
+                f"(level={best.level_from}, boredom={best.boredom_rate:.2f}, "
+                f"combination={best.combination})")
+    return best
+
+
 async def select_next_interaction(
     interactions: List[InteractionCandidate],
     used_ids: Set[str],
@@ -146,3 +193,39 @@ async def select_next_interaction(
     # Otherwise, find closest combination
     available.sort(key=lambda x: abs(x.combination - target_combination))
     return available[0]
+
+
+async def select_next_interaction_notion(
+    interactions: List[InteractionCandidate],
+    used_ids: Set[str],
+    used_subtopics: Set[str],
+    last_interaction: InteractionCandidate,
+) -> InteractionCandidate:
+    """
+    Select next interaction for a NOTION cycle (Part 5).
+    - exclude used interactions
+    - prefer interactions from a NOT-yet-used subtopic; if none, allow subtopic reuse
+      (fallback, so the cycle can reach 7)
+    - pick combination equal-or-closest to the last interaction's combination
+    """
+    available = [i for i in interactions if i.id not in used_ids]
+    if not available:
+        raise ValueError("No more available interactions in list")
+
+    # Prefer interactions whose subtopic hasn't been used yet.
+    fresh_subtopic = [i for i in available if i.subtopic_id not in used_subtopics]
+    pool = fresh_subtopic if fresh_subtopic else available
+    if not fresh_subtopic:
+        logger.warning("Notion next-interaction: all remaining interactions are in "
+                       "already-used subtopics; allowing subtopic reuse to fill the cycle.")
+
+    target = last_interaction.combination
+
+    # Exact combination match first (pool is pre-sorted by (combination, boredom)).
+    same = [i for i in pool if i.combination == target]
+    if same:
+        return same[0]
+
+    # Otherwise closest combination.
+    pool.sort(key=lambda x: abs(x.combination - target))
+    return pool[0]
