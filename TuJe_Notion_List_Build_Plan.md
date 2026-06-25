@@ -36,12 +36,37 @@ the session-start notion pipeline produces a correct, history-protected list end
 **Test tools:** test_notion_carryforward.py (steps 2+3+4), test_notion_seed.py (step 6).
 See NOTION_TESTING.md.
 
+## INTEGRATION RUN — results (partial; stage 1 validated live)
+
+Ran the real /start-session and /start-cycle endpoints against the deployed API (test
+user, carry-forward path; crafted 2 rows at 0.50/0.30 on rank-5 session
+SESSION2026...0579A5 as the "previous session").
+
+- **Stage 1 (session-start pipeline) — VALIDATED LIVE.** /start-session ran the full
+  chain: orphan cleanup -> carry-forward (REAL computed coefficients — decay 0.50->0.25,
+  0.30->0.15, differs from the unit test's 0.50->0.15 because real streaks/mood were used)
+  -> priority/complexity on the NULL rows -> list. History (rank-5) preserved. Every
+  property the unit tests checked holds live.
+- **Stage 2 (cycle-1 backfill) — LOGIC-PROVEN, live-BLOCKED by content.** /start-cycle
+  reached start_new_cycle but raised InsufficientInteractionsError ("Could not find >=7
+  interactions after 10 attempts. Found 0.") — the STORY search finds no interactions for
+  the test user's computed level/boredom/mood. The backfill runs AFTER the cycle/interaction
+  inserts, so it never fired (build failed first). CONTENT gap, not a notion bug. Backfill
+  logic already proven via the step-5 TablePlus UPDATE test. So stage 2 = logic-verified,
+  live-integration pending sufficient content (or crafted interactions).
+- **Side findings:**
+  - Double-session guard confirmed needed — repeated start-session calls created 2 active
+    rank-7 sessions (no guard). See SESSION_GUARD_NOTE.md. Cleaned up via status=incomplete.
+  - Deployed/local drift: deployed /start-cycle requires user_id + session_type (local
+    file's StartCycleRequest only had session_id, cycle_number, session_mood). Reconcile
+    local vs deployed later.
+
 ## REMAINING (post-Piece-2 roadmap)
 
-1. **Full real-session integration run** — the 6 steps are UNIT-verified, not yet
-   exercised together in one live session. Start a real session, reach cycle 1, confirm
-   NULL rows flip to the session_id at cycle 1, and a second session reads them as the
-   previous session. The natural final validation.
+1. **Finish the live integration** — stage-2 backfill live confirmation, blocked only by
+   content/search (story search finds 0 interactions for test user). Logic already proven
+   (step-5 SQL test). Add content or craft interactions, then re-run start-session ->
+   start-cycle, confirm NULL rows flip at cycle 1, and a 2nd session carries forward.
 2. **§8 inverted Coefficient B** — decay currently uses the OLD buckets (observed steep:
    0.50->0.15). Implement the inverted/recalibrated buckets from the redesign doc §8,
    then validate on real data. (Also the passive/active rate->score rename +
