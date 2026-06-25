@@ -8,6 +8,7 @@ from typing import Dict, Any, List
 from models import InteractionCandidate
 from session_context import SessionContext
 from interaction_search import find_best_subtopic_with_fallback
+from interaction_search_notion import find_best_notion_interactions_with_fallback
 from helpers import generate_id
 from .interaction_selection import select_cycle_interactions
 
@@ -54,15 +55,27 @@ async def start_new_cycle(
     - Boredom: {cycle_boredom:.2f}
     """)
     
-    # Find interactions with progressive fallback
-    interactions = await find_best_subtopic_with_fallback(
-        db_pool=db_pool,
-        interaction_user_level=interaction_user_level,
-        cycle_boredom=cycle_boredom,
-        session_mood=session_mood,
-        context=context,
-        cycle_goal=cycle_goal
-    )
+    # Find interactions with progressive fallback (goal-branched).
+    # "story" and "intent" both fall to the subtopic search for now; "intent"
+    # gets its own branch when built.
+    if cycle_goal == "notion":
+        interactions = await find_best_notion_interactions_with_fallback(
+            db_pool=db_pool,
+            interaction_user_level=interaction_user_level,
+            cycle_boredom=cycle_boredom,
+            session_mood=session_mood,
+            context=context,
+            cycle_goal=cycle_goal
+        )
+    else:
+        interactions = await find_best_subtopic_with_fallback(
+            db_pool=db_pool,
+            interaction_user_level=interaction_user_level,
+            cycle_boredom=cycle_boredom,
+            session_mood=session_mood,
+            context=context,
+            cycle_goal=cycle_goal
+        )
     
     cycle_id = generate_id("CYCLE")
 
