@@ -9,6 +9,7 @@ Chunk 1: structural split only.
 - Voice verdict thresholds are PLACEHOLDERS (Rémi supplies real cutoffs).
 """
 import asyncpg
+import json
 import logging
 from typing import Dict, Optional
 
@@ -110,9 +111,9 @@ async def _evaluate_voice(interaction_id, user_id, answer_id, original_transcrip
         answer_id=answer_id,
         adjusted_transcript=adjustment_result.adjusted_transcript,
         completed_transcript=adjustment_result.completed_transcript,
-        vocabulary_found=adjustment_result.list_of_vocabulary,
-        entities_found=adjustment_result.list_of_entities,
-        notion_matches=adjustment_result.list_of_notion_matches,
+        vocabulary_found=json.dumps([v.dict() for v in adjustment_result.list_of_vocabulary]),
+        entities_found=json.dumps([e.dict() for e in adjustment_result.list_of_entities]),
+        notion_matches=json.dumps(adjustment_result.list_of_notion_matches),
         db_pool=db_pool,
     )
 
