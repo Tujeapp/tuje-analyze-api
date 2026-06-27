@@ -122,7 +122,7 @@ async def _evaluate_voice(interaction_id, user_id, answer_id, original_transcrip
         completed_transcript=adjustment_result.completed_transcript,
         threshold=MATCH_THRESHOLD,
     )
-    similarity = matching_result.get("similarity_score", 0)
+    similarity = matching_result.get("similarity_score") or 0
     await answer_service.update_answer_with_matching(
         answer_id=answer_id,
         similarity_score=similarity,
