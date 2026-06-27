@@ -13,6 +13,7 @@ import logging
 from typing import Dict, Optional
 
 from adjustement_adjuster import TranscriptionAdjuster
+from adjustement_types import TranscriptionAdjustRequest
 from matching_answer_service import answer_matching_service
 from gpt_fallback_service import gpt_fallback_service
 
@@ -98,11 +99,11 @@ async def _evaluate_voice(interaction_id, user_id, answer_id, original_transcrip
 
     adjuster = TranscriptionAdjuster()
     adjustment_result = await adjuster.adjust_transcription(
-        request={
-            "original_transcript": original_transcript,
-            "interaction_id": interaction_id,
-            "user_id": user_id,
-        },
+        request=TranscriptionAdjustRequest(
+            original_transcript=original_transcript,
+            interaction_id=interaction_id,
+            user_id=user_id,
+        ),
         pool=db_pool,
     )
     await answer_service.update_answer_with_adjustment(
@@ -111,7 +112,7 @@ async def _evaluate_voice(interaction_id, user_id, answer_id, original_transcrip
         completed_transcript=adjustment_result.completed_transcript,
         vocabulary_found=adjustment_result.list_of_vocabulary,
         entities_found=adjustment_result.list_of_entities,
-        notion_matches=adjustment_result.list_of_notions,
+        notion_matches=adjustment_result.list_of_notion_matches,
         db_pool=db_pool,
     )
 
