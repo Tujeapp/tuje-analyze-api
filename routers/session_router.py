@@ -141,6 +141,60 @@ class SubmitAnswerResponse(BaseModel):
     session_summary: Optional[SessionSummary] = None
 
 
+# ----------------------------------------------------------------------------
+# CHUNK 1 — Split evaluate / commit / advance
+# ----------------------------------------------------------------------------
+
+class EvaluateAnswerRequest(BaseModel):
+    interaction_id: str
+    user_id: str
+    answer_mode_used: str
+    original_transcript: Optional[str] = None
+    selected_answer_id: Optional[str] = None
+    tapped_at_seconds: Optional[float] = None
+
+
+class EvaluateAnswerResponse(BaseModel):
+    answer_id: str
+    verdict: str
+    similarity_score: float
+    gpt_used: bool = False
+    interpretation: Optional[str] = None
+    status: str = "evaluated"
+
+
+class CommitAnswerRequest(BaseModel):
+    interaction_id: str
+    answer_id: str
+
+
+class CommitAnswerResponse(BaseModel):
+    interaction_id: str
+    interaction_score: int
+    verdict: str
+    matched_answer_id: Optional[str] = None
+    attempts_count: int
+    completed_interactions: int
+    total_interactions: int = 7
+    interaction_complete: bool = True
+
+
+class AdvanceInteractionRequest(BaseModel):
+    interaction_id: str
+    user_id: str
+
+
+class AdvanceInteractionResponse(BaseModel):
+    cycle_complete: bool = False
+    already_advanced: bool = False
+    next_interaction_id: Optional[str] = None
+    next_brain_interaction_id: Optional[str] = None
+    interaction_number: Optional[int] = None
+    next_cycle: Optional[NextCycle] = None
+    cycle_summary: Optional[CycleSummary] = None
+    session_complete: bool = False
+    session_summary: Optional[SessionSummary] = None
+
 # ============================================================================
 # SESSION ENDPOINTS
 # ============================================================================
@@ -539,6 +593,73 @@ async def submit_answer(request: SubmitAnswerRequest):
 # ============================================================================
 # HINT TRACKING
 # ============================================================================
+
+# ============================================================================
+# CHUNK 1 — EVALUATE / COMMIT / ADVANCE (additive; submit-answer untouched)
+# ============================================================================
+
+@router.post("/evaluate-answer", response_model=EvaluateAnswerResponse)
+async def evaluate_answer(request: EvaluateAnswerRequest):
+    """Evaluate one attempt. Returns a verdict only — does not complete or advance."""
+    try:
+        from answer_split_orchestrator import evaluate_user_answer
+        pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=5)
+        try:
+            result = await evaluate_user_answer(
+                interaction_id=request.interaction_id,
+                user_id=request.user_id,
+                db_pool=pool,
+                answer_mode_used=request.answer_mode_used,
+                original_transcript=request.original_transcript,
+                selected_answer_id=request.selected_answer_id,
+                tapped_at_seconds=request.tapped_at_seconds,
+            )
+            return EvaluateAnswerResponse(**result)
+        finally:
+            await pool.close()
+    except Exception as e:
+        logger.error(f"Failed to evaluate answer: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/commit-answer", response_model=CommitAnswerResponse)
+async def commit_answer_endpoint(request: CommitAnswerRequest):
+    """Lock the chosen attempt and complete the interaction. Does not advance."""
+    try:
+        from answer_split_orchestrator import commit_answer
+        pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=5)
+        try:
+            result = await commit_answer(
+                interaction_id=request.interaction_id,
+                answer_id=request.answer_id,
+                db_pool=pool,
+            )
+            return CommitAnswerResponse(**result)
+        finally:
+            await pool.close()
+    except Exception as e:
+        logger.error(f"Failed to commit answer: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/advance-interaction", response_model=AdvanceInteractionResponse)
+async def advance_interaction_endpoint(request: AdvanceInteractionRequest):
+    """Advance after a committed interaction: next interaction / next cycle / session complete."""
+    try:
+        from answer_split_orchestrator import advance_after_interaction
+        pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=5)
+        try:
+            result = await advance_after_interaction(
+                interaction_id=request.interaction_id,
+                user_id=request.user_id,
+                db_pool=pool,
+            )
+            return AdvanceInteractionResponse(**result)
+        finally:
+            await pool.close()
+    except Exception as e:
+        logger.error(f"Failed to advance interaction: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/record-hint")
 async def record_hint_used(interaction_id: str):
