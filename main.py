@@ -29,6 +29,7 @@ from routers.complete_interaction_router import router as complete_interaction_r
 from routers.notions_router import router as notions_router
 from routers.content_router import router as content_router
 from routers.initial_session_router import router as initial_session_router
+from diagnostic_router import router as diagnostic_router
 
 # BUBBLE ROUTER - Choose ONE of these options:
 
@@ -99,6 +100,9 @@ app.include_router(bubble_router, prefix="/api/bubble", tags=["bubble_integratio
 
 # Initial Session Router (Milestone 1 — template-driven onboarding session)
 app.include_router(initial_session_router, prefix="/api/initial-session", tags=["initial_session"])
+
+# Diagnostic Router (dev-only — session-free adjust+match harness, writes nothing)
+app.include_router(diagnostic_router, prefix="/api/diagnostic")
 
 # =====================================
 # ROOT ENDPOINT
