@@ -98,11 +98,24 @@ async def _evaluate_voice(interaction_id, user_id, answer_id, original_transcrip
     if not original_transcript:
         raise ValueError("original_transcript is required for voice mode")
 
+    # The adjuster and matcher look up brain_interaction / brain_interaction_answer,
+    # which are keyed by BRAIN interaction id. `interaction_id` here is the
+    # session_interaction id, so resolve to the brain id for those lookups.
+    # (create_answer / update_answer_* still use the session id — they key on
+    # session_answer / session_interaction — so those calls are unchanged.)
+    async with db_pool.acquire() as conn:
+        brain_interaction_id = await conn.fetchval(
+            "SELECT brain_interaction_id FROM session_interaction WHERE id = $1",
+            interaction_id,
+        )
+    if not brain_interaction_id:
+        raise ValueError(f"No brain_interaction_id for session interaction {interaction_id}")
+
     adjuster = TranscriptionAdjuster()
     adjustment_result = await adjuster.adjust_transcription(
         request=TranscriptionAdjustRequest(
             original_transcript=original_transcript,
-            interaction_id=interaction_id,
+            interaction_id=brain_interaction_id,
             user_id=user_id,
         ),
         pool=db_pool,
@@ -118,7 +131,7 @@ async def _evaluate_voice(interaction_id, user_id, answer_id, original_transcrip
     )
 
     matching_result = await answer_matching_service.match_completed_transcript(
-        interaction_id=interaction_id,
+        interaction_id=brain_interaction_id,
         completed_transcript=adjustment_result.completed_transcript,
         threshold=MATCH_THRESHOLD,
     )
