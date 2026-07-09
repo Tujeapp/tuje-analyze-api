@@ -168,14 +168,14 @@ class AnswerSelectionService:
                     ba.transcription_en,
                     ba.image_url,
                     ba.answer_optimum_level,
-                    ba.display_ready,
+                    ba.is_button,
                     bia.answer_type,
                     ABS(COALESCE(ba.answer_optimum_level, 100) - $2) AS level_distance
                 FROM brain_interaction_answer bia
                 JOIN brain_answer ba ON bia.answer_id = ba.id
                 WHERE bia.interaction_id = $1
                   AND ba.live = TRUE
-                  AND ba.display_ready = TRUE
+                  AND ba.is_button = TRUE
                   AND bia.answer_type IS NOT NULL
                 ORDER BY level_distance ASC
             """, interaction_id, user_level)
@@ -319,7 +319,7 @@ class AnswerSelectionService:
                 JOIN brain_answer ba ON bia.answer_id = ba.id
                 WHERE bia.interaction_id = $1
                   AND ba.live = TRUE
-                  AND ba.display_ready = TRUE
+                  AND ba.is_button = TRUE
                 ORDER BY ba.created_at ASC
                 LIMIT 4
             """, interaction_id)

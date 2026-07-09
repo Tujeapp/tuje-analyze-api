@@ -1321,13 +1321,14 @@ async def get_answers_by_interaction(
                 selection_mode=selection_mode
             )
 
+            answers = result.get('answers') or []
             return {
                 "interaction_id": interaction_id,
-                "count": len(result['answers']),
-                "answers": result['answers'],
-                "selection_mode": result['selection_mode'],
-                "correct_count": result['correct_count'],
-                "difficulty": result['difficulty']
+                "count": len(answers),
+                "answers": answers,
+                "selection_mode": result.get('selection_mode', selection_mode),
+                "correct_count": result.get('correct_count', 0),
+                "difficulty": result.get('difficulty', 'none'),
             }
 
         finally:
