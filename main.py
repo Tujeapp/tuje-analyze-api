@@ -3,6 +3,7 @@
 from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime
+from contextlib import asynccontextmanager
 import asyncpg
 import openai
 import os
@@ -59,10 +60,26 @@ openai.api_key = OPENAI_API_KEY
 # =====================================
 # FASTAPI APP SETUP
 # =====================================
+# =====================================
+# APP-LIFETIME DB POOL (lifespan)
+# One pool created at startup, reused by endpoints via app.state.db_pool,
+# closed at shutdown. Endpoints are migrated to it incrementally; until an
+# endpoint is migrated it keeps creating its own per-request pool.
+# =====================================
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10)
+    try:
+        yield
+    finally:
+        await app.state.db_pool.close()
+
+
 app = FastAPI(
     title="TuJe French Learning API with Bubble Integration",
     description="API for French conversation learning with Bubble.io integration and GDPR compliance",
-    version="2.1.0"
+    version="2.1.0",
+    lifespan=lifespan
 )
 
 app.add_middleware(
