@@ -196,35 +196,50 @@ async def _evaluate_multiple_buttons(interaction_id, answer_id, selected_answer_
     if not selected_answer_id:
         raise ValueError("selected_answer_id is required for multipleButtons mode")
 
-    # CHUNK 1: existing linkage check, unchanged. Chunk 2 replaces this with an
-    # answer_type-based correctness check. Until then a linked distractor reads correct.
+    # CHUNK 2: correctness + score derive from answer_type (not linkage).
+    # Live answer_type values: 'perfect' | 'good' | 'false good' | 'wrong'.
     async with db_pool.acquire() as conn:
-        is_correct = await conn.fetchval("""
-            SELECT EXISTS (
-                SELECT 1 FROM brain_interaction_answer
-                WHERE interaction_id = (
-                    SELECT brain_interaction_id
-                    FROM session_interaction
-                    WHERE id = $1
-                )
-                AND answer_id = $2
+        answer_type = await conn.fetchval("""
+            SELECT bia.answer_type
+            FROM brain_interaction_answer bia
+            WHERE bia.interaction_id = (
+                SELECT brain_interaction_id FROM session_interaction WHERE id = $1
             )
+            AND bia.answer_id = $2
         """, interaction_id, selected_answer_id)
 
-    if is_correct:
-        await answer_service.update_answer_with_matching(
-            answer_id=answer_id, similarity_score=100.0,
-            matched_answer_id=selected_answer_id, db_pool=db_pool,
-        )
-        return {"answer_id": answer_id, "verdict": "correct", "similarity_score": 100.0,
-                "gpt_used": False, "interpretation": None, "status": "evaluated"}
+    # answer_type -> (score, verdict). perfect/good = correct; false good/wrong = wrong.
+    type_map = {
+        "perfect":    (100.0, "perfect"),
+        "good":       (70.0,  "good"),
+        "false good": (50.0,  "wrong"),
+        "wrong":      (30.0,  "wrong"),
+    }
+
+    if answer_type is None:
+        # Selected id isn't linked to this interaction at all — treat as wrong, score 0.
+        logger.warning(f"multipleButtons: answer {selected_answer_id} not linked to interaction {interaction_id}")
+        score, verdict = 0.0, "wrong"
     else:
-        await answer_service.update_answer_with_matching(
-            answer_id=answer_id, similarity_score=0.0,
-            matched_answer_id=None, db_pool=db_pool,
-        )
-        return {"answer_id": answer_id, "verdict": "incorrect", "similarity_score": 0.0,
-                "gpt_used": False, "interpretation": None, "status": "evaluated"}
+        score, verdict = type_map.get(answer_type, (0.0, "wrong"))
+        if answer_type not in type_map:
+            logger.warning(f"multipleButtons: unknown answer_type '{answer_type}' — scoring 0")
+
+    await answer_service.update_answer_with_matching(
+        answer_id=answer_id,
+        similarity_score=score,
+        matched_answer_id=selected_answer_id if verdict in ("perfect", "good") else None,
+        db_pool=db_pool,
+    )
+
+    return {
+        "answer_id": answer_id,
+        "verdict": verdict,
+        "similarity_score": score,
+        "gpt_used": False,
+        "interpretation": None,
+        "status": "evaluated",
+    }
 
 
 async def _evaluate_single_button(interaction_id, answer_id, tapped_at_seconds, db_pool) -> Dict:
@@ -308,8 +323,10 @@ async def commit_answer(interaction_id: str, answer_id: str, db_pool: asyncpg.Po
     user_level = interaction["cycle_level"] or 100
 
     if mode == "multipleButtons":
-        score = await scoring_service.calculate_multiple_buttons_score(
-            interaction_id=interaction_id, db_pool=db_pool)
+        # CHUNK 2: score was derived from answer_type at evaluate and stored on
+        # the answer's similarity_score. Use it directly instead of the old
+        # attempt-based calculate_multiple_buttons_score.
+        score = int(round(similarity))
         method = "multiple_buttons"
     elif mode == "singleButton":
         async with db_pool.acquire() as conn:
