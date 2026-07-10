@@ -3,7 +3,7 @@
 Session Management API Endpoints
 Complete REST API for session, cycle, interaction, and answer management
 """
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Request
 from pydantic import BaseModel
 from typing import Optional, List
 import asyncpg
@@ -599,64 +599,52 @@ async def submit_answer(request: SubmitAnswerRequest):
 # ============================================================================
 
 @router.post("/evaluate-answer", response_model=EvaluateAnswerResponse)
-async def evaluate_answer(request: EvaluateAnswerRequest):
+async def evaluate_answer(request: EvaluateAnswerRequest, http_request: Request):
     """Evaluate one attempt. Returns a verdict only — does not complete or advance."""
     try:
         from answer_split_orchestrator import evaluate_user_answer
-        pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=5)
-        try:
-            result = await evaluate_user_answer(
-                interaction_id=request.interaction_id,
-                user_id=request.user_id,
-                db_pool=pool,
-                answer_mode_used=request.answer_mode_used,
-                original_transcript=request.original_transcript,
-                selected_answer_id=request.selected_answer_id,
-                tapped_at_seconds=request.tapped_at_seconds,
-            )
-            return EvaluateAnswerResponse(**result)
-        finally:
-            await pool.close()
+        result = await evaluate_user_answer(
+            interaction_id=request.interaction_id,
+            user_id=request.user_id,
+            db_pool=http_request.app.state.db_pool,
+            answer_mode_used=request.answer_mode_used,
+            original_transcript=request.original_transcript,
+            selected_answer_id=request.selected_answer_id,
+            tapped_at_seconds=request.tapped_at_seconds,
+        )
+        return EvaluateAnswerResponse(**result)
     except Exception as e:
         logger.error(f"Failed to evaluate answer: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/commit-answer", response_model=CommitAnswerResponse)
-async def commit_answer_endpoint(request: CommitAnswerRequest):
+async def commit_answer_endpoint(request: CommitAnswerRequest, http_request: Request):
     """Lock the chosen attempt and complete the interaction. Does not advance."""
     try:
         from answer_split_orchestrator import commit_answer
-        pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=5)
-        try:
-            result = await commit_answer(
-                interaction_id=request.interaction_id,
-                answer_id=request.answer_id,
-                db_pool=pool,
-            )
-            return CommitAnswerResponse(**result)
-        finally:
-            await pool.close()
+        result = await commit_answer(
+            interaction_id=request.interaction_id,
+            answer_id=request.answer_id,
+            db_pool=http_request.app.state.db_pool,
+        )
+        return CommitAnswerResponse(**result)
     except Exception as e:
         logger.error(f"Failed to commit answer: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/advance-interaction", response_model=AdvanceInteractionResponse)
-async def advance_interaction_endpoint(request: AdvanceInteractionRequest):
+async def advance_interaction_endpoint(request: AdvanceInteractionRequest, http_request: Request):
     """Advance after a committed interaction: next interaction / next cycle / session complete."""
     try:
         from answer_split_orchestrator import advance_after_interaction
-        pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=5)
-        try:
-            result = await advance_after_interaction(
-                interaction_id=request.interaction_id,
-                user_id=request.user_id,
-                db_pool=pool,
-            )
-            return AdvanceInteractionResponse(**result)
-        finally:
-            await pool.close()
+        result = await advance_after_interaction(
+            interaction_id=request.interaction_id,
+            user_id=request.user_id,
+            db_pool=http_request.app.state.db_pool,
+        )
+        return AdvanceInteractionResponse(**result)
     except Exception as e:
         logger.error(f"Failed to advance interaction: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
