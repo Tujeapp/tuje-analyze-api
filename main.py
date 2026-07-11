@@ -1,6 +1,6 @@
 # main.py - Fixed and Clean Version
 
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime
 from contextlib import asynccontextmanager
@@ -169,7 +169,7 @@ async def root():
 # HEALTH CHECK
 # =====================================
 @app.get("/health")
-async def health_check():
+async def health_check(request: Request):
     """Enhanced health check covering all services"""
     health_status = {
         "status": "healthy",
@@ -185,24 +185,16 @@ async def health_check():
         },
         "bubble_ready": True
     }
-    
-    # Test database connection
+
+    # Test the app-lifetime pool (the one endpoints actually use)
     try:
-        pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=2)
-        try:
-            async with pool.acquire() as conn:
-                await conn.fetchval("SELECT 1")
-            health_status["services"]["database"] = "connected"
-        except Exception as e:
-            health_status["services"]["database"] = f"error: {str(e)}"
-            health_status["status"] = "degraded"
-        finally:
-            await pool.close()
+        async with request.app.state.db_pool.acquire() as conn:
+            await conn.fetchval("SELECT 1")
+        health_status["services"]["database"] = "connected"
     except Exception as e:
-        health_status["services"]["database"] = f"connection_error: {str(e)}"
-        health_status["status"] = "unhealthy"
-        health_status["bubble_ready"] = False
-    
+        health_status["services"]["database"] = f"error: {str(e)}"
+        health_status["status"] = "degraded"
+
     return health_status
 
 # =====================================
