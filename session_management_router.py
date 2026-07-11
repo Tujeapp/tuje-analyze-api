@@ -116,7 +116,7 @@ class StartCycleResponse(BaseModel):
 # ============================================================================
 
 @router.post("/start-session", response_model=StartSessionResponse)
-async def start_session_endpoint(request: StartSessionRequest):
+async def start_session_endpoint(request: StartSessionRequest, http_request: Request):
     """
     Start a new session for a user
     
@@ -157,117 +157,112 @@ async def start_session_endpoint(request: StartSessionRequest):
         
         logger.info(f"🎬 Starting session for user: {request.user_id}")
         
-        # Create database pool
-        pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10)
-        
-        try:
-            # Detect user state
-            user_history = await detect_user_state(request.user_id, pool)
+        pool = http_request.app.state.db_pool
 
-            # Determine if this should be an initial (curated onboarding) session.
-            # Explicit flag wins; otherwise auto-detect from onboarding_phase.
-            is_initial_session = request.is_initial_session
-            user_goal_id = None
-            user_bucket = None
+        # Detect user state
+        user_history = await detect_user_state(request.user_id, pool)
 
-            if user_history.state == UserState.BRAND_NEW:
-                # Fetch user's onboarding_phase, goal_id, initial_level_bucket from brain_user
-                async with pool.acquire() as conn:
-                    user_row = await conn.fetchrow("""
-                        SELECT onboarding_phase, goal_id, initial_level_bucket
-                        FROM brain_user
-                        WHERE id = $1
-                    """, request.user_id)
+        # Determine if this should be an initial (curated onboarding) session.
+        # Explicit flag wins; otherwise auto-detect from onboarding_phase.
+        is_initial_session = request.is_initial_session
+        user_goal_id = None
+        user_bucket = None
 
-                if user_row:
-                    user_goal_id = user_row["goal_id"]
-                    user_bucket = user_row["initial_level_bucket"]
-
-                    # Auto-detect if not explicitly set
-                    if is_initial_session is None:
-                        is_initial_session = (user_row["onboarding_phase"] == "phase_1_in_progress")
-            
-            # Initialize session based on user state
-            if user_history.state == UserState.BRAND_NEW:
-                # Level for a user with no regular history comes from their onboarding
-                # bucket (same mapping used at initial-session close-out). request.user_level
-                # overrides if explicitly provided.
-                if request.user_level is not None:
-                    user_level = request.user_level
-                else:
-                    user_level = _bucket_to_session_level(user_bucket)
-                session_data = await initialize_brand_new_user(
-                    user_id=request.user_id,
-                    session_type=request.session_type,
-                    session_mood=request.session_mood,
-                    user_level=user_level,
-                    db_pool=pool,
-                )
-                
-            elif user_history.state == UserState.RETURNING_USER:
-                session_data = await initialize_returning_user(
-                    request.user_id, 
-                    user_history, 
-                    request.session_type, 
-                    request.session_mood, 
-                    pool
-                )
-                
-            elif user_history.state == UserState.EARLY_USER:
-                session_data = await initialize_early_user(
-                    request.user_id, 
-                    user_history, 
-                    request.session_type, 
-                    request.session_mood, 
-                    pool
-                )
-                
-            else:  # ACTIVE_USER
-                session_data = await initialize_active_user(
-                    request.user_id, 
-                    user_history, 
-                    request.session_type, 
-                    request.session_mood, 
-                    pool
-                )
-            
-            # Log summary
-            log_session_summary({
-                **session_data,
-                "user_id": request.user_id,
-                "session_type": request.session_type,
-                "session_mood": request.session_mood,
-                "user_state": user_history.state.value
-            })
-            
-            # Fetch or create user_behavior row (rescue_level, always_silent).
-            # Mirrors the proven pattern in routers/session_router.py.
+        if user_history.state == UserState.BRAND_NEW:
+            # Fetch user's onboarding_phase, goal_id, initial_level_bucket from brain_user
             async with pool.acquire() as conn:
-                behavior = await conn.fetchrow("""
-                    SELECT rescue_level, always_silent
-                    FROM user_behavior WHERE user_id = $1
+                user_row = await conn.fetchrow("""
+                    SELECT onboarding_phase, goal_id, initial_level_bucket
+                    FROM brain_user
+                    WHERE id = $1
                 """, request.user_id)
 
-                if behavior is None:
-                    await conn.execute("""
-                        INSERT INTO user_behavior (user_id, rescue_level, always_silent)
-                        VALUES ($1, 0.50, FALSE)
-                    """, request.user_id)
-                    rescue_level = 0.50
-                    always_silent = False
-                else:
-                    rescue_level = float(behavior['rescue_level'])
-                    always_silent = bool(behavior['always_silent'])
+            if user_row:
+                user_goal_id = user_row["goal_id"]
+                user_bucket = user_row["initial_level_bucket"]
 
-            return StartSessionResponse(
-                session_id=session_data['session_id'],
-                rescue_level=rescue_level,
-                always_silent=always_silent,
+                # Auto-detect if not explicitly set
+                if is_initial_session is None:
+                    is_initial_session = (user_row["onboarding_phase"] == "phase_1_in_progress")
+        
+        # Initialize session based on user state
+        if user_history.state == UserState.BRAND_NEW:
+            # Level for a user with no regular history comes from their onboarding
+            # bucket (same mapping used at initial-session close-out). request.user_level
+            # overrides if explicitly provided.
+            if request.user_level is not None:
+                user_level = request.user_level
+            else:
+                user_level = _bucket_to_session_level(user_bucket)
+            session_data = await initialize_brand_new_user(
+                user_id=request.user_id,
+                session_type=request.session_type,
+                session_mood=request.session_mood,
+                user_level=user_level,
+                db_pool=pool,
             )
             
-        finally:
-            await pool.close()
+        elif user_history.state == UserState.RETURNING_USER:
+            session_data = await initialize_returning_user(
+                request.user_id, 
+                user_history, 
+                request.session_type, 
+                request.session_mood, 
+                pool
+            )
             
+        elif user_history.state == UserState.EARLY_USER:
+            session_data = await initialize_early_user(
+                request.user_id, 
+                user_history, 
+                request.session_type, 
+                request.session_mood, 
+                pool
+            )
+            
+        else:  # ACTIVE_USER
+            session_data = await initialize_active_user(
+                request.user_id, 
+                user_history, 
+                request.session_type, 
+                request.session_mood, 
+                pool
+            )
+        
+        # Log summary
+        log_session_summary({
+            **session_data,
+            "user_id": request.user_id,
+            "session_type": request.session_type,
+            "session_mood": request.session_mood,
+            "user_state": user_history.state.value
+        })
+        
+        # Fetch or create user_behavior row (rescue_level, always_silent).
+        # Mirrors the proven pattern in routers/session_router.py.
+        async with pool.acquire() as conn:
+            behavior = await conn.fetchrow("""
+                SELECT rescue_level, always_silent
+                FROM user_behavior WHERE user_id = $1
+            """, request.user_id)
+
+            if behavior is None:
+                await conn.execute("""
+                    INSERT INTO user_behavior (user_id, rescue_level, always_silent)
+                    VALUES ($1, 0.50, FALSE)
+                """, request.user_id)
+                rescue_level = 0.50
+                always_silent = False
+            else:
+                rescue_level = float(behavior['rescue_level'])
+                always_silent = bool(behavior['always_silent'])
+
+        return StartSessionResponse(
+            session_id=session_data['session_id'],
+            rescue_level=rescue_level,
+            always_silent=always_silent,
+        )
+        
     except HTTPException:
         raise
     except Exception as e:
