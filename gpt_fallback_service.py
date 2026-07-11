@@ -10,7 +10,7 @@ import json
 import os
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple
-import openai
+from openai import AsyncOpenAI
 
 from gpt_fallback_types import IntentCandidate, GPTFallbackResponse
 
@@ -24,7 +24,8 @@ if not DATABASE_URL:
 if not OPENAI_API_KEY:
     raise RuntimeError("Missing required environment variable: OPENAI_API_KEY")
 
-openai.api_key = OPENAI_API_KEY
+# openai>=1.0: module-level api_key/ChatCompletion are removed; use a client instance.
+openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
 class GPTFallbackService:
     """
@@ -241,7 +242,7 @@ Réponds UNIQUEMENT avec le JSON, sans explication supplémentaire."""
         try:
             logger.info(f"Calling GPT with {len(intent_candidates)} intent candidates")
             
-            response = await openai.ChatCompletion.acreate(  # Use async version
+            response = await openai_client.chat.completions.create(
                 model=self.gpt_model,
                 messages=[
                     {
@@ -258,7 +259,7 @@ Réponds UNIQUEMENT avec le JSON, sans explication supplémentaire."""
                 timeout=30        # Prevent hanging
             )
             
-            content = response.choices[0].message["content"].strip()
+            content = response.choices[0].message.content.strip()
             
             # Clean and parse JSON response
             content = self._clean_gpt_json_response(content)
