@@ -4,7 +4,7 @@
 # Updated to include all session start calculations per documentation
 # ============================================================================
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Request
 from pydantic import BaseModel
 from typing import Dict, Any, Optional, List
 import asyncpg
@@ -411,77 +411,73 @@ async def get_session_status(session_id: str):
 # ============================================================================
 
 @router.post("/start-cycle", response_model=StartCycleResponse)
-async def start_cycle_endpoint(request: StartCycleRequest):
+async def start_cycle_endpoint(request: StartCycleRequest, http_request: Request):
     """Start a new cycle within a session"""
     try:
         logger.info(f"🔄 Starting cycle {request.cycle_number} for session: {request.session_id}")
-        
-        pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10)
-        
-        try:
-            # Get session data
-            async with pool.acquire() as conn:
-                session = await conn.fetchrow("""
-                    SELECT user_id, session_level, session_boredom, modulo
-                    FROM session
-                    WHERE id = $1
-                """, request.session_id)
-                
-                if not session:
-                    raise HTTPException(status_code=404, detail="Session not found")
-            
-            # Load session context
-            from session_context import SessionContext
-            context = await SessionContext.load(session['user_id'], pool)
-            
-            # Calculate cycle parameters
-            cycle_level = await calculate_cycle_level(
-                request.session_id,
-                request.cycle_number,
-                session['session_level'],
-                pool
-            )
-            
-            cycle_boredom = await calculate_cycle_boredom(
-                request.session_id,
-                request.cycle_number,
-                float(session['session_boredom'] or 0),
-                pool
-            )
-            
-            cycle_goal = await calculate_cycle_goal(
-                request.session_id,
-                request.cycle_number,
-                pool
-            )
-            
-            # Start the cycle
-            cycle_data = await start_new_cycle(
-                session_id=request.session_id,
-                context=context,
-                cycle_number=request.cycle_number,
-                cycle_goal=cycle_goal,
-                cycle_boredom=cycle_boredom,
-                cycle_level=cycle_level,
-                interaction_user_level=cycle_level,
-                session_mood=request.session_mood,
-                db_pool=pool
-            )
-            
-            return StartCycleResponse(
-                cycle_id=cycle_data['cycle_id'],
-                subtopic_id=cycle_data['subtopic_id'],
-                first_interaction_id=cycle_data['first_interaction_id'],
-                first_brain_interaction_id=cycle_data['ordered_interactions'][0],
-                total_interactions=len(cycle_data.get('ordered_interactions', [])),
-                cycle_level=cycle_level,
-                cycle_boredom=cycle_boredom,
-                cycle_goal=cycle_goal
-            )
-            
-        finally:
-            await pool.close()
-            
+
+        pool = http_request.app.state.db_pool
+
+        # Get session data
+        async with pool.acquire() as conn:
+            session = await conn.fetchrow("""
+                SELECT user_id, session_level, session_boredom, modulo
+                FROM session
+                WHERE id = $1
+            """, request.session_id)
+
+            if not session:
+                raise HTTPException(status_code=404, detail="Session not found")
+
+        # Load session context
+        from session_context import SessionContext
+        context = await SessionContext.load(session['user_id'], pool)
+
+        # Calculate cycle parameters
+        cycle_level = await calculate_cycle_level(
+            request.session_id,
+            request.cycle_number,
+            session['session_level'],
+            pool
+        )
+
+        cycle_boredom = await calculate_cycle_boredom(
+            request.session_id,
+            request.cycle_number,
+            float(session['session_boredom'] or 0),
+            pool
+        )
+
+        cycle_goal = await calculate_cycle_goal(
+            request.session_id,
+            request.cycle_number,
+            pool
+        )
+
+        # Start the cycle
+        cycle_data = await start_new_cycle(
+            session_id=request.session_id,
+            context=context,
+            cycle_number=request.cycle_number,
+            cycle_goal=cycle_goal,
+            cycle_boredom=cycle_boredom,
+            cycle_level=cycle_level,
+            interaction_user_level=cycle_level,
+            session_mood=request.session_mood,
+            db_pool=pool
+        )
+
+        return StartCycleResponse(
+            cycle_id=cycle_data['cycle_id'],
+            subtopic_id=cycle_data['subtopic_id'],
+            first_interaction_id=cycle_data['first_interaction_id'],
+            first_brain_interaction_id=cycle_data['ordered_interactions'][0],
+            total_interactions=len(cycle_data.get('ordered_interactions', [])),
+            cycle_level=cycle_level,
+            cycle_boredom=cycle_boredom,
+            cycle_goal=cycle_goal
+        )
+
     except HTTPException:
         raise
     except Exception as e:
