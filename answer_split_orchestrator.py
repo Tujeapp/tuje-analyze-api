@@ -47,40 +47,58 @@ SINGLE_BUTTON_TOLERANCE_SECONDS = 2.0
 GPT_THRESHOLD = 70
 
 
-async def _fetch_mistakes_for_join_row(interaction_answer_id, db_pool):
-    """Tier-1 voice mistakes: given a matched brain_interaction_answer.id, return
-    the mistakes attached to that join row (name/description/type). Empty when the
-    matched answer carries no mistakes (e.g. a clean perfect match). Never raises —
-    a failure returns [] so evaluate still succeeds."""
+async def _fetch_answer_type_and_mistakes(interaction_answer_id, db_pool):
+    """Given a matched brain_interaction_answer.id, return (answer_type, mistakes).
+    answer_type drives the verdict (answer quality); mistakes are the linguistic
+    errors attached to that join row. Never raises — failure returns (None, [])
+    so evaluate still succeeds."""
     if not interaction_answer_id:
-        return []
+        return None, []
     try:
         async with db_pool.acquire() as conn:
-            mistake_ids = await conn.fetchval("""
-                SELECT mistake_ids FROM brain_interaction_answer WHERE id = $1
+            row = await conn.fetchrow("""
+                SELECT answer_type, mistake_ids
+                FROM brain_interaction_answer WHERE id = $1
             """, interaction_answer_id)
-            if not mistake_ids:
-                return []
-            rows = await conn.fetch("""
-                SELECT id, name_fr, name_en, description_fr, description_en, type
-                FROM brain_mistake
-                WHERE id = ANY($1::varchar[]) AND live = TRUE
-                ORDER BY name_fr ASC
-            """, list(mistake_ids))
-        return [
-            {
-                "id": r["id"],
-                "name_fr": r["name_fr"] or "",
-                "name_en": r["name_en"] or "",
-                "description_fr": r["description_fr"],
-                "description_en": r["description_en"],
-                "type": r["type"],
-            }
-            for r in rows
-        ]
+            if not row:
+                return None, []
+            answer_type = row["answer_type"]
+            mistake_ids = row["mistake_ids"]
+            mistakes = []
+            if mistake_ids:
+                mrows = await conn.fetch("""
+                    SELECT id, name_fr, name_en, description_fr, description_en, type
+                    FROM brain_mistake
+                    WHERE id = ANY($1::varchar[]) AND live = TRUE
+                    ORDER BY name_fr ASC
+                """, list(mistake_ids))
+                mistakes = [
+                    {
+                        "id": r["id"],
+                        "name_fr": r["name_fr"] or "",
+                        "name_en": r["name_en"] or "",
+                        "description_fr": r["description_fr"],
+                        "description_en": r["description_en"],
+                        "type": r["type"],
+                    }
+                    for r in mrows
+                ]
+        return answer_type, mistakes
     except Exception as e:
-        logger.error(f"Tier-1 mistake fetch failed for {interaction_answer_id}: {e}")
-        return []
+        logger.error(f"answer_type/mistakes fetch failed for {interaction_answer_id}: {e}")
+        return None, []
+
+
+def _answer_type_to_verdict(answer_type: str) -> str:
+    """Answer quality → verdict. Mirrors the button model: perfect/good are
+    correct; false good/wrong are 'wrong'. (Similarity only decided we matched
+    this answer; answer_type decides whether the answer is any good.)"""
+    if answer_type == "perfect":
+        return "perfect"
+    if answer_type == "good":
+        return "good"
+    # 'false good' and 'wrong' are both wrong-quality answers
+    return "wrong"
 
 
 def _voice_verdict(similarity: float) -> str:
@@ -179,7 +197,19 @@ async def _evaluate_voice(interaction_id, user_id, answer_id, original_transcrip
         db_pool=db_pool,
     )
 
-    verdict = _voice_verdict(similarity)
+    # Match quality (similarity) tells us WHETHER we identified the answer;
+    # answer_type tells us the QUALITY of that answer. Verdict = answer quality.
+    match_found = bool(matching_result.get("match_found"))
+    interaction_answer_id = matching_result.get("interaction_answer_id")
+
+    answer_type, mistakes = await _fetch_answer_type_and_mistakes(
+        interaction_answer_id, db_pool
+    )
+
+    if not match_found or answer_type is None:
+        verdict = "not_understood"
+    else:
+        verdict = _answer_type_to_verdict(answer_type)
 
     interpretation = None
     gpt_used = False
@@ -187,13 +217,6 @@ async def _evaluate_voice(interaction_id, user_id, answer_id, original_transcrip
         interpretation, gpt_used = await _run_gpt_interpretation(
             interaction_id, original_transcript, db_pool
         )
-
-    # Tier-1 mistakes: the matcher returns interaction_answer_id (the
-    # brain_interaction_answer join-row id) — NOT answer_id. The helper keys on
-    # the join row. Empty when the matched answer carries no mistakes.
-    mistakes = await _fetch_mistakes_for_join_row(
-        matching_result.get("interaction_answer_id"), db_pool
-    )
 
     return {
         "answer_id": answer_id,
