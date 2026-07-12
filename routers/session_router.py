@@ -160,6 +160,7 @@ class EvaluateAnswerResponse(BaseModel):
     similarity_score: float
     gpt_used: bool = False
     interpretation: Optional[str] = None
+    mistakes: list = []
     status: str = "evaluated"
 
 

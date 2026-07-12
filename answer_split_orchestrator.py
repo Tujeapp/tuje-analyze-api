@@ -47,6 +47,42 @@ SINGLE_BUTTON_TOLERANCE_SECONDS = 2.0
 GPT_THRESHOLD = 70
 
 
+async def _fetch_mistakes_for_join_row(interaction_answer_id, db_pool):
+    """Tier-1 voice mistakes: given a matched brain_interaction_answer.id, return
+    the mistakes attached to that join row (name/description/type). Empty when the
+    matched answer carries no mistakes (e.g. a clean perfect match). Never raises —
+    a failure returns [] so evaluate still succeeds."""
+    if not interaction_answer_id:
+        return []
+    try:
+        async with db_pool.acquire() as conn:
+            mistake_ids = await conn.fetchval("""
+                SELECT mistake_ids FROM brain_interaction_answer WHERE id = $1
+            """, interaction_answer_id)
+            if not mistake_ids:
+                return []
+            rows = await conn.fetch("""
+                SELECT id, name_fr, name_en, description_fr, description_en, type
+                FROM brain_mistake
+                WHERE id = ANY($1::varchar[]) AND live = TRUE
+                ORDER BY name_fr ASC
+            """, list(mistake_ids))
+        return [
+            {
+                "id": r["id"],
+                "name_fr": r["name_fr"] or "",
+                "name_en": r["name_en"] or "",
+                "description_fr": r["description_fr"],
+                "description_en": r["description_en"],
+                "type": r["type"],
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        logger.error(f"Tier-1 mistake fetch failed for {interaction_answer_id}: {e}")
+        return []
+
+
 def _voice_verdict(similarity: float) -> str:
     if similarity >= VERDICT_PERFECT_MIN:
         return "perfect"
@@ -152,12 +188,20 @@ async def _evaluate_voice(interaction_id, user_id, answer_id, original_transcrip
             interaction_id, original_transcript, db_pool
         )
 
+    # Tier-1 mistakes: the matcher returns interaction_answer_id (the
+    # brain_interaction_answer join-row id) — NOT answer_id. The helper keys on
+    # the join row. Empty when the matched answer carries no mistakes.
+    mistakes = await _fetch_mistakes_for_join_row(
+        matching_result.get("interaction_answer_id"), db_pool
+    )
+
     return {
         "answer_id": answer_id,
         "verdict": verdict,
         "similarity_score": similarity,
         "gpt_used": gpt_used,
         "interpretation": interpretation,
+        "mistakes": mistakes,
         "status": "evaluated",
     }
 
