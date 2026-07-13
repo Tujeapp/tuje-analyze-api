@@ -375,6 +375,24 @@ class MistakeEntry(BaseEntry):
             raise ValueError('Rule code cannot exceed 255 characters')
         return v.strip()
 
+class AttributeEntry(BaseEntry):
+    # Strict (required, non-empty strings)
+    nameFr: str
+    nameEn: str
+
+    # Lenient (Optional)
+    descriptionFr: Optional[str] = None
+    descriptionEn: Optional[str] = None
+    archived: Optional[bool] = False
+
+    @validator('nameFr', 'nameEn')
+    def validate_required_names(cls, v):
+        if not v or len(v.strip()) == 0:
+            raise ValueError('Required fields cannot be empty')
+        if len(v) > 255:
+            raise ValueError('Name too long (max 255 chars)')
+        return v.strip()
+
 class InterestEntry(BaseEntry):
     name: str
     subtopicsIds: List[str]  # Array of subtopic IDs
@@ -697,6 +715,15 @@ SYNC_CONFIGS = {
             "type", "rule_code", "conditions",
             "airtable_record_id",
             "created_at", "update_at", "live", "archived"],
+        "timestamp_field": "LastContentSyncedAt",
+        "use_now_timestamp": True
+    },
+    "attribute": {
+        "table_name": "brain_attribute",
+        "airtable_table": "Attribute",
+        "columns": ["id", "name_fr", "name_en", "description_fr", "description_en",
+                   "airtable_record_id",
+                   "created_at", "update_at", "live", "archived"],
         "timestamp_field": "LastContentSyncedAt",
         "use_now_timestamp": True
     },
@@ -1052,6 +1079,10 @@ async def webhook_sync_interest(entry: InterestEntry, background_tasks: Backgrou
 async def webhook_sync_mistake(entry: MistakeEntry, background_tasks: BackgroundTasks):
     """Webhook endpoint to sync mistake data from Airtable"""
     return await generic_sync_webhook(entry, "mistake", background_tasks)
+
+@router.post("/webhook-sync-attribute")
+async def sync_attribute_webhook(entry: AttributeEntry, background_tasks: BackgroundTasks):
+    return await generic_sync_webhook(entry, "attribute", background_tasks)
 
 @router.post("/webhook-sync-user-goal")
 async def webhook_sync_user_goal(entry: UserGoalEntry, background_tasks: BackgroundTasks):
