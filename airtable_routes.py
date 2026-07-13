@@ -94,6 +94,7 @@ class AnswerEntry(BaseEntry):
     imageUrl: Optional[str] = None
     mistakeIds: Optional[List[str]] = None
     vocabIds: Optional[List[str]] = None
+    attributeIds: Optional[List[str]] = None
     archived: Optional[bool] = False
 
     @validator('transcriptionFr', 'transcriptionEn', 'transcriptionAdjusted')
@@ -102,7 +103,7 @@ class AnswerEntry(BaseEntry):
             raise ValueError('Required text fields cannot be empty')
         return v.strip()
 
-    @validator('mistakeIds', 'vocabIds')
+    @validator('mistakeIds', 'vocabIds', 'attributeIds')
     def validate_optional_arrays(cls, v):
         # Allow None or empty arrays
         if v is None:
@@ -291,6 +292,8 @@ class InteractionEntry(BaseEntry):
     interactionNotion: Optional[List[str]] = None
     interactionVocabIds: Optional[List[str]] = None
     hintIds: Optional[List[str]] = None
+    interactionAttributeIds: Optional[List[str]] = None
+    expectedAttributeIds: Optional[List[str]] = None
     interactionTypeId: Optional[str] = None
     interactionOptimumLevel: Optional[int] = None
     levelFrom: Optional[int] = None
@@ -332,7 +335,8 @@ class InteractionEntry(BaseEntry):
         return v
     
     @validator('hintIds', 'expectedEntitiesIds', 'expectedVocabIds',
-               'expectedNotionIds', 'interactionNotion', 'interactionVocabIds', 'intents')
+               'expectedNotionIds', 'interactionNotion', 'interactionVocabIds', 'intents',
+               'interactionAttributeIds', 'expectedAttributeIds')
     def validate_optional_arrays(cls, v):
         # Allow None or empty arrays
         if v is None:
@@ -471,6 +475,7 @@ class VocabEntry(BaseEntry):
     mistakeIds: Optional[List[str]] = None
     groupVocabIds: Optional[List[str]] = None
     matchedReferralVocabIds: Optional[List[str]] = None
+    attributeIds: Optional[List[str]] = None
     archived: Optional[bool] = False
 
     @validator('entityTypeId')
@@ -483,7 +488,7 @@ class VocabEntry(BaseEntry):
         return v
 
     @validator('mistakeIds', 'groupVocabIds', 'matchedReferralVocabIds',
-               'gender', 'plural', 'expectedIntentIds', 'expectedNotionIds')
+               'gender', 'plural', 'expectedIntentIds', 'expectedNotionIds', 'attributeIds')
     def validate_optional_arrays(cls, v):
         # Allow None or empty arrays
         if v is None:
@@ -616,7 +621,7 @@ SYNC_CONFIGS = {
         "airtable_table": "Answer",
         "columns": ["id", "transcription_fr", "transcription_en", "transcription_adjusted",
                    "answer_optimum_level", "image_url", "timer_seconds", "is_button",
-                   "audio_normal_url", "audio_slow_url", "mistake_ids", "vocab_ids",
+                   "audio_normal_url", "audio_slow_url", "mistake_ids", "vocab_ids", "attribute_ids",
                    "airtable_record_id", "created_at", "update_at", "live", "archived"],
         "timestamp_field": "LastContentSyncedAt",
         "use_now_timestamp": True
@@ -628,7 +633,7 @@ SYNC_CONFIGS = {
             "id", "transcription_fr", "transcription_en", "subtopic_id",
             "intents", "expected_entities_id", "expected_vocab_id",
             "expected_notion_id", "interaction_notion", "interaction_vocab_id",
-            "hint_ids", "interaction_type_id",
+            "hint_ids", "interaction_attribute_ids", "expected_attribute_ids", "interaction_type_id",
             "interaction_optimum_level", "level_from", "boredom",
             "airtable_record_id",
             "created_at", "update_at", "live", "archived", "video_url", "video_poster_url", "speak", "selection_mode", "entry_point", "entry_point_type"
@@ -646,7 +651,7 @@ SYNC_CONFIGS = {
                    "entity_type_id", "entity_priority", "expected_notion_id", "expected_intent_id",
                    "description", "examples", "gender", "plural",
                    "audio_normal_url", "audio_slow_url", "image_url",
-                   "mistake_ids", "group_vocab_ids", "matched_referral_vocab_ids",
+                   "mistake_ids", "group_vocab_ids", "matched_referral_vocab_ids", "attribute_ids",
                    "airtable_record_id",
                    "created_at", "update_at", "live", "archived"],
         "timestamp_field": "LastContentSyncedAt",
@@ -870,6 +875,9 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "audioSlowUrl": "audio_slow_url",
         "mistakeIds": "mistake_ids",
         "vocabIds": "vocab_ids",
+        "attributeIds": "attribute_ids",
+        "interactionAttributeIds": "interaction_attribute_ids",
+        "expectedAttributeIds": "expected_attribute_ids",
         "answerType": "answer_type"
     }
     
@@ -928,7 +936,7 @@ async def sync_entity_to_database(entry_data: Dict, config: Dict) -> None:
             for col in columns:
                 value = entry_data.get(col)
                 # CHANGE 1: Add 'expected_intent_id' to this list (just add it to the existing list)
-                if col in ['intents', 'expected_entities_id', 'expected_vocab_id', 'expected_notion_id', 'interaction_notion', 'expected_intent_id', 'interaction_vocab_id', 'session_mood_ids', 'subtopic_ids', 'hint_ids', 'topics', 'user_goal_ids', 'matched_as_variant_ids', 'mistake_ids', 'vocab_ids', 'group_vocab_ids', 'matched_referral_vocab_ids', 'gender', 'plural', 'all_matched_same_interaction_ids', 'all_matched_follow_interaction_ids', 'all_matched_bonus_malus_ids', 'feedback_ids'] and isinstance(value, list):
+                if col in ['intents', 'expected_entities_id', 'expected_vocab_id', 'expected_notion_id', 'interaction_notion', 'expected_intent_id', 'interaction_vocab_id', 'session_mood_ids', 'subtopic_ids', 'hint_ids', 'topics', 'user_goal_ids', 'matched_as_variant_ids', 'mistake_ids', 'vocab_ids', 'group_vocab_ids', 'matched_referral_vocab_ids', 'gender', 'plural', 'all_matched_same_interaction_ids', 'all_matched_follow_interaction_ids', 'all_matched_bonus_malus_ids', 'feedback_ids', 'attribute_ids', 'interaction_attribute_ids', 'expected_attribute_ids'] and isinstance(value, list):
                     values.append(value)  # PostgreSQL will handle the array
                 else:
                     values.append(value)
