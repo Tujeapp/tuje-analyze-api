@@ -398,6 +398,22 @@ class AttributeEntry(BaseEntry):
             raise ValueError('Required field too long (max 255 chars)')
         return v.strip()
 
+class AttributeMistakeEntry(BaseEntry):
+    # Strict (required, non-empty strings)
+    mistakeId: str
+    vocabMatchedId: str
+    attributeExpectedId: str
+    attributeMatchedId: str
+
+    # Lenient (system-wide)
+    archived: Optional[bool] = False
+
+    @validator('mistakeId', 'vocabMatchedId', 'attributeExpectedId', 'attributeMatchedId')
+    def validate_required_ids(cls, v):
+        if not v or len(v.strip()) == 0:
+            raise ValueError('Required fields cannot be empty')
+        return v.strip()
+
 class InterestEntry(BaseEntry):
     name: str
     subtopicsIds: List[str]  # Array of subtopic IDs
@@ -733,6 +749,16 @@ SYNC_CONFIGS = {
         "timestamp_field": "LastContentSyncedAt",
         "use_now_timestamp": True
     },
+    "attribute_mistake": {
+        "table_name": "brain_attribute_mistake",
+        "airtable_table": "Attribute-Mistake",
+        "columns": ["id", "mistake_id", "vocab_matched_id",
+                    "attribute_expected_id", "attribute_matched_id",
+                    "airtable_record_id",
+                    "created_at", "update_at", "live", "archived"],
+        "timestamp_field": "LastContentSyncedAt",
+        "use_now_timestamp": True
+    },
     "hint": {
         "table_name": "brain_hint",
         "airtable_table": "Hint",
@@ -876,6 +902,10 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "audioSlowUrl": "audio_slow_url",
         "mistakeIds": "mistake_ids",
         "vocabIds": "vocab_ids",
+        "mistakeId": "mistake_id",
+        "vocabMatchedId": "vocab_matched_id",
+        "attributeExpectedId": "attribute_expected_id",
+        "attributeMatchedId": "attribute_matched_id",
         "attributeIds": "attribute_ids",
         "interactionAttributeIds": "interaction_attribute_ids",
         "expectedAttributeIds": "expected_attribute_ids",
@@ -1092,6 +1122,10 @@ async def webhook_sync_mistake(entry: MistakeEntry, background_tasks: Background
 @router.post("/webhook-sync-attribute")
 async def sync_attribute_webhook(entry: AttributeEntry, background_tasks: BackgroundTasks):
     return await generic_sync_webhook(entry, "attribute", background_tasks)
+
+@router.post("/webhook-sync-attribute-mistake")
+async def sync_attribute_mistake_webhook(entry: AttributeMistakeEntry, background_tasks: BackgroundTasks):
+    return await generic_sync_webhook(entry, "attribute_mistake", background_tasks)
 
 @router.post("/webhook-sync-user-goal")
 async def webhook_sync_user_goal(entry: UserGoalEntry, background_tasks: BackgroundTasks):
