@@ -389,6 +389,7 @@ class AttributeEntry(BaseEntry):
     descriptionFr: Optional[str] = None
     descriptionEn: Optional[str] = None
     archived: Optional[bool] = False
+    important: Optional[bool] = False
 
     @validator('nameFr', 'nameEn', 'category')
     def validate_required_names(cls, v):
@@ -745,7 +746,7 @@ SYNC_CONFIGS = {
         "airtable_table": "Attribute",
         "columns": ["id", "name_fr", "name_en", "category", "description_fr", "description_en",
                    "airtable_record_id",
-                   "created_at", "update_at", "live", "archived"],
+                   "created_at", "update_at", "live", "archived", "important"],
         "timestamp_field": "LastContentSyncedAt",
         "use_now_timestamp": True
     },
