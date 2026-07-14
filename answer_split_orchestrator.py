@@ -165,6 +165,7 @@ async def evaluate_user_answer(
     original_transcript: Optional[str] = None,
     selected_answer_id: Optional[str] = None,
     tapped_at_seconds: Optional[float] = None,
+    debug: bool = False,
 ) -> Dict:
     """Evaluate one attempt. Creates the answer row, increments the attempt
     counter, returns a verdict + provisional similarity. Does NOT complete or
@@ -181,7 +182,7 @@ async def evaluate_user_answer(
     await interaction_service.increment_attempt_count(interaction_id, db_pool)
 
     if answer_mode_used == "voice":
-        return await _evaluate_voice(interaction_id, user_id, answer_id, original_transcript, db_pool)
+        return await _evaluate_voice(interaction_id, user_id, answer_id, original_transcript, db_pool, debug=debug)
     elif answer_mode_used == "multipleButtons":
         return await _evaluate_multiple_buttons(interaction_id, answer_id, selected_answer_id, db_pool)
     elif answer_mode_used == "singleButton":
@@ -190,7 +191,7 @@ async def evaluate_user_answer(
         raise ValueError(f"Unknown answer_mode_used: {answer_mode_used}")
 
 
-async def _evaluate_voice(interaction_id, user_id, answer_id, original_transcript, db_pool) -> Dict:
+async def _evaluate_voice(interaction_id, user_id, answer_id, original_transcript, db_pool, debug: bool = False) -> Dict:
     if not original_transcript:
         raise ValueError("original_transcript is required for voice mode")
 
@@ -271,6 +272,18 @@ async def _evaluate_voice(interaction_id, user_id, answer_id, original_transcrip
             interaction_id, original_transcript, db_pool
         )
 
+    debug_payload = None
+    if debug:
+        debug_payload = {
+            "adjusted_transcript": adjustment_result.adjusted_transcript,
+            "vocab_matched": [
+                {"id": v.id, "transcription_fr": v.transcription_fr}
+                for v in (adjustment_result.list_of_vocabulary or [])
+            ],
+            "notion_matches": list(adjustment_result.list_of_notion_matches or []),
+            "intent_matches": list(adjustment_result.list_of_intent_matches or []),
+        }
+
     return {
         "answer_id": answer_id,
         "verdict": verdict,
@@ -278,6 +291,7 @@ async def _evaluate_voice(interaction_id, user_id, answer_id, original_transcrip
         "gpt_used": gpt_used,
         "interpretation": interpretation,
         "mistakes": mistakes,
+        "debug": debug_payload,
         "status": "evaluated",
     }
 

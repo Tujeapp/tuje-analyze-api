@@ -152,6 +152,7 @@ class EvaluateAnswerRequest(BaseModel):
     original_transcript: Optional[str] = None
     selected_answer_id: Optional[str] = None
     tapped_at_seconds: Optional[float] = None
+    debug: bool = False
 
 
 class EvaluateAnswerResponse(BaseModel):
@@ -161,6 +162,7 @@ class EvaluateAnswerResponse(BaseModel):
     gpt_used: bool = False
     interpretation: Optional[str] = None
     mistakes: list = []
+    debug: Optional[dict] = None
     status: str = "evaluated"
 
 
@@ -612,6 +614,7 @@ async def evaluate_answer(request: EvaluateAnswerRequest, http_request: Request)
             original_transcript=request.original_transcript,
             selected_answer_id=request.selected_answer_id,
             tapped_at_seconds=request.tapped_at_seconds,
+            debug=request.debug,
         )
         return EvaluateAnswerResponse(**result)
     except Exception as e:
