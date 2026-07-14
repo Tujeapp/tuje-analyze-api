@@ -131,6 +131,102 @@ async def _fetch_vocab_mistakes(vocab_ids, db_pool):
         return []
 
 
+async def _fetch_tier2b_mistakes(vocab_ids, brain_interaction_id, db_pool):
+    """Voice Tier 2b (attribute-diff mistakes): for each matched vocab, find
+    its important=true attributes. Any attribute NOT in the interaction's
+    expected_attribute_ids is an 'odd' attribute — pointing at a specific
+    linguistic error tied to that vocab. Look up brain_attribute_mistake for
+    each (odd_attr, vocab, any_expected) triple; resolve mistake_ids to
+    brain_mistake records. Silent on no lookup match (no fallthrough).
+    Never raises: failure returns []."""
+    if not vocab_ids or not brain_interaction_id:
+        return []
+    try:
+        async with db_pool.acquire() as conn:
+            # Step 1: interaction's expected attributes.
+            expected_row = await conn.fetchrow("""
+                SELECT expected_attribute_ids
+                FROM brain_interaction WHERE id = $1
+            """, brain_interaction_id)
+            if not expected_row or not expected_row["expected_attribute_ids"]:
+                return []
+            expected_ids = set(expected_row["expected_attribute_ids"])
+
+            # Step 2: for each matched vocab, fetch its attribute_ids.
+            vocab_rows = await conn.fetch("""
+                SELECT id, attribute_ids
+                FROM brain_vocab
+                WHERE id = ANY($1::varchar[]) AND live = TRUE
+            """, list(vocab_ids))
+            if not vocab_rows:
+                return []
+
+            # Step 3: collect (vocab_id, odd_attr_id) pairs — filter to important=true only.
+            #   "odd" = attribute on user's vocab NOT in expected_attribute_ids.
+            all_attr_ids = set()
+            vocab_to_attrs = {}
+            for row in vocab_rows:
+                attrs = row["attribute_ids"] or []
+                vocab_to_attrs[row["id"]] = attrs
+                all_attr_ids.update(attrs)
+            if not all_attr_ids:
+                return []
+            attr_rows = await conn.fetch("""
+                SELECT id, important
+                FROM brain_attribute
+                WHERE id = ANY($1::varchar[]) AND live = TRUE
+            """, list(all_attr_ids))
+            important_attrs = {r["id"] for r in attr_rows if r["important"]}
+
+            odd_pairs = []  # list of (vocab_id, odd_attr_id)
+            for vocab_id, attrs in vocab_to_attrs.items():
+                for attr_id in attrs:
+                    if attr_id in important_attrs and attr_id not in expected_ids:
+                        odd_pairs.append((vocab_id, attr_id))
+            if not odd_pairs:
+                return []
+
+            # Step 4: look up brain_attribute_mistake for each (odd_attr, vocab) pair
+            #   restricted to attribute_expected_id ∈ expected_ids. Aggregate mistake_ids.
+            mistake_ids = set()
+            for vocab_id, odd_attr_id in odd_pairs:
+                mrows = await conn.fetch("""
+                    SELECT mistake_id
+                    FROM brain_attribute_mistake
+                    WHERE live = TRUE
+                      AND attribute_matched_id = $1
+                      AND vocab_matched_id = $2
+                      AND attribute_expected_id = ANY($3::varchar[])
+                """, odd_attr_id, vocab_id, list(expected_ids))
+                for mr in mrows:
+                    if mr["mistake_id"]:
+                        mistake_ids.add(mr["mistake_id"])
+            if not mistake_ids:
+                return []
+
+            # Step 5: resolve to full mistake records.
+            resolved = await conn.fetch("""
+                SELECT id, name_fr, name_en, description_fr, description_en, type
+                FROM brain_mistake
+                WHERE id = ANY($1::varchar[]) AND live = TRUE
+                ORDER BY name_fr ASC
+            """, list(mistake_ids))
+        return [
+            {
+                "id": r["id"],
+                "name_fr": r["name_fr"] or "",
+                "name_en": r["name_en"] or "",
+                "description_fr": r["description_fr"],
+                "description_en": r["description_en"],
+                "type": r["type"],
+            }
+            for r in resolved
+        ]
+    except Exception as e:
+        logger.error(f"Tier-2b attribute-diff fetch failed: {e}")
+        return []
+
+
 def _answer_type_to_verdict(answer_type: str) -> str:
     """Answer quality → verdict. Mirrors the button model: perfect/good are
     correct; false good/wrong are 'wrong'. (Similarity only decided we matched
@@ -252,16 +348,23 @@ async def _evaluate_voice(interaction_id, user_id, answer_id, original_transcrip
     if not match_found or answer_type is None:
         verdict = "not_understood"
         # Tier 2a: no answer match, but the adjuster may have matched vocab —
-        # surface any mistakes authored on those vocab records. (Tier 2b, the
-        # inferred attribute-diff path, is deferred and not built here.)
+        # surface any mistakes authored on those vocab records.
         vocab_ids = [v.id for v in adjustment_result.list_of_vocabulary] if adjustment_result.list_of_vocabulary else []
         if vocab_ids:
             vocab_mistakes = await _fetch_vocab_mistakes(vocab_ids, db_pool)
             if vocab_mistakes:
-                # Same `mistakes` field as Tier 1 (no source tag; UI doesn't
-                # distinguish yet). Dedupe by id in case Tier 1 also contributed.
                 seen = {m["id"] for m in mistakes}
                 mistakes.extend(m for m in vocab_mistakes if m["id"] not in seen)
+            # Tier 2b (inferred, attribute-diff): only if Tier 2a returned nothing.
+            # Compare user's important attributes against interaction's expected;
+            # look up brain_attribute_mistake per (odd_attr, vocab) triple.
+            if not mistakes:
+                tier2b = await _fetch_tier2b_mistakes(
+                    vocab_ids, brain_interaction_id, db_pool
+                )
+                if tier2b:
+                    seen = {m["id"] for m in mistakes}
+                    mistakes.extend(m for m in tier2b if m["id"] not in seen)
     else:
         verdict = _answer_type_to_verdict(answer_type)
 
