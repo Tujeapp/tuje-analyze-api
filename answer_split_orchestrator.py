@@ -89,6 +89,48 @@ async def _fetch_answer_type_and_mistakes(interaction_answer_id, db_pool):
         return None, []
 
 
+async def _fetch_vocab_mistakes(vocab_ids, db_pool):
+    """Voice Tier 2a: given a list of matched vocab ids (from the adjuster),
+    return the mistakes attached to any of those vocab records. Deterministic
+    — reads `mistake_ids` off brain_vocab, resolves via brain_mistake. Never
+    raises: failure returns []. Empty when no matched vocab carries mistakes."""
+    if not vocab_ids:
+        return []
+    try:
+        async with db_pool.acquire() as conn:
+            # Collect all mistake_ids across the matched (live) vocab rows.
+            rows = await conn.fetch("""
+                SELECT mistake_ids FROM brain_vocab
+                WHERE id = ANY($1::varchar[]) AND live = TRUE
+            """, list(vocab_ids))
+            all_ids = set()
+            for r in rows:
+                if r["mistake_ids"]:
+                    all_ids.update(r["mistake_ids"])
+            if not all_ids:
+                return []
+            mrows = await conn.fetch("""
+                SELECT id, name_fr, name_en, description_fr, description_en, type
+                FROM brain_mistake
+                WHERE id = ANY($1::varchar[]) AND live = TRUE
+                ORDER BY name_fr ASC
+            """, list(all_ids))
+        return [
+            {
+                "id": r["id"],
+                "name_fr": r["name_fr"] or "",
+                "name_en": r["name_en"] or "",
+                "description_fr": r["description_fr"],
+                "description_en": r["description_en"],
+                "type": r["type"],
+            }
+            for r in mrows
+        ]
+    except Exception as e:
+        logger.error(f"Tier-2a vocab-mistake fetch failed: {e}")
+        return []
+
+
 def _answer_type_to_verdict(answer_type: str) -> str:
     """Answer quality → verdict. Mirrors the button model: perfect/good are
     correct; false good/wrong are 'wrong'. (Similarity only decided we matched
@@ -208,6 +250,17 @@ async def _evaluate_voice(interaction_id, user_id, answer_id, original_transcrip
 
     if not match_found or answer_type is None:
         verdict = "not_understood"
+        # Tier 2a: no answer match, but the adjuster may have matched vocab —
+        # surface any mistakes authored on those vocab records. (Tier 2b, the
+        # inferred attribute-diff path, is deferred and not built here.)
+        vocab_ids = [v.id for v in adjustment_result.list_of_vocabulary] if adjustment_result.list_of_vocabulary else []
+        if vocab_ids:
+            vocab_mistakes = await _fetch_vocab_mistakes(vocab_ids, db_pool)
+            if vocab_mistakes:
+                # Same `mistakes` field as Tier 1 (no source tag; UI doesn't
+                # distinguish yet). Dedupe by id in case Tier 1 also contributed.
+                seen = {m["id"] for m in mistakes}
+                mistakes.extend(m for m in vocab_mistakes if m["id"] not in seen)
     else:
         verdict = _answer_type_to_verdict(answer_type)
 
