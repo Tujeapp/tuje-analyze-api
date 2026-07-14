@@ -3,7 +3,7 @@
 
 CONTRACTION_PATTERNS = {
     r"\bj'ai\b": "jai",
-    r"\bj'": "j ",
+    r"\bj'": "j",
     r"\bd'": "de ",
     r"\bl'": "le ",
     r"\bc'est\b": "cest",
