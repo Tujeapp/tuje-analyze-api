@@ -44,7 +44,40 @@ VERDICT_WRONG_MIN = 50
 
 MATCH_THRESHOLD = 80
 SINGLE_BUTTON_TOLERANCE_SECONDS = 2.0
+# singleButton timing bands (symmetric around the closest target timer).
+SINGLE_BUTTON_ON_TIME_SECONDS = 0.25
+SINGLE_BUTTON_CLOSE_SECONDS = 1.00
+SINGLE_BUTTON_FAR_SECONDS = 2.00
 GPT_THRESHOLD = 70
+
+
+async def _fetch_mistakes_by_ids(mistake_ids, db_pool):
+    """Resolve a list of mistake ids to brain_mistake records. Empty list in →
+    empty out. Never raises: failure returns []."""
+    if not mistake_ids:
+        return []
+    try:
+        async with db_pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT id, name_fr, name_en, description_fr, description_en, type
+                FROM brain_mistake
+                WHERE id = ANY($1::varchar[]) AND live = TRUE
+                ORDER BY name_fr ASC
+            """, list(mistake_ids))
+        return [
+            {
+                "id": r["id"],
+                "name_fr": r["name_fr"] or "",
+                "name_en": r["name_en"] or "",
+                "description_fr": r["description_fr"],
+                "description_en": r["description_en"],
+                "type": r["type"],
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        logger.error(f"Mistake resolution failed: {e}")
+        return []
 
 
 async def _fetch_answer_type_and_mistakes(interaction_answer_id, db_pool):
@@ -464,15 +497,20 @@ async def _evaluate_multiple_buttons(interaction_id, answer_id, selected_answer_
 
     # CHUNK 2: correctness + score derive from answer_type (not linkage).
     # Live answer_type values: 'perfect' | 'good' | 'false good' | 'wrong'.
+    # Also fetch the join-row id + mistake_ids so we can surface button mistakes
+    # (same model as voice Tier 1 — mistakes are authored on brain_interaction_answer).
     async with db_pool.acquire() as conn:
-        answer_type = await conn.fetchval("""
-            SELECT bia.answer_type
+        row = await conn.fetchrow("""
+            SELECT bia.id AS interaction_answer_id, bia.answer_type, bia.mistake_ids
             FROM brain_interaction_answer bia
             WHERE bia.interaction_id = (
                 SELECT brain_interaction_id FROM session_interaction WHERE id = $1
             )
             AND bia.answer_id = $2
         """, interaction_id, selected_answer_id)
+
+    answer_type = row["answer_type"] if row else None
+    button_mistake_ids = (row["mistake_ids"] if row else None) or []
 
     # answer_type -> (score, verdict). perfect/good = correct; false good/wrong = wrong.
     type_map = {
@@ -498,12 +536,15 @@ async def _evaluate_multiple_buttons(interaction_id, answer_id, selected_answer_
         db_pool=db_pool,
     )
 
+    mistakes = await _fetch_mistakes_by_ids(button_mistake_ids, db_pool)
+
     return {
         "answer_id": answer_id,
         "verdict": verdict,
         "similarity_score": score,
         "gpt_used": False,
         "interpretation": None,
+        "mistakes": mistakes,
         "status": "evaluated",
     }
 
@@ -512,45 +553,55 @@ async def _evaluate_single_button(interaction_id, answer_id, tapped_at_seconds, 
     if tapped_at_seconds is None:
         raise ValueError("tapped_at_seconds is required for singleButton mode")
 
+    # A single-button interaction can have SEVERAL valid tap moments (answers
+    # with different timer_seconds, >=2s apart). Grade the tap against the
+    # CLOSEST target (Interpretation A). Timing bands (symmetric around target):
+    #   <= 0.25s  on time     -> perfect (100)
+    #   <= 1.00s  very close   -> good    (70)
+    #   <= 2.00s  far          -> wrong   (30)
+    #   >  2.00s  not there    -> not_understood (0)
     async with db_pool.acquire() as conn:
-        expected = await conn.fetchrow("""
+        targets = await conn.fetch("""
             SELECT ba.id, ba.timer_seconds
             FROM brain_interaction_answer bia
             JOIN brain_answer ba ON bia.answer_id = ba.id
             WHERE bia.interaction_id = (
-                SELECT brain_interaction_id
-                FROM session_interaction
-                WHERE id = $1
+                SELECT brain_interaction_id FROM session_interaction WHERE id = $1
             )
             AND ba.timer_seconds IS NOT NULL
-            LIMIT 1
         """, interaction_id)
 
-    if not expected or expected["timer_seconds"] is None:
+    if not targets:
         await answer_service.update_answer_with_matching(
             answer_id=answer_id, similarity_score=0.0, matched_answer_id=None, db_pool=db_pool,
         )
-        return {"answer_id": answer_id, "verdict": "incorrect", "similarity_score": 0.0,
-                "gpt_used": False, "interpretation": None, "status": "evaluated"}
+        return {"answer_id": answer_id, "verdict": "not_understood", "similarity_score": 0.0,
+                "gpt_used": False, "interpretation": None, "mistakes": [], "status": "evaluated"}
 
-    delta = abs(tapped_at_seconds - float(expected["timer_seconds"]))
-    is_correct = delta <= SINGLE_BUTTON_TOLERANCE_SECONDS
-    similarity = (
-        max(0.0, round((1.0 - delta / (SINGLE_BUTTON_TOLERANCE_SECONDS * 2)) * 100, 1))
-        if is_correct else 0.0
-    )
+    # Closest target wins.
+    closest = min(targets, key=lambda r: abs(tapped_at_seconds - float(r["timer_seconds"])))
+    delta = abs(tapped_at_seconds - float(closest["timer_seconds"]))
+
+    if delta <= SINGLE_BUTTON_ON_TIME_SECONDS:
+        score, verdict = 100.0, "perfect"
+    elif delta <= SINGLE_BUTTON_CLOSE_SECONDS:
+        score, verdict = 70.0, "good"
+    elif delta <= SINGLE_BUTTON_FAR_SECONDS:
+        score, verdict = 30.0, "wrong"
+    else:
+        score, verdict = 0.0, "not_understood"
 
     await answer_service.update_answer_with_matching(
         answer_id=answer_id,
-        similarity_score=similarity,
-        matched_answer_id=expected["id"] if is_correct else None,
+        similarity_score=score,
+        matched_answer_id=closest["id"] if verdict in ("perfect", "good") else None,
         db_pool=db_pool,
     )
 
     return {"answer_id": answer_id,
-            "verdict": "correct" if is_correct else "incorrect",
-            "similarity_score": similarity,
-            "gpt_used": False, "interpretation": None, "status": "evaluated"}
+            "verdict": verdict,
+            "similarity_score": score,
+            "gpt_used": False, "interpretation": None, "mistakes": [], "status": "evaluated"}
 
 
 # ============================================================================
@@ -595,20 +646,10 @@ async def commit_answer(interaction_id: str, answer_id: str, db_pool: asyncpg.Po
         score = int(round(similarity))
         method = "multiple_buttons"
     elif mode == "singleButton":
-        async with db_pool.acquire() as conn:
-            expected_seconds = await conn.fetchval("""
-                SELECT ba.timer_seconds
-                FROM brain_interaction_answer bia
-                JOIN brain_answer ba ON bia.answer_id = ba.id
-                WHERE bia.interaction_id = (
-                    SELECT brain_interaction_id FROM session_interaction WHERE id = $1
-                )
-                AND ba.timer_seconds IS NOT NULL
-                LIMIT 1
-            """, interaction_id)
-        score = await scoring_service.calculate_single_button_score(
-            tapped_at_seconds=float(answer["tapped_at_seconds"] or 0.0),
-            expected_seconds=float(expected_seconds or 0.0))
+        # Score was derived from the closest timing band at evaluate and stored
+        # on the answer's similarity_score. Use it directly (mirrors multipleButtons)
+        # instead of recomputing against an arbitrary LIMIT 1 timer.
+        score = int(round(similarity))
         method = "single_button"
     else:  # voice
         score = await scoring_service.calculate_interaction_score(
