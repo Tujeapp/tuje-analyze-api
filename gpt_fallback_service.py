@@ -221,12 +221,21 @@ RÈGLES IMPORTANTES:
 - Si AUCUNE intention ne correspond bien (score < {threshold}), retourne "no_match"
 
 RÈGLE "makes_sense" (INDÉPENDANTE du match d'intention):
-- true  = l'énoncé ressemble à une tentative plausible de répondre à CETTE interaction
-          (pertinence sémantique : le sujet et la situation correspondent)
-- false = l'énoncé est hors-sujet, sans rapport avec cette interaction
+- Juge UNIQUEMENT par rapport aux INTENTIONS ATTENDUES listées ci-dessus.
+  N'interprète PAS l'interaction elle-même et n'imagine PAS comment l'énoncé
+  pourrait s'y rapporter de façon détournée.
+- true  = l'énoncé est une tentative plausible d'exprimer l'UNE des intentions
+          attendues (dans son domaine thématique), même s'il ne correspond
+          exactement à aucune.
+- false = l'énoncé est sans rapport avec TOUTES les intentions attendues.
 - Ce n'est PAS un jugement sur la grammaire ni sur la correction de la langue :
-  un énoncé maladroit, incomplet ou fautif mais pertinent reste "makes_sense": true
-- "makes_sense" peut être true même si AUCUNE intention de la liste ne correspond
+  un énoncé maladroit, incomplet ou fautif mais thématiquement pertinent reste
+  "makes_sense": true
+- "makes_sense" peut être true même si aucune intention ne correspond au seuil
+  de confiance (l'énoncé est dans le bon domaine sans matcher précisément).
+- Exemple: si les intentions attendues concernent "parler de son travail" et que
+  l'énoncé parle d'une voiture dans un garage, c'est "makes_sense": false —
+  aucun rapport avec les intentions attendues.
 
 RÉPONSE REQUISE (JSON uniquement):
 Si une intention correspond (score >= {threshold}):
