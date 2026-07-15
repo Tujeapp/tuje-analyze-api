@@ -162,6 +162,8 @@ class EvaluateAnswerResponse(BaseModel):
     gpt_used: bool = False
     interpretation: Optional[str] = None
     mistakes: list = []
+    matched_intents: list = []
+    makes_sense: Optional[bool] = None
     debug: Optional[dict] = None
     status: str = "evaluated"
 

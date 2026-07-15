@@ -211,7 +211,8 @@ INTENTIONS POSSIBLES pour cette interaction:
 
 TÂCHE:
 Analyse ce que l'utilisateur essaie de dire, même si la transcription est imparfaite.
-Trouve l'intention la plus proche dans la liste ci-dessus.
+1. Trouve l'intention la plus proche dans la liste ci-dessus.
+2. Évalue si l'énoncé a du SENS comme réponse à CETTE interaction précise ("makes_sense").
 
 RÈGLES IMPORTANTES:
 - Concentre-toi sur l'INTENTION plutôt que la grammaire parfaite
@@ -219,13 +220,22 @@ RÈGLES IMPORTANTES:
 - Sois tolérant aux fautes et approximations
 - Si AUCUNE intention ne correspond bien (score < {threshold}), retourne "no_match"
 
+RÈGLE "makes_sense" (INDÉPENDANTE du match d'intention):
+- true  = l'énoncé ressemble à une tentative plausible de répondre à CETTE interaction
+          (pertinence sémantique : le sujet et la situation correspondent)
+- false = l'énoncé est hors-sujet, sans rapport avec cette interaction
+- Ce n'est PAS un jugement sur la grammaire ni sur la correction de la langue :
+  un énoncé maladroit, incomplet ou fautif mais pertinent reste "makes_sense": true
+- "makes_sense" peut être true même si AUCUNE intention de la liste ne correspond
+
 RÉPONSE REQUISE (JSON uniquement):
 Si une intention correspond (score >= {threshold}):
 {{
   "matched_intent_name": "introduce_self",
   "matched_intent_id": "INTENT202508010901",
   "confidence_score": 85,
-  "reasoning": "L'utilisateur essaie de se présenter malgré la transcription imparfaite"
+  "reasoning": "L'utilisateur essaie de se présenter malgré la transcription imparfaite",
+  "makes_sense": true
 }}
 
 Si AUCUNE intention ne correspond (score < {threshold}):
@@ -234,7 +244,8 @@ Si AUCUNE intention ne correspond (score < {threshold}):
   "matched_intent_id": null,
   "confidence_score": 30,
   "reasoning": "Aucune intention ne correspond clairement",
-  "alternative_interpretation": "L'utilisateur semble vouloir [votre interprétation libre]"
+  "alternative_interpretation": "L'utilisateur semble vouloir [votre interprétation libre]",
+  "makes_sense": true
 }}
 
 Réponds UNIQUEMENT avec le JSON, sans explication supplémentaire."""
@@ -334,6 +345,7 @@ Réponds UNIQUEMENT avec le JSON, sans explication supplémentaire."""
             "threshold": threshold,
             "candidates_analyzed": 1,  # Will be updated by caller
             "gpt_reasoning": gpt_result.get('reasoning'),
+            "makes_sense": gpt_result.get("makes_sense"),
             "processing_time_ms": round(processing_time * 1000, 2),
             "cost_estimate_usd": gpt_result.get('cost_estimate_usd'),
             "timestamp": datetime.now().isoformat()
@@ -360,6 +372,7 @@ Réponds UNIQUEMENT avec le JSON, sans explication supplémentaire."""
             "candidates_analyzed": candidates_count,
             "gpt_reasoning": gpt_result.get('reasoning'),
             "gpt_alternative_interpretation": gpt_result.get('alternative_interpretation'),
+            "makes_sense": gpt_result.get("makes_sense"),
             "processing_time_ms": round(processing_time * 1000, 2),
             "cost_estimate_usd": gpt_result.get('cost_estimate_usd'),
             "timestamp": datetime.now().isoformat()
@@ -383,6 +396,7 @@ Réponds UNIQUEMENT avec le JSON, sans explication supplémentaire."""
             "threshold": threshold,
             "candidates_analyzed": 0,
             "gpt_reasoning": "No intent candidates found for this interaction",
+            "makes_sense": None,
             "processing_time_ms": round(processing_time * 1000, 2),
             "error": "no_candidates_available",
             "timestamp": datetime.now().isoformat()
@@ -406,6 +420,7 @@ Réponds UNIQUEMENT avec le JSON, sans explication supplémentaire."""
             "similarity_score": None,
             "threshold": threshold,
             "candidates_analyzed": 0,
+            "makes_sense": None,
             "processing_time_ms": round(processing_time * 1000, 2),
             "error": error_message,
             "timestamp": datetime.now().isoformat()

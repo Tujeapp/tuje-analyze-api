@@ -368,11 +368,21 @@ async def _evaluate_voice(interaction_id, user_id, answer_id, original_transcrip
     else:
         verdict = _answer_type_to_verdict(answer_type)
 
+    # Tier 2c / Tier 3: intent identification.
+    # Tier 2c — vocab-derived intent (adjuster already computed the intersection).
+    # If it produced any intent, we surface it and DO NOT invoke GPT.
+    # Tier 3 — only if Tier 2c produced nothing: GPT infers intent + makes_sense.
+    matched_intents = []
+    makes_sense = None
     interpretation = None
     gpt_used = False
-    if verdict == "not_understood":
-        interpretation, gpt_used = await _run_gpt_interpretation(
-            interaction_id, original_transcript, db_pool
+
+    vocab_intent_ids = list(adjustment_result.list_of_intent_matches or [])
+    if vocab_intent_ids:
+        matched_intents = await _fetch_intents_by_ids(vocab_intent_ids, db_pool)
+    elif verdict == "not_understood":
+        matched_intents, makes_sense, interpretation, gpt_used = await _run_gpt_tier3(
+            brain_interaction_id, original_transcript, db_pool
         )
 
     debug_payload = None
@@ -394,39 +404,58 @@ async def _evaluate_voice(interaction_id, user_id, answer_id, original_transcrip
         "gpt_used": gpt_used,
         "interpretation": interpretation,
         "mistakes": mistakes,
+        "matched_intents": matched_intents,
+        "makes_sense": makes_sense,
         "debug": debug_payload,
         "status": "evaluated",
     }
 
 
-async def _run_gpt_interpretation(session_interaction_id, original_transcript, db_pool):
-    """Call GPT fallback for a not_understood voice answer. Never raises —
-    a GPT failure returns (None, False) so evaluate still succeeds.
-    Note: gpt_fallback_service expects the BRAIN interaction id."""
+async def _run_gpt_tier3(brain_interaction_id, original_transcript, db_pool):
+    """Tier 3: GPT infers intent from expected candidates + coherence signal.
+    Fires ONLY when Tier 2c produced no intent match. Returns:
+      (matched_intents: list[{id, name}], makes_sense: bool | None,
+       interpretation: str | None, gpt_used: bool)
+    Never raises — on failure returns ([], None, None, False)."""
     try:
-        async with db_pool.acquire() as conn:
-            brain_interaction_id = await conn.fetchval(
-                "SELECT brain_interaction_id FROM session_interaction WHERE id = $1",
-                session_interaction_id,
-            )
-        if not brain_interaction_id:
-            return None, False
-
         result = await gpt_fallback_service.analyze_intent(
             interaction_id=brain_interaction_id,
             original_transcript=original_transcript,
             threshold=GPT_THRESHOLD,
             pool=db_pool,
         )
+        matched_intents = []
+        if result.get("intent_matched") and result.get("intent_id"):
+            matched_intents = [{
+                "id": result["intent_id"],
+                "name": result.get("intent_name") or "",
+            }]
         interpretation = (
             result.get("gpt_reasoning")
             if result.get("intent_matched")
             else result.get("gpt_alternative_interpretation")
         )
-        return interpretation, True
+        makes_sense = result.get("makes_sense")
+        return matched_intents, makes_sense, interpretation, True
     except Exception as e:
-        logger.error(f"GPT interpretation failed: {e}")
-        return None, False
+        logger.error(f"Tier 3 GPT call failed: {e}")
+        return [], None, None, False
+
+
+async def _fetch_intents_by_ids(intent_ids, db_pool):
+    """Tier 2c: resolve vocab-derived intent IDs to {id, name} records."""
+    if not intent_ids:
+        return []
+    try:
+        async with db_pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT id, name FROM brain_intent
+                WHERE id = ANY($1::varchar[]) AND live = TRUE
+            """, list(intent_ids))
+        return [{"id": r["id"], "name": r["name"] or ""} for r in rows]
+    except Exception as e:
+        logger.error(f"Intent resolution failed: {e}")
+        return []
 
 
 async def _evaluate_multiple_buttons(interaction_id, answer_id, selected_answer_id, db_pool) -> Dict:
