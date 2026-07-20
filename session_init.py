@@ -396,7 +396,8 @@ async def initialize_returning_user(
         user_id=user_id,
         seen_subtopics=set(),
         seen_interaction_ids=set(),
-        seen_intents=set()
+        seen_intents=set(),
+        seen_transcriptions=set()
     )
     
     session_id = generate_id("SESSION")
