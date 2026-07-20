@@ -168,6 +168,19 @@ class EvaluateAnswerResponse(BaseModel):
     status: str = "evaluated"
 
 
+class InteractionHintResponse(BaseModel):
+    found: bool
+    hint_id: Optional[str] = None
+    button: Optional[str] = None
+    hint_level: Optional[int] = None
+    type: Optional[str] = None
+    media_kind: Optional[str] = None
+    text_en: Optional[str] = None
+    text_fr: Optional[str] = None
+    text_phonetic: Optional[str] = None
+    media_url: Optional[str] = None
+
+
 class CommitAnswerRequest(BaseModel):
     interaction_id: str
     answer_id: str
@@ -653,6 +666,52 @@ async def advance_interaction_endpoint(request: AdvanceInteractionRequest, http_
         return AdvanceInteractionResponse(**result)
     except Exception as e:
         logger.error(f"Failed to advance interaction: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/interaction-hint", response_model=InteractionHintResponse)
+async def get_interaction_hint(
+    http_request: Request,
+    interaction_id: str,
+    button: str,
+    hint_level: int,
+):
+    """Serve one authored hint for an interaction, filtered by button + level.
+    Resolves through brain_interaction.hint_ids. `button`/`type`/`usage` are
+    author-managed text — we filter structurally on button + hint_level + live,
+    never on hardcoded type/usage values. Returns found=false when nothing matches."""
+    try:
+        pool = http_request.app.state.db_pool
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT h.id, h.button, h.hint_level, h.type, h.media_kind,
+                       h.text_en, h.text_fr, h.text_phonetic, h.media_url
+                FROM brain_interaction i
+                JOIN brain_hint h ON h.id = ANY(i.hint_ids)
+                WHERE i.id = $1
+                  AND h.button = $2
+                  AND h.hint_level = $3
+                  AND h.live = TRUE
+                ORDER BY h.id ASC
+                LIMIT 1
+            """, interaction_id, button, hint_level)
+
+        if not row:
+            return InteractionHintResponse(found=False)
+
+        return InteractionHintResponse(
+            found=True,
+            hint_id=row["id"],
+            button=row["button"],
+            hint_level=row["hint_level"],
+            type=row["type"],
+            media_kind=row["media_kind"],
+            text_en=row["text_en"],
+            text_fr=row["text_fr"],
+            text_phonetic=row["text_phonetic"],
+            media_url=row["media_url"],
+        )
+    except Exception as e:
+        logger.error(f"Failed to fetch interaction hint: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/record-hint")
