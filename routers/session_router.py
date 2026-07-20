@@ -179,6 +179,7 @@ class InteractionHintResponse(BaseModel):
     text_fr: Optional[str] = None
     text_phonetic: Optional[str] = None
     media_url: Optional[str] = None
+    interaction_audio_url: Optional[str] = None
 
 
 class CommitAnswerRequest(BaseModel):
@@ -684,7 +685,8 @@ async def get_interaction_hint(
         async with pool.acquire() as conn:
             row = await conn.fetchrow("""
                 SELECT h.id, h.button, h.hint_level, h.type, h.media_kind,
-                       h.text_en, h.text_fr, h.text_phonetic, h.media_url
+                       h.text_en, h.text_fr, h.text_phonetic, h.media_url,
+                       i.simplified_audio_url
                 FROM brain_interaction i
                 JOIN brain_hint h ON h.id = ANY(i.hint_ids)
                 WHERE i.id = $1
@@ -709,6 +711,7 @@ async def get_interaction_hint(
             text_fr=row["text_fr"],
             text_phonetic=row["text_phonetic"],
             media_url=row["media_url"],
+            interaction_audio_url=row["simplified_audio_url"],
         )
     except Exception as e:
         logger.error(f"Failed to fetch interaction hint: {e}", exc_info=True)
