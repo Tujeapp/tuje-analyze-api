@@ -182,6 +182,24 @@ class InteractionHintResponse(BaseModel):
     interaction_audio_url: Optional[str] = None
 
 
+class HintVocabBlock(BaseModel):
+    vocab_id: str
+    audio_normal_url: Optional[str] = None
+    audio_slow_url: Optional[str] = None
+    text_fr: Optional[str] = None
+    text_en: Optional[str] = None
+
+class HintL3Reveal(BaseModel):
+    transcription_fr: Optional[str] = None
+    transcription_phonetic: Optional[str] = None
+    transcription_en: Optional[str] = None
+
+class InteractionHintL3Response(BaseModel):
+    found: bool
+    blocks: list[HintVocabBlock] = []
+    reveal: Optional[HintL3Reveal] = None
+
+
 class CommitAnswerRequest(BaseModel):
     interaction_id: str
     answer_id: str
@@ -715,6 +733,77 @@ async def get_interaction_hint(
         )
     except Exception as e:
         logger.error(f"Failed to fetch interaction hint: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/interaction-hint-l3", response_model=InteractionHintL3Response)
+async def get_interaction_hint_l3(
+    http_request: Request,
+    interaction_id: str,
+):
+    """Serve the Understand-L3 vocab-block comprehension flow for an interaction:
+    the ordered vocab blocks (each with normal+slow audio) and the final
+    translation reveal (fr / phonetic / en). Blocks come from
+    brain_interaction.interaction_vocab_id in ARRAY ORDER (order authored in
+    Airtable, preserved through sync). found=false when no L3 hint is authored
+    or no blocks are linked."""
+    try:
+        pool = http_request.app.state.db_pool
+        async with pool.acquire() as conn:
+            # Gate: only serve L3 if an understand/level-3 hint is authored & live.
+            has_l3 = await conn.fetchval("""
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM brain_interaction i
+                    JOIN brain_hint h ON h.id = ANY(i.hint_ids)
+                    WHERE i.id = $1 AND h.button = 'understand'
+                      AND h.hint_level = 3 AND h.live = TRUE
+                )
+            """, interaction_id)
+            if not has_l3:
+                return InteractionHintL3Response(found=False)
+
+            # Interaction: ordered vocab id list + reveal fields.
+            irow = await conn.fetchrow("""
+                SELECT interaction_vocab_id,
+                       transcription_fr, transcription_phonetic, transcription_en
+                FROM brain_interaction WHERE id = $1
+            """, interaction_id)
+            if not irow or not irow["interaction_vocab_id"]:
+                return InteractionHintL3Response(found=False)
+
+            ordered_ids = list(irow["interaction_vocab_id"])
+
+            # Fetch the block vocab rows (unordered from DB), then re-order in Python
+            # to match interaction_vocab_id's array order (the authored sequence).
+            vrows = await conn.fetch("""
+                SELECT id, audio_normal_url, audio_slow_url,
+                       transcription_fr, transcription_en
+                FROM brain_vocab
+                WHERE id = ANY($1::varchar[]) AND live = TRUE
+            """, ordered_ids)
+            by_id = {r["id"]: r for r in vrows}
+
+            blocks = []
+            for vid in ordered_ids:
+                r = by_id.get(vid)
+                if not r:
+                    continue  # skip missing/non-live vocab, preserve order of the rest
+                blocks.append(HintVocabBlock(
+                    vocab_id=r["id"],
+                    audio_normal_url=r["audio_normal_url"],
+                    audio_slow_url=r["audio_slow_url"],
+                    text_fr=r["transcription_fr"],
+                    text_en=r["transcription_en"],
+                ))
+
+        reveal = HintL3Reveal(
+            transcription_fr=irow["transcription_fr"],
+            transcription_phonetic=irow["transcription_phonetic"],
+            transcription_en=irow["transcription_en"],
+        )
+        return InteractionHintL3Response(found=True, blocks=blocks, reveal=reveal)
+    except Exception as e:
+        logger.error(f"Failed to fetch L3 hint flow: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/record-hint")
