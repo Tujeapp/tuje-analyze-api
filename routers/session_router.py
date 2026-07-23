@@ -199,6 +199,10 @@ class InteractionHintL3Response(BaseModel):
     blocks: list[HintVocabBlock] = []
     reveal: Optional[HintL3Reveal] = None
 
+class RecordNotUnderstoodVocabRequest(BaseModel):
+    session_interaction_id: str
+    vocab_ids: list[str] = []
+
 
 class CommitAnswerRequest(BaseModel):
     interaction_id: str
@@ -804,6 +808,34 @@ async def get_interaction_hint_l3(
         return InteractionHintL3Response(found=True, blocks=blocks, reveal=reveal)
     except Exception as e:
         logger.error(f"Failed to fetch L3 hint flow: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/record-not-understood-vocab")
+async def record_not_understood_vocab(
+    http_request: Request,
+    request: RecordNotUnderstoodVocabRequest,
+):
+    """L3b: persist which vocab blocks the user marked as not understood during
+    the Understand-L3 flow. Written to session_interaction.not_understood_vocab_ids.
+    Replaces (not appends) — the L3 flow runs once per interaction. An empty list
+    is valid and meaningful (user understood every block)."""
+    try:
+        pool = http_request.app.state.db_pool
+        async with pool.acquire() as conn:
+            result = await conn.execute("""
+                UPDATE session_interaction
+                SET not_understood_vocab_ids = $2::text[]
+                WHERE id = $1
+            """, request.session_interaction_id, list(request.vocab_ids))
+        updated = result.split()[-1] if result else "0"
+        if updated == "0":
+            logger.warning(
+                f"record-not-understood-vocab: no session_interaction matched "
+                f"{request.session_interaction_id}"
+            )
+        return {"status": "recorded", "count": len(request.vocab_ids)}
+    except Exception as e:
+        logger.error(f"Failed to record not-understood vocab: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/record-hint")
