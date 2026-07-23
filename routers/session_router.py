@@ -164,6 +164,9 @@ class EvaluateAnswerResponse(BaseModel):
     mistakes: list = []
     matched_intents: list = []
     makes_sense: Optional[bool] = None
+    tier: Optional[int] = None
+    interaction_answer_id: Optional[str] = None
+    attribute_mistake_ids: list = []
     debug: Optional[dict] = None
     status: str = "evaluated"
 

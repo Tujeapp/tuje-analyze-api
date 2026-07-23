@@ -171,9 +171,11 @@ async def _fetch_tier2b_mistakes(vocab_ids, brain_interaction_id, db_pool):
     linguistic error tied to that vocab. Look up brain_attribute_mistake for
     each (odd_attr, vocab, any_expected) triple; resolve mistake_ids to
     brain_mistake records. Silent on no lookup match (no fallthrough).
-    Never raises: failure returns []."""
+    Returns a tuple: (mistakes_list, attr_mistake_ids_list) — the second element
+    lists the brain_attribute_mistake row ids that fired, used to route Tier-2
+    answer hints. Never raises: failure returns ([], [])."""
     if not vocab_ids or not brain_interaction_id:
-        return []
+        return [], []
     try:
         async with db_pool.acquire() as conn:
             # Step 1: interaction's expected attributes.
@@ -182,7 +184,7 @@ async def _fetch_tier2b_mistakes(vocab_ids, brain_interaction_id, db_pool):
                 FROM brain_interaction WHERE id = $1
             """, brain_interaction_id)
             if not expected_row or not expected_row["expected_attribute_ids"]:
-                return []
+                return [], []
             expected_ids = set(expected_row["expected_attribute_ids"])
 
             # Step 2: for each matched vocab, fetch its attribute_ids.
@@ -192,7 +194,7 @@ async def _fetch_tier2b_mistakes(vocab_ids, brain_interaction_id, db_pool):
                 WHERE id = ANY($1::varchar[]) AND live = TRUE
             """, list(vocab_ids))
             if not vocab_rows:
-                return []
+                return [], []
 
             # Step 3: collect (vocab_id, odd_attr_id) pairs — filter to important=true only.
             #   "odd" = attribute on user's vocab NOT in expected_attribute_ids.
@@ -203,7 +205,7 @@ async def _fetch_tier2b_mistakes(vocab_ids, brain_interaction_id, db_pool):
                 vocab_to_attrs[row["id"]] = attrs
                 all_attr_ids.update(attrs)
             if not all_attr_ids:
-                return []
+                return [], []
             attr_rows = await conn.fetch("""
                 SELECT id, important
                 FROM brain_attribute
@@ -217,14 +219,15 @@ async def _fetch_tier2b_mistakes(vocab_ids, brain_interaction_id, db_pool):
                     if attr_id in important_attrs and attr_id not in expected_ids:
                         odd_pairs.append((vocab_id, attr_id))
             if not odd_pairs:
-                return []
+                return [], []
 
             # Step 4: look up brain_attribute_mistake for each (odd_attr, vocab) pair
             #   restricted to attribute_expected_id ∈ expected_ids. Aggregate mistake_ids.
             mistake_ids = set()
+            attr_mistake_ids = set()
             for vocab_id, odd_attr_id in odd_pairs:
                 mrows = await conn.fetch("""
-                    SELECT mistake_id
+                    SELECT id, mistake_id
                     FROM brain_attribute_mistake
                     WHERE live = TRUE
                       AND attribute_matched_id = $1
@@ -232,10 +235,11 @@ async def _fetch_tier2b_mistakes(vocab_ids, brain_interaction_id, db_pool):
                       AND attribute_expected_id = ANY($3::varchar[])
                 """, odd_attr_id, vocab_id, list(expected_ids))
                 for mr in mrows:
+                    attr_mistake_ids.add(mr["id"])
                     if mr["mistake_id"]:
                         mistake_ids.add(mr["mistake_id"])
             if not mistake_ids:
-                return []
+                return [], sorted(attr_mistake_ids)
 
             # Step 5: resolve to full mistake records.
             resolved = await conn.fetch("""
@@ -254,10 +258,10 @@ async def _fetch_tier2b_mistakes(vocab_ids, brain_interaction_id, db_pool):
                 "type": r["type"],
             }
             for r in resolved
-        ]
+        ], sorted(attr_mistake_ids)
     except Exception as e:
         logger.error(f"Tier-2b attribute-diff fetch failed: {e}")
-        return []
+        return [], []
 
 
 def _answer_type_to_verdict(answer_type: str) -> str:
@@ -378,6 +382,10 @@ async def _evaluate_voice(interaction_id, user_id, answer_id, original_transcrip
         interaction_answer_id, db_pool
     )
 
+    # Which tier resolved this answer — drives Answer-button hint routing.
+    tier = None
+    attribute_mistake_ids = []
+
     if not match_found or answer_type is None:
         verdict = "not_understood"
         # Tier 2a: no answer match, but the adjuster may have matched vocab —
@@ -392,14 +400,19 @@ async def _evaluate_voice(interaction_id, user_id, answer_id, original_transcrip
             # Compare user's important attributes against interaction's expected;
             # look up brain_attribute_mistake per (odd_attr, vocab) triple.
             if not mistakes:
-                tier2b = await _fetch_tier2b_mistakes(
+                tier2b, tier2b_attr_ids = await _fetch_tier2b_mistakes(
                     vocab_ids, brain_interaction_id, db_pool
                 )
+                attribute_mistake_ids = tier2b_attr_ids
                 if tier2b:
                     seen = {m["id"] for m in mistakes}
                     mistakes.extend(m for m in tier2b if m["id"] not in seen)
+        # Tier 2 = a mistake was surfaced without an answer match (2a or 2b).
+        if mistakes:
+            tier = 2
     else:
         verdict = _answer_type_to_verdict(answer_type)
+        tier = 1
 
     # Tier 2c / Tier 3: intent identification.
     # Tier 2c — vocab-derived intent (adjuster already computed the intersection).
@@ -413,10 +426,18 @@ async def _evaluate_voice(interaction_id, user_id, answer_id, original_transcrip
     vocab_intent_ids = list(adjustment_result.list_of_intent_matches or [])
     if vocab_intent_ids:
         matched_intents = await _fetch_intents_by_ids(vocab_intent_ids, db_pool)
+        # Tier 2c — vocab-derived intent. Only claims the tier if nothing
+        # stronger (Tier 1 answer match, or Tier 2a/2b mistakes) already did.
+        if tier is None:
+            tier = 2
     elif verdict == "not_understood":
         matched_intents, makes_sense, interpretation, gpt_used = await _run_gpt_tier3(
             brain_interaction_id, original_transcript, db_pool
         )
+        # Tier 3 — GPT ran, but a concrete mistake diagnosis (2a/2b) outranks it
+        # for hint routing: never overwrite a tier already claimed by mistakes.
+        if gpt_used and tier is None:
+            tier = 3
 
     debug_payload = None
     if debug:
@@ -439,6 +460,9 @@ async def _evaluate_voice(interaction_id, user_id, answer_id, original_transcrip
         "mistakes": mistakes,
         "matched_intents": matched_intents,
         "makes_sense": makes_sense,
+        "tier": tier,
+        "interaction_answer_id": interaction_answer_id,
+        "attribute_mistake_ids": attribute_mistake_ids,
         "debug": debug_payload,
         "status": "evaluated",
     }
