@@ -813,6 +813,99 @@ async def get_interaction_hint_l3(
         logger.error(f"Failed to fetch L3 hint flow: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/answer-hint", response_model=InteractionHintResponse)
+async def get_answer_hint(
+    http_request: Request,
+    interaction_id: str,
+    hint_level: int,
+    tier: Optional[int] = None,
+    interaction_answer_id: Optional[str] = None,
+    attribute_mistake_ids: Optional[str] = None,
+):
+    """Serve one Answer-button hint, routed by the tier the user's last answer
+    landed in (the client passes what it got from evaluate):
+
+      tier 1 → hints on the matched brain_interaction_answer row
+      tier 2 → hints on the brain_attribute_mistake rows that fired
+      tier 3 → hints on brain_interaction (no answer understood)
+      tier None (no answer yet) → hints on brain_interaction
+
+    Tier 3 and 'no answer yet' currently share the same source and are NOT
+    distinguished (deliberate: finer filtering by applies_to_tier / type comes
+    once there's content that needs it).
+
+    `attribute_mistake_ids` is a comma-separated list. Filtering is structural
+    (button + hint_level + live) — type/usage values are author-managed and
+    never hardcoded here. Returns found=false (200) when nothing is authored.
+    """
+    try:
+        pool = http_request.app.state.db_pool
+        row = None
+        async with pool.acquire() as conn:
+            if tier == 1 and interaction_answer_id:
+                row = await conn.fetchrow("""
+                    SELECT h.id, h.button, h.hint_level, h.type, h.media_kind,
+                           h.text_en, h.text_fr, h.text_phonetic, h.media_url
+                    FROM brain_interaction_answer bia
+                    JOIN brain_hint h ON h.id = ANY(bia.hint_ids)
+                    WHERE bia.id = $1
+                      AND h.button = 'answer'
+                      AND h.hint_level = $2
+                      AND h.live = TRUE
+                    ORDER BY h.id ASC
+                    LIMIT 1
+                """, interaction_answer_id, hint_level)
+
+            elif tier == 2 and attribute_mistake_ids:
+                attr_ids = [s.strip() for s in attribute_mistake_ids.split(",") if s.strip()]
+                if attr_ids:
+                    row = await conn.fetchrow("""
+                        SELECT h.id, h.button, h.hint_level, h.type, h.media_kind,
+                               h.text_en, h.text_fr, h.text_phonetic, h.media_url
+                        FROM brain_attribute_mistake am
+                        JOIN brain_hint h ON h.id = ANY(am.hint_ids)
+                        WHERE am.id = ANY($1::varchar[])
+                          AND h.button = 'answer'
+                          AND h.hint_level = $2
+                          AND h.live = TRUE
+                        ORDER BY h.id ASC
+                        LIMIT 1
+                    """, attr_ids, hint_level)
+
+            # tier 3 and 'no answer yet' both fall back to the interaction's hints.
+            if row is None:
+                row = await conn.fetchrow("""
+                    SELECT h.id, h.button, h.hint_level, h.type, h.media_kind,
+                           h.text_en, h.text_fr, h.text_phonetic, h.media_url
+                    FROM brain_interaction i
+                    JOIN brain_hint h ON h.id = ANY(i.hint_ids)
+                    WHERE i.id = $1
+                      AND h.button = 'answer'
+                      AND h.hint_level = $2
+                      AND h.live = TRUE
+                    ORDER BY h.id ASC
+                    LIMIT 1
+                """, interaction_id, hint_level)
+
+        if not row:
+            return InteractionHintResponse(found=False)
+
+        return InteractionHintResponse(
+            found=True,
+            hint_id=row["id"],
+            button=row["button"],
+            hint_level=row["hint_level"],
+            type=row["type"],
+            media_kind=row["media_kind"],
+            text_en=row["text_en"],
+            text_fr=row["text_fr"],
+            text_phonetic=row["text_phonetic"],
+            media_url=row["media_url"],
+        )
+    except Exception as e:
+        logger.error(f"Failed to fetch answer hint: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.post("/record-not-understood-vocab")
 async def record_not_understood_vocab(
     http_request: Request,
