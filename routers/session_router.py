@@ -9,6 +9,7 @@ from typing import Optional, List
 import asyncpg
 import logging
 import os
+import random
 
 from session_management import (
     session_service,
@@ -201,6 +202,15 @@ class InteractionHintL3Response(BaseModel):
     found: bool
     blocks: list[HintVocabBlock] = []
     reveal: Optional[HintL3Reveal] = None
+
+class AnswerIdeaItem(BaseModel):
+    answer_id: str
+    text_en: Optional[str] = None
+    text_fr: Optional[str] = None
+
+class AnswerIdeasResponse(BaseModel):
+    found: bool
+    ideas: list[AnswerIdeaItem] = []
 
 class RecordNotUnderstoodVocabRequest(BaseModel):
     session_interaction_id: str
@@ -904,6 +914,71 @@ async def get_answer_hint(
         )
     except Exception as e:
         logger.error(f"Failed to fetch answer hint: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/answer-ideas", response_model=AnswerIdeasResponse)
+async def get_answer_ideas(
+    http_request: Request,
+    interaction_id: str,
+):
+    """Answer-L2 / L3 option list: a mixed set of this interaction's authored
+    answers, so the learner picks one without being told which is best.
+
+    Target composition (a TARGET, not a requirement — short content returns
+    fewer, and types are never backfilled from one another):
+        1 perfect, 3 good, 1 false good, 1 wrong  → 6 max
+
+    Order is randomised so position never signals quality. Returns both
+    text_en (L2 shows these) and text_fr (L3 shows these) so one endpoint
+    serves both levels.
+    """
+    try:
+        pool = http_request.app.state.db_pool
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT ba.id, bia.answer_type,
+                       ba.transcription_en, ba.transcription_fr
+                FROM brain_interaction_answer bia
+                JOIN brain_answer ba ON ba.id = bia.answer_id
+                WHERE bia.interaction_id = $1
+                  AND bia.live = TRUE
+                  AND ba.live = TRUE
+            """, interaction_id)
+
+        if not rows:
+            return AnswerIdeasResponse(found=False)
+
+        # Group by answer_type, then sample up to the per-type target.
+        by_type: dict = {}
+        for r in rows:
+            by_type.setdefault(r["answer_type"], []).append(r)
+
+        targets = [("perfect", 1), ("good", 3), ("false good", 1), ("wrong", 1)]
+        picked = []
+        for atype, want in targets:
+            available = by_type.get(atype, [])
+            if not available:
+                continue  # no backfill from other types — quotas stay strict
+            random.shuffle(available)
+            picked.extend(available[:want])
+
+        if not picked:
+            return AnswerIdeasResponse(found=False)
+
+        # Randomise final order so position carries no signal about quality.
+        random.shuffle(picked)
+
+        ideas = [
+            AnswerIdeaItem(
+                answer_id=r["id"],
+                text_en=r["transcription_en"],
+                text_fr=r["transcription_fr"],
+            )
+            for r in picked
+        ]
+        return AnswerIdeasResponse(found=True, ideas=ideas)
+    except Exception as e:
+        logger.error(f"Failed to fetch answer ideas: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/record-not-understood-vocab")
