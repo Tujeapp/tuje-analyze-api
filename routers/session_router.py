@@ -207,6 +207,9 @@ class AnswerIdeaItem(BaseModel):
     answer_id: str
     text_en: Optional[str] = None
     text_fr: Optional[str] = None
+    text_phonetic: Optional[str] = None
+    audio_normal_url: Optional[str] = None
+    audio_slow_url: Optional[str] = None
 
 class AnswerIdeasResponse(BaseModel):
     found: bool
@@ -937,7 +940,9 @@ async def get_answer_ideas(
         async with pool.acquire() as conn:
             rows = await conn.fetch("""
                 SELECT ba.id, bia.answer_type,
-                       ba.transcription_en, ba.transcription_fr
+                       ba.transcription_en, ba.transcription_fr,
+                       ba.transcription_phonetic,
+                       ba.audio_normal_url, ba.audio_slow_url
                 FROM brain_interaction_answer bia
                 JOIN brain_answer ba ON ba.id = bia.answer_id
                 WHERE bia.interaction_id = $1
@@ -973,6 +978,9 @@ async def get_answer_ideas(
                 answer_id=r["id"],
                 text_en=r["transcription_en"],
                 text_fr=r["transcription_fr"],
+                text_phonetic=r["transcription_phonetic"],
+                audio_normal_url=r["audio_normal_url"],
+                audio_slow_url=r["audio_slow_url"],
             )
             for r in picked
         ]
