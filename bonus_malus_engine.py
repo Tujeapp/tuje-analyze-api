@@ -58,7 +58,13 @@ async def evaluate_interaction_bonus_malus(
     The caller adds total_adjustment to the gross score and clamps to [0,100].
     This function does NOT read or write any score — it's pure evaluation.
     """
-    result = {"total_adjustment": 0, "applied": [], "skipped_rule_codes": []}
+    result = {
+        "total_adjustment": 0,   # signed net (kept for the debug endpoint)
+        "bonus_total": 0,        # sum of bonus magnitudes (positive)
+        "malus_total": 0,        # sum of malus magnitudes (positive)
+        "applied": [],
+        "skipped_rule_codes": [],
+    }
 
     async with db_pool.acquire() as conn:
         metric_row = await conn.fetchrow("""
@@ -109,6 +115,12 @@ async def evaluate_interaction_bonus_malus(
             continue
         if adjustment != 0:
             total += adjustment
+            # Separate magnitudes: Phase B applies Modulo to maluses only, so the
+            # scoring caller needs bonus and malus totals apart, not just the net.
+            if adjustment > 0:
+                result["bonus_total"] += adjustment
+            else:
+                result["malus_total"] += -adjustment   # store as positive magnitude
             result["applied"].append({
                 "id": r["id"],
                 "rule_code": r["rule_code"],
