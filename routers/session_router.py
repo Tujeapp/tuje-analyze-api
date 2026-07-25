@@ -19,6 +19,7 @@ from session_management import (
     scoring_service,
     bonus_malus_service
 )
+from bonus_malus_engine import evaluate_interaction_bonus_malus
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -988,6 +989,23 @@ async def get_answer_ideas(
     except Exception as e:
         logger.error(f"Failed to fetch answer ideas: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/debug-bonus-malus")
+async def debug_bonus_malus(
+    http_request: Request,
+    session_interaction_id: str,
+    user_level: int,
+):
+    """Debug: run the interaction bonus/malus engine against a real
+    session_interaction and return the breakdown, WITHOUT touching any score.
+    For verifying the math before wiring into commit."""
+    pool = http_request.app.state.db_pool
+    result = await evaluate_interaction_bonus_malus(
+        session_interaction_id=session_interaction_id,
+        user_level=user_level,
+        db_pool=pool,
+    )
+    return result
 
 @router.post("/record-not-understood-vocab")
 async def record_not_understood_vocab(
