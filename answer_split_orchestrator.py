@@ -17,6 +17,8 @@ from adjustement_adjuster import TranscriptionAdjuster
 from adjustement_types import TranscriptionAdjustRequest
 from matching_answer_service import answer_matching_service
 from gpt_fallback_service import gpt_fallback_service
+from bonus_malus_engine import evaluate_interaction_bonus_malus
+from interaction_scoring import compute_interaction_score
 
 from session_management import (
     answer_service,
@@ -675,16 +677,72 @@ async def commit_answer(interaction_id: str, answer_id: str, db_pool: asyncpg.Po
         # instead of recomputing against an arbitrary LIMIT 1 timer.
         score = int(round(similarity))
         method = "single_button"
-    else:  # voice
-        score = await scoring_service.calculate_interaction_score(
-            interaction_id=interaction_id,
-            matched_answer_id=matched_answer_id,
-            similarity_score=similarity,
-            user_id=answer["user_id"],
-            user_level=user_level,
-            db_pool=db_pool)
-        method = "answer_match"
+    else:  # voice — 3-phase model, gated on a matched answer
+        if matched_answer_id:
+            async with db_pool.acquire() as conn:
+                srow = await conn.fetchrow("""
+                    SELECT si.interaction_score      AS prior_score,
+                           bi.interaction_optimum_level,
+                           ba.answer_optimum_level,
+                           s.modulo
+                    FROM session_interaction si
+                    JOIN session s            ON si.session_id = s.id
+                    JOIN brain_interaction bi ON si.brain_interaction_id = bi.id
+                    JOIN brain_answer ba      ON ba.id = $2
+                    WHERE si.id = $1
+                """, interaction_id, matched_answer_id)
 
+            # A matched answer should always carry level data. If it doesn't,
+            # that's a content/data problem, not a user "forced past" — we can't
+            # score reliably, so we log and mark incomplete (same end state).
+            if (srow is None
+                    or srow["answer_optimum_level"] is None
+                    or srow["interaction_optimum_level"] is None):
+                logger.warning(
+                    f"commit_answer: matched answer {matched_answer_id} on "
+                    f"{interaction_id} is missing optimum-level data — cannot "
+                    f"score, marking incomplete"
+                )
+                await answer_service.mark_as_final_answer(
+                    answer_id=answer_id, processing_method="answer_match",
+                    cost_saved=0.002, db_pool=db_pool)
+                await interaction_service.mark_interaction_incomplete(
+                    interaction_id=interaction_id, final_answer_id=answer_id,
+                    db_pool=db_pool)
+                return await _commit_recap(interaction_id, db_pool)
+
+            gross = srow["prior_score"] if srow["prior_score"] is not None else 100
+            bm = await evaluate_interaction_bonus_malus(
+                session_interaction_id=interaction_id,
+                user_level=user_level,          # = cycle_level
+                db_pool=db_pool,
+            )
+            result = compute_interaction_score(
+                gross_score=gross,
+                answer_opt=srow["answer_optimum_level"],
+                interaction_opt=srow["interaction_optimum_level"],
+                cycle_level=user_level,
+                bonus_total=bm["bonus_total"],
+                malus_total=bm["malus_total"],
+                modulo=float(srow["modulo"] or 0),
+            )
+            await answer_service.mark_as_final_answer(
+                answer_id=answer_id, processing_method="answer_match",
+                cost_saved=0.002, db_pool=db_pool)
+            await interaction_service.complete_interaction(
+                interaction_id=interaction_id, final_answer_id=answer_id,
+                interaction_score=result["interaction_score"], db_pool=db_pool)
+        else:
+            # No matched answer — user forced past. Incomplete, unscored.
+            await answer_service.mark_as_final_answer(
+                answer_id=answer_id, processing_method="answer_match",
+                cost_saved=0.002, db_pool=db_pool)
+            await interaction_service.mark_interaction_incomplete(
+                interaction_id=interaction_id, final_answer_id=answer_id,
+                db_pool=db_pool)
+        return await _commit_recap(interaction_id, db_pool)
+
+    # Button modes only (voice returns early above): shared completion tail.
     await answer_service.mark_as_final_answer(
         answer_id=answer_id, processing_method=method, cost_saved=0.002, db_pool=db_pool)
     await interaction_service.complete_interaction(

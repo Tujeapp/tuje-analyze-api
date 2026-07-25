@@ -170,7 +170,7 @@ class InteractionService:
                     WHERE cycle_id = (
                         SELECT cycle_id FROM session_interaction WHERE id = $1
                     )
-                    AND status = 'completed'
+                    AND status IN ('completed', 'incomplete')
                 )
                 WHERE id = (
                     SELECT cycle_id FROM session_interaction WHERE id = $1
@@ -187,7 +187,55 @@ class InteractionService:
             """, session_id)
         
         logger.info(f"✅ Interaction completed: {interaction_id} (score: {interaction_score})")
-    
+
+    async def mark_interaction_incomplete(
+        self,
+        interaction_id: str,
+        final_answer_id: Optional[str],
+        db_pool: asyncpg.Pool
+    ):
+        """Complete an interaction WITHOUT a score: the user moved on without
+        ever giving a matched answer (no answer / not_understood / vocab-only).
+        interaction_score stays NULL and status is 'incomplete' — a distinct
+        marker the app uses later (e.g. to resurface the interaction). Still
+        bumps cycle progress like a normal completion, since the interaction is
+        finished from the flow's perspective."""
+        async with db_pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE session_interaction
+                SET
+                    status = 'incomplete',
+                    completed_at = NOW(),
+                    interaction_score = NULL,
+                    final_answer_id = $2,
+                    duration_seconds = EXTRACT(EPOCH FROM (NOW() - started_at))::INTEGER
+                WHERE id = $1
+            """, interaction_id, final_answer_id)
+
+            await conn.execute("""
+                UPDATE session_cycle
+                SET completed_interactions = (
+                    SELECT COUNT(*)
+                    FROM session_interaction
+                    WHERE cycle_id = (
+                        SELECT cycle_id FROM session_interaction WHERE id = $1
+                    )
+                    AND status IN ('completed', 'incomplete')
+                )
+                WHERE id = (
+                    SELECT cycle_id FROM session_interaction WHERE id = $1
+                )
+            """, interaction_id)
+
+            # Update session last activity
+            session_id = await conn.fetchval("""
+                SELECT session_id FROM session_interaction WHERE id = $1
+            """, interaction_id)
+
+            await conn.execute("""
+                UPDATE session SET last_activity_at = NOW() WHERE id = $1
+            """, session_id)
+
     async def get_cycle_progress(
         self,
         cycle_id: str,
