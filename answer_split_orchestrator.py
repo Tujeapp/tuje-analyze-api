@@ -663,7 +663,7 @@ async def commit_answer(interaction_id: str, answer_id: str, db_pool: asyncpg.Po
     mode = answer["answer_mode_used"]
     similarity = float(answer["similarity_score"] or 0)
     matched_answer_id = answer["matched_answer_id"]
-    user_level = interaction["cycle_level"] or 100
+    user_level = interaction["cycle_level"]
 
     if mode == "multipleButtons":
         # CHUNK 2: score was derived from answer_type at evaluate and stored on

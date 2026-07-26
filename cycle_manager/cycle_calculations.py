@@ -45,8 +45,8 @@ async def calculate_cycle_level(
             """, session_id)
             
             if not last_session:
-                # No previous session, use user level
-                return user_level
+                # No previous session, use user level (floored to the level minimum of 50)
+                return max(50, user_level)
             
             # Apply adjustment based on last session performance
             # (Simplified - full logic would check streak7, last session rate, etc.)
@@ -58,7 +58,7 @@ async def calculate_cycle_level(
                 adjustment = -50
             
             new_level = last_session['session_level'] + adjustment
-            new_level = max(0, min(500, new_level))  # Clamp to 0-500
+            new_level = max(50, min(500, new_level))  # Clamp to 50-500 (50 is the floor)
             new_level = round(new_level / 50) * 50   # Round to nearest 50
             
             logger.debug(f"First cycle level: {new_level} (from last session: {last_session['session_level']})")
@@ -75,7 +75,7 @@ async def calculate_cycle_level(
             """, session_id, cycle_number - 1)
             
             if not last_cycle:
-                return user_level
+                return max(50, user_level)
             
             # Calculate cycle rate
             cycle_rate = last_cycle['cycle_score'] / 700.0 if last_cycle['completed_interactions'] == 7 else 0
@@ -90,7 +90,7 @@ async def calculate_cycle_level(
             # else: stay at same level
             
             new_level = last_cycle['cycle_level'] + adjustment
-            new_level = max(0, min(500, new_level))  # Clamp to 0-500
+            new_level = max(50, min(500, new_level))  # Clamp to 50-500 (50 is the floor)
             new_level = round(new_level / 50) * 50   # Round to nearest 50
             
             logger.debug(f"Cycle {cycle_number} level: {new_level} (from cycle {cycle_number-1}: {last_cycle['cycle_level']}, rate: {cycle_rate:.2f})")
