@@ -37,9 +37,9 @@ USER_ID = "D08BC99B-0996-4E2B-B4FB-80CF9E0B33DC"
 # A notion to seed as the current-session list entry. Must exist in brain_notion.
 # Use one that interactions actually tag in expected_notion_id for a richer test.
 FIRST_NOTION = "NOT202408090927"
-INTERACTION_USER_LEVEL = 100
-CYCLE_BOREDOM = 0.3
-SESSION_MOOD = "relax"
+INTERACTION_USER_LEVEL = 50
+CYCLE_BOREDOM = 0.2
+SESSION_MOOD = "effective"
 
 
 def hr(t=""):
