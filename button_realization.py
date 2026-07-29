@@ -1,0 +1,192 @@
+"""
+Button realization: turn a templated answer (e.g. "J'ai un entityAnimal") into
+one or more displayable button strings by filling its entity slot(s) with
+vocab whose attributes match the template's requirements.
+
+First version: single-entity templates, rescue-legibility context.
+- Parses the entity token from transcription_fr (e.g. 'entityAnimal').
+- Maps the token to a brain_entity by name.
+- Selects vocab in that entity where the template's required attributes are a
+  subset of the vocab's (own attribute_ids UNION pairing_attribute_ids),
+  filtered by level_own <= user_level, ranked by commonness desc.
+- Replaces the token in transcription_fr with the chosen vocab's transcription_fr.
+"""
+import re
+import logging
+from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+# Matches an entity token like 'entityAnimal', 'entityNumber' in readable text.
+ENTITY_TOKEN_RE = re.compile(r'entity[A-Z][a-zA-Z]*')
+
+
+def find_entity_tokens(text: str) -> list[str]:
+    """Return the entity tokens present in a template's transcription_fr, e.g. ['entityAnimal']."""
+    return ENTITY_TOKEN_RE.findall(text or "")
+
+
+async def realize_template(
+    conn,
+    template_transcription_fr: str,
+    template_attribute_ids: list[str],
+    user_level: int,
+    max_fills: int = 1,
+) -> list[str]:
+    """
+    Realize a single-entity template into up to max_fills display strings.
+
+    Returns [] if: no entity token found (caller should treat a literal template
+    as already-displayable), or the entity is unknown, or no vocab qualifies.
+
+    A literal answer (no entity token) is NOT this function's job — the caller
+    decides that a token-free template is used as-is.
+    """
+    tokens = find_entity_tokens(template_transcription_fr)
+    if not tokens:
+        return []  # literal — caller uses transcription_fr directly
+
+    # First version handles ONE entity slot. Report if multiple (future work).
+    if len(tokens) > 1:
+        logger.warning(
+            f"realize_template: multiple entity tokens {tokens} in "
+            f"'{template_transcription_fr}' — only single-slot supported for now; skipping"
+        )
+        return []
+
+    token = tokens[0]  # e.g. 'entityAnimal'
+
+    # Map the token to a brain_entity. Convention: the entity's `name` column
+    # holds the token verbatim (e.g. 'entityAnimal').
+    entity_id = await conn.fetchval(
+        "SELECT id FROM brain_entity WHERE name = $1 AND live = true", token
+    )
+    if entity_id is None:
+        logger.warning(f"realize_template: no brain_entity named '{token}'")
+        return []
+
+    # Candidate vocab in this entity, level-gated, ranked by commonness.
+    # Union-match: the template's required attributes must all be present in the
+    # vocab's own attribute_ids OR its pairing_attribute_ids.
+    rows = await conn.fetch(
+        """
+        SELECT transcription_fr, attribute_ids, pairing_attribute_ids, commonness
+        FROM brain_vocab
+        WHERE entity_type_id = $1
+          AND live = true
+          AND (level_own IS NULL OR level_own <= $2)
+        ORDER BY commonness DESC NULLS LAST, transcription_fr
+        """,
+        entity_id, user_level,
+    )
+
+    required = set(template_attribute_ids or [])
+    picks: list[str] = []
+    for r in rows:
+        own = set(r["attribute_ids"] or [])
+        pairing = set(r["pairing_attribute_ids"] or [])
+        if required.issubset(own | pairing):
+            # Replace the token with this vocab's readable form.
+            display = template_transcription_fr.replace(token, r["transcription_fr"])
+            picks.append(display)
+            if len(picks) >= max_fills:
+                break
+
+    if not picks:
+        logger.info(
+            f"realize_template: no vocab in {entity_id} satisfied required attrs "
+            f"{required} at level {user_level}"
+        )
+    return picks
+
+
+async def curate_quick_help(
+    conn,
+    interaction_id: str,
+    user_level: int,
+    count: int = 4,
+) -> list[dict]:
+    """
+    Rescue 'quick-help' purpose: one clearly-correct answer + (count-1) clearly-
+    wrong distractors, so the right one is easy to spot. Templates are realized
+    to a single common vocab fill; literals used as-is.
+
+    Returns answer DICTS. Each button's `id` is the UNDERLYING answer id (the
+    template for realized buttons) — that is what the client submits on tap, and
+    scoring treats the tap as that answer (design Option A: the vocab fill is a
+    valid instance of the template, so it inherits the template's type/level).
+    `transcription_fr` is the realized display text.
+
+    v1 gaps (deferred): no readiness/notion filter, no positive-structure
+    preference, no shuffle (UI shuffles), single common fill per template.
+    """
+    rows = await conn.fetch(
+        """
+        SELECT ba.id, ba.transcription_fr, ba.transcription_en, ba.image_url,
+               ba.answer_optimum_level, ba.attribute_ids,
+               bia.answer_type, bia.answer_typicality
+        FROM brain_interaction_answer bia
+        JOIN brain_answer ba ON ba.id = bia.answer_id
+        WHERE bia.interaction_id = $1
+          AND bia.live = true
+          AND COALESCE(bia.never_a_button, false) = false
+        ORDER BY bia.answer_typicality DESC NULLS LAST, ba.id
+        """,
+        interaction_id,
+    )
+
+    async def build_button(r) -> Optional[dict]:
+        # Template → realize to ONE common fill; literal → use as-is.
+        display = r["transcription_fr"]
+        if find_entity_tokens(display):
+            realized = await realize_template(
+                conn, display, r["attribute_ids"], user_level, max_fills=1
+            )
+            if not realized:
+                return None            # template couldn't realize (e.g. level) → skip
+            display = realized[0]
+        return {
+            "id": r["id"],             # underlying answer id — client submits THIS
+            "transcription_fr": display,
+            "transcription_en": r["transcription_en"],
+            "image_url": r["image_url"],
+            "answer_optimum_level": r["answer_optimum_level"],
+            "answer_type": r["answer_type"],
+            "is_button": True,
+        }
+
+    # 1) correct: prefer 'perfect', else highest-typicality 'good'
+    correct: Optional[dict] = None
+    for want in ("perfect", "good"):
+        for r in rows:
+            if r["answer_type"] == want:
+                b = await build_button(r)
+                if b:
+                    correct = b
+                    break
+        if correct:
+            break
+
+    # 2) distractors: 'wrong', realized if templates
+    seen_text = {correct["transcription_fr"]} if correct else set()
+    distractors: list[dict] = []
+    for r in rows:
+        if r["answer_type"] == "wrong":
+            b = await build_button(r)
+            if b and b["transcription_fr"] not in seen_text:
+                distractors.append(b)
+                seen_text.add(b["transcription_fr"])
+            if len(distractors) >= count - 1:
+                break
+
+    buttons: list[dict] = []
+    if correct:
+        buttons.append(correct)
+    buttons.extend(distractors)
+
+    if len(buttons) < count:
+        logger.info(
+            f"curate_quick_help({interaction_id}): only {len(buttons)} buttons "
+            f"(wanted {count}) — pool may lack enough wrong distractors"
+        )
+    return buttons[:count]

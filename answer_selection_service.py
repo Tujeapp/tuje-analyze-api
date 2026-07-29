@@ -10,6 +10,8 @@ import logging
 import random
 from typing import List, Dict, Optional, Tuple
 
+from button_realization import curate_quick_help
+
 logger = logging.getLogger(__name__)
 
 
@@ -92,6 +94,37 @@ class AnswerSelectionService:
         # Step 1 — Determine difficulty
         difficulty = self._determine_difficulty(rescue_triggered, cycle_level_direction)
         logger.info(f"📊 Difficulty: {difficulty}")
+
+        # Rescue quick-help: templates are is_button=FALSE so the normal path
+        # (which filters is_button=TRUE) returns nothing for template-only
+        # interactions. Route rescue through the generation engine instead, which
+        # realizes templates into legible buttons. Maps output to the exact 5-key
+        # answer shape the client already parses.
+        if rescue_triggered:
+            async with db_pool.acquire() as conn:
+                buttons = await curate_quick_help(
+                    conn, interaction_id, user_level, count=4
+                )
+            answers = [
+                {
+                    "id": b["id"],
+                    "transcription_fr": b["transcription_fr"],
+                    "transcription_en": b["transcription_en"],
+                    "image_url": b["image_url"],
+                    "answer_type": b["answer_type"],
+                }
+                for b in buttons
+            ]
+            correct_count = sum(
+                1 for b in buttons if b["answer_type"] in ("perfect", "good")
+            )
+            return {
+                "answers": answers,
+                "selection_mode": selection_mode,
+                "correct_count": correct_count,
+                "config": [],
+                "difficulty": "quick_help",
+            }
 
         # Step 2 — Fetch available answers by type
         available = await self._fetch_available_answers(interaction_id, user_level, db_pool)
