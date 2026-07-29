@@ -74,7 +74,8 @@ class AnswerSelectionService:
         db_pool: asyncpg.Pool,
         rescue_triggered: bool = False,
         cycle_level_direction: int = 0,  # -1, 0, +1
-        selection_mode: str = "single"
+        selection_mode: str = "single",
+        session_interaction_id: Optional[str] = None
     ) -> Dict:
         """
         Main entry point for answer selection.
@@ -102,8 +103,21 @@ class AnswerSelectionService:
         # answer shape the client already parses.
         if rescue_triggered:
             async with db_pool.acquire() as conn:
+                # Level is DB-authoritative for rescue: the client-sent user_level
+                # here is the frustration floor (often 0), which would exclude all
+                # vocab via level_own gating. Read the real cycle level instead.
+                real_level = 100  # safe default
+                if session_interaction_id:
+                    row = await conn.fetchrow("""
+                        SELECT sc.cycle_level
+                        FROM session_interaction si
+                        JOIN session_cycle sc ON si.cycle_id = sc.id
+                        WHERE si.id = $1
+                    """, session_interaction_id)
+                    if row and row["cycle_level"] is not None:
+                        real_level = int(row["cycle_level"])
                 buttons = await curate_quick_help(
-                    conn, interaction_id, user_level, count=4
+                    conn, interaction_id, real_level, count=4
                 )
             answers = [
                 {
