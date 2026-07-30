@@ -134,7 +134,7 @@ class AnswerSelectionService:
             )
             return {
                 "answers": answers,
-                "selection_mode": selection_mode,
+                "selection_mode": "single",  # quick-help is always single-select (one correct to spot)
                 "correct_count": correct_count,
                 "config": [],
                 "difficulty": "quick_help",

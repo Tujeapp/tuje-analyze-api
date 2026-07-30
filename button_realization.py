@@ -138,6 +138,8 @@ async def curate_quick_help(
     async def build_button(r) -> Optional[dict]:
         # Template → realize to ONE common fill; literal → use as-is.
         display = r["transcription_fr"]
+        if not display:
+            return None  # no French text → can't render as a button (client requires it)
         if find_entity_tokens(display):
             realized = await realize_template(
                 conn, display, r["attribute_ids"], user_level, max_fills=1
