@@ -249,9 +249,9 @@ async def start_session_endpoint(request: StartSessionRequest, http_request: Req
             if behavior is None:
                 await conn.execute("""
                     INSERT INTO user_behavior (user_id, rescue_level, always_silent)
-                    VALUES ($1, 0.50, FALSE)
+                    VALUES ($1, 0.0, FALSE)
                 """, request.user_id)
-                rescue_level = 0.50
+                rescue_level = 0.0
                 always_silent = False
             else:
                 rescue_level = float(behavior['rescue_level'])

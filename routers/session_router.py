@@ -240,6 +240,7 @@ class CommitAnswerResponse(BaseModel):
 class AdvanceInteractionRequest(BaseModel):
     interaction_id: str
     user_id: str
+    rescue_level: Optional[float] = None
 
 
 class AdvanceInteractionResponse(BaseModel):
@@ -290,9 +291,9 @@ async def create_session(request: CreateSessionRequest):
                 if behavior is None:
                     await conn.execute("""
                         INSERT INTO user_behavior (user_id, rescue_level, always_silent)
-                        VALUES ($1, 0.50, FALSE)
+                        VALUES ($1, 0.0, FALSE)
                     """, request.user_id)
-                    rescue_level = 0.50
+                    rescue_level = 0.0
                     always_silent = False
                 else:
                     rescue_level = float(behavior['rescue_level'])
@@ -703,6 +704,19 @@ async def advance_interaction_endpoint(request: AdvanceInteractionRequest, http_
             user_id=request.user_id,
             db_pool=http_request.app.state.db_pool,
         )
+
+        # Persist the carried frustration floor (already decayed by the client:
+        # ending frustration − 0.1, clamped [0,1]) so it survives across sessions.
+        if request.rescue_level is not None:
+            clamped = max(0.0, min(1.0, request.rescue_level))
+            async with http_request.app.state.db_pool.acquire() as conn:
+                await conn.execute("""
+                    INSERT INTO user_behavior (user_id, rescue_level)
+                    VALUES ($1, $2)
+                    ON CONFLICT (user_id)
+                    DO UPDATE SET rescue_level = EXCLUDED.rescue_level, updated_at = now()
+                """, request.user_id, clamped)
+
         return AdvanceInteractionResponse(**result)
     except Exception as e:
         logger.error(f"Failed to advance interaction: {e}", exc_info=True)
