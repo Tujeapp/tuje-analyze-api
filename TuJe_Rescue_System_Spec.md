@@ -108,19 +108,75 @@ If the user switches **back to mic** and fails **again** (another Tier-2/Tier-3)
 
 ---
 
-## 7. Open decisions (resolve before building)
+## 7c. DEFERRED — the "no buttons authored" case
 
-1. **Exact thresholds per stage.** How much frustration / how many Tier-2-3 failures move invite → auto-switch, and auto-switch → lock? The old spec had "3 fails if rescue_level < 0.5, else 1" for a single entry — now there are three stages needing their own thresholds.
+**Open, not yet decided.** Rescue's escalation assumes there are button answers to switch to. But some voice interactions have no authored `is_button` answers — nothing to switch to. What should rescue do then?
 
-2. **Does the LOCK persist beyond the interaction?** Per-interaction reset (clean, right for sincere learners) vs. persisting the lock (needed to actually constrain non-serious users). Possibly: lock is per-interaction, but repeated locks raise `rescue_level` so the next interaction starts nearly locked anyway — achieving constraint through the seed rather than a hard persistent lock. **This is the key design question.**
+Brainstormed options (to revisit):
+- **Auto-trigger Answer hints instead of buttons:** 0.4 → Answer-hint L1, 0.6 → L2 (ideas panel), 0.8 → L3 (French + audio). App-initiated hints, consistent with rescue's "help the user who isn't helping themselves." Frustration math unchanged.
+- **Build temporary buttons from the interaction's own answers.** But this converges on the existing `answer-ideas` panel, which already curates the interaction's answers into a sampled/capped/randomized option set — so "temporary buttons" ≈ the L2/L3 panel.
 
-3. **How does `rescue_level` itself update over time?** It seeds faster accrual for repeat-rescuers, but what *writes* it? Presumably: triggering rescue (esp. reaching lock) raises it; sustained consistency (matched answers without rescue) lowers it. This update mechanism is undefined and is what makes the "constrain until they show consistency" goal actually work.
+**The real underlying question (why it's deferred):** is answering via the authored `multipleButtons` mode *meaningfully different* from picking an option in the L2/L3 hint panel — different scoring (Chunk-2 button scoring), UX, and intent — or is it essentially the same "pick from options" experience? 
+- If **different** → keep a branch: real buttons when authored, hint-panel fallback when not.
+- If **same** → unify everything through the answer-ideas panel; rescue never needs authored buttons at all, and the whole buttons-vs-hints branch disappears.
 
-4. **Hint usage as a negative input — how much?** Confirmed it lowers frustration, but by how much, and does *any* hint tap suppress rescue for the interaction, or is it proportional?
+**Also deferred:** having the cycle-selection engine prefer button-capable interactions when a user's floor is elevated (so the next interaction fits the rescue state). An optimization, not needed for correctness.
 
-5. **Timer expiry** — count toward frustration or not? (Old spec left open; `recordTimerExpired()` unfired.)
+Decision needed before building the no-buttons path. Frustration math is unaffected either way — this only changes the *response* to crossing a band.
 
-6. **The switch toggle UI** — needs building (the left/right mic-vs-buttons control with the sliding circle). New component. Placement: below mic (Stage 1), at the bottom of the buttons (Stage 2).
+---
+
+## 7. Settled design (decisions made)
+
+### The frustration ladder — fully numeric (FINAL)
+
+Frustration is a live value [0, 1] within an interaction. **Bands (thresholds on the live value):**
+
+| Live frustration | Stage | Behavior |
+|---|---|---|
+| 0 – 0.39 | normal | mic only, no toggle |
+| 0.4 – 0.59 | **invite** | toggle appears; mic stays, buttons offered (user chooses) |
+| 0.6 – 0.79 | **auto-switch** | app switches to buttons (toggle on buttons side) |
+| 0.8 – 1.0 | **lock** | buttons only, no return to mic |
+
+Above 0.8 the value can still climb to 1.0 if the user keeps not-trying; they must earn it back below 0.8 to recover.
+
+### Within-interaction increments (applied to live frustration)
+| Event | Δ |
+|---|---|
+| Tier 3 voice answer (not understood) | **+0.2** |
+| Tier 2 voice answer (vocab only) | **+0.1** |
+| Tier 1 voice answer (matched) | **0**, or **−0.1** if frustration > 0 |
+| Hint used | **−0.1** |
+| Accept toggle & answer with buttons, in invite band (0.4–0.59) | **−0.1** |
+| Answer with buttons in auto-switch band (0.6–0.79) | **−0.1** |
+
+All clamped to [0, 1]. Good behavior (matches, hints, accepting buttons) actively pulls frustration down; Tier-2/3 failures push it up. The bands are a live tug-of-war.
+
+### The floor / carry-over across interactions (`rescue_level`)
+`rescue_level` (persistent, `user_behavior`, [0,1], **default 0** for new users) is the **starting floor** each interaction resets to.
+
+**Carry-over rule (FINAL, simple):** each new interaction starts at `previous_interaction_ending_frustration − 0.1`, clamped [0, 1]. Written back to `user_behavior.rescue_level` at interaction end, so it **survives across sessions**.
+
+This one rule implements the whole progressive-lock-but-recoverable intent automatically:
+- A struggler who recovers is walked back toward 0 (−0.1/interaction passive decay + active decreases).
+- A non-serious mic-gamer who ends an interaction ~0.9 starts the next at ~0.8 — pre-locked from the first answer — and stays there until they show good will (matches/hints/accepting buttons) faster than the failures climb.
+- A cruising proper user stays at 0 (`0 − 0.1` clamps to 0).
+
+The floor can reach the pre-locked zone (≥0.8) — that's how "the third interaction comes pre-locked" happens. No cap below 1; no floor below 0.
+
+**Terminal stance:** a user who never shows good will stays locked, and that's accepted — TuJe isn't for users just playing with the mic.
+
+### Hint signal reversal
+`recordHelpTapped()` currently ADDS +0.40 (old spec). Under this design hint use is a good-will signal → **−0.1** (subtracts). Reverse it.
+
+---
+
+## 7b. (superseded) original open decisions
+
+---
+
+## 7b. (superseded) original open decisions
 
 ---
 
