@@ -1,7 +1,7 @@
 import asyncio
 import os
 import asyncpg
-from button_realization import realize_template, curate_quick_help
+from button_realization import realize_template, curate_quick_help, find_frame_swap_distractors
 from answer_selection_service import answer_selection_service
 
 
@@ -58,6 +58,15 @@ async def main():
                     print(f"    id={a['id']}  type={a['answer_type']}  text={a['transcription_fr']!r}")
         finally:
             await pool.close()
+
+        print("\n=== find_frame_swap_distractors ===")
+        for lvl in (100, 40):
+            distractors = await find_frame_swap_distractors(
+                conn, "J'ai un entityAnimal", user_level=lvl, count=4
+            )
+            print(f"[frameswap @level{lvl}]")
+            for d in distractors:
+                print(f"    id={d['id']}  type={d['answer_type']}  text={d['transcription_fr']!r}")
     finally:
         await conn.close()
 

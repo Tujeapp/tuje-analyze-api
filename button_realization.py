@@ -192,3 +192,92 @@ async def curate_quick_help(
             f"(wanted {count}) — pool may lack enough wrong distractors"
         )
     return buttons[:count]
+
+
+# Sentinel used to normalize a template into a comparable "frame" (entity slot blanked).
+_FRAME_SLOT = "\x00"
+
+
+def _template_frame(transcription_fr: str) -> Optional[tuple]:
+    """
+    Reduce a template to its (frame, entity_token). The frame is the text with
+    its entity token replaced by a sentinel, so two templates with the same
+    surrounding words but different entities share a frame.
+    Returns None if there is not exactly one entity token.
+    """
+    tokens = find_entity_tokens(transcription_fr or "")
+    if len(tokens) != 1:
+        return None
+    token = tokens[0]
+    frame = transcription_fr.replace(token, _FRAME_SLOT)
+    return (frame, token)
+
+
+async def find_frame_swap_distractors(
+    conn,
+    target_transcription_fr: str,
+    user_level: int,
+    count: int = 3,
+    exclude_answer_ids: Optional[set] = None,
+) -> list[dict]:
+    """
+    Vocab-review distractors that share the TARGET's frame but use a DIFFERENT
+    entity, realized into level-appropriate vocab. E.g. target
+    "J'ai un entityAnimal" -> distractors "J'ai un pull", "J'ai un kiwi".
+
+    These are grammatically valid sentences (their templates are authored real
+    answers elsewhere) but WRONG answers for this interaction. Returns dicts:
+      { id, transcription_fr, transcription_en, image_url, answer_type }
+    with answer_type = "wrong" and id = a sentinel ("FRAMESWAP") because the
+    borrowed template does NOT belong to this interaction (submit-scoring treats
+    a FRAMESWAP tap as a known wrong; that integration is handled by the caller).
+
+    Fails safe (returns []) if the target has no single entity token or no
+    frame-mates realize.
+    """
+    target = _template_frame(target_transcription_fr)
+    if target is None:
+        return []  # target isn't a single-slot template — no frame to swap
+    target_frame, target_token = target
+    exclude_answer_ids = exclude_answer_ids or set()
+
+    # Fetch all live templates that contain an entity token (candidates).
+    rows = await conn.fetch(
+        """
+        SELECT DISTINCT ba.id, ba.transcription_fr, ba.transcription_en,
+               ba.image_url, ba.attribute_ids
+        FROM brain_answer ba
+        WHERE ba.live = true
+          AND ba.transcription_fr LIKE '%entity%'
+        """
+    )
+
+    distractors: list[dict] = []
+    seen_text = set()
+    for r in rows:
+        if r["id"] in exclude_answer_ids:
+            continue
+        mate = _template_frame(r["transcription_fr"])
+        if mate is None:
+            continue
+        mate_frame, mate_token = mate
+        # Same frame, DIFFERENT entity.
+        if mate_frame != target_frame or mate_token == target_token:
+            continue
+        realized = await realize_template(
+            conn, r["transcription_fr"], r["attribute_ids"], user_level, max_fills=count
+        )
+        for text in realized:
+            if text in seen_text:
+                continue
+            seen_text.add(text)
+            distractors.append({
+                "id": "FRAMESWAP",                 # sentinel — not a real answer here
+                "transcription_fr": text,
+                "transcription_en": r["transcription_en"],
+                "image_url": r["image_url"],
+                "answer_type": "wrong",
+            })
+            if len(distractors) >= count:
+                return distractors
+    return distractors

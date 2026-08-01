@@ -521,6 +521,28 @@ async def _evaluate_multiple_buttons(interaction_id, answer_id, selected_answer_
     if not selected_answer_id:
         raise ValueError("selected_answer_id is required for multipleButtons mode")
 
+    # Frame-swap distractor: a synthetic same-frame, wrong-vocab button whose id
+    # is not a real answer on this interaction. Score it as a standard wrong (30)
+    # — from the learner's view it's an ordinary wrong answer — without the answer
+    # lookup (which would miss and log a misleading "not linked" warning).
+    if selected_answer_id == "FRAMESWAP":
+        score, verdict = 30.0, "wrong"
+        await answer_service.update_answer_with_matching(
+            answer_id=answer_id,
+            similarity_score=score,
+            matched_answer_id=None,   # wrong → no match; keeps selected_answer_id out of the FK column
+            db_pool=db_pool,
+        )
+        return {
+            "answer_id": answer_id,
+            "verdict": verdict,
+            "similarity_score": score,
+            "gpt_used": False,
+            "interpretation": None,
+            "mistakes": [],
+            "status": "evaluated",
+        }
+
     # CHUNK 2: correctness + score derive from answer_type (not linkage).
     # Live answer_type values: 'perfect' | 'good' | 'false good' | 'wrong'.
     # Also fetch the join-row id + mistake_ids so we can surface button mistakes

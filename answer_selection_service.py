@@ -10,7 +10,7 @@ import logging
 import random
 from typing import List, Dict, Optional, Tuple
 
-from button_realization import curate_quick_help, realize_template
+from button_realization import curate_quick_help, realize_template, find_frame_swap_distractors, find_entity_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -423,12 +423,26 @@ class AnswerSelectionService:
             available: Dict[str, List[Dict]] = {
                 "perfect": [], "good": [], "false good": [], "wrong": []
             }
+            # Frame sources (valid perfect/good templates) whose frames seed the
+            # frame-swap distractors; used_ids excludes THIS interaction's own
+            # answers so they can't be borrowed back as distractors.
+            valid_template_frames: List[str] = []
+            used_ids = set()
             for row in rows:
                 answer_type = row['answer_type']
                 if answer_type not in available:
                     continue
+                used_ids.add(row['id'])
                 fr = row['transcription_fr']
-                if fr and find_entity_tokens(fr):
+                is_template = bool(fr and find_entity_tokens(fr))
+                # Frame source: perfect/good templates (the FRAME is what's reused,
+                # regardless of whether this row itself realizes).
+                if is_template and answer_type in ("perfect", "good"):
+                    valid_template_frames.append(fr)
+                # Wrong bucket is NOT from authored wrongs — filled by frame-swap below.
+                if answer_type == "wrong":
+                    continue
+                if is_template:
                     # Template: realize up to `count` fills at this level.
                     realized = await realize_template(
                         conn, fr, row['attribute_ids'], user_level, max_fills=count
@@ -452,6 +466,24 @@ class AnswerSelectionService:
                         "answer_type": answer_type,
                     })
                 # null fr → skipped (client requires non-null)
+
+            # WRONG bucket = same-frame, different-vocab distractors generated from
+            # this interaction's valid template frames. Deduped on text across
+            # frames, capped at `count`.
+            wrong_seen = set()
+            for frame_fr in dict.fromkeys(valid_template_frames):
+                if len(available["wrong"]) >= count:
+                    break
+                swaps = await find_frame_swap_distractors(
+                    conn, frame_fr, user_level, count=count, exclude_answer_ids=used_ids
+                )
+                for d in swaps:
+                    if d["transcription_fr"] in wrong_seen:
+                        continue
+                    wrong_seen.add(d["transcription_fr"])
+                    available["wrong"].append(d)
+                    if len(available["wrong"]) >= count:
+                        break
         return available
 
     def _pick_vocab_answers(
