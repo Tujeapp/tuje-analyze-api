@@ -1318,7 +1318,8 @@ async def get_answers_by_interaction(
             db_pool=pool,
             rescue_triggered=rescue_triggered,
             cycle_level_direction=cycle_level_direction,
-            selection_mode=selection_mode
+            selection_mode=selection_mode,
+            session_interaction_id=session_interaction_id
         )
 
         answers = result.get('answers') or []
