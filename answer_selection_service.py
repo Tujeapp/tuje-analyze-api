@@ -10,7 +10,13 @@ import logging
 import random
 from typing import List, Dict, Optional, Tuple
 
-from button_realization import curate_quick_help, realize_template, find_frame_swap_distractors, find_entity_tokens
+from button_realization import (
+    curate_quick_help,
+    realize_template,
+    find_frame_swap_distractors,
+    find_story_distractors,
+    find_entity_tokens,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -140,9 +146,10 @@ class AnswerSelectionService:
                 "difficulty": "quick_help",
             }
 
-        # Stamped purpose: if this interaction was dispatched as vocab-review, use
-        # that curator (dormant until intent cycles exist). Rescue (above) takes
-        # priority. 'default'/NULL falls through to the authored-button path.
+        # Stamped purpose: route to the matching curator (vocab_review is dormant
+        # until intent cycles exist; story borrows wrong-conversation distractors).
+        # Rescue (above) takes priority. 'default'/NULL falls through to the
+        # authored-button path.
         if session_interaction_id:
             async with db_pool.acquire() as conn:
                 purpose_row = await conn.fetchrow(
@@ -150,19 +157,26 @@ class AnswerSelectionService:
                     session_interaction_id,
                 )
                 bp = purpose_row["button_purpose"] if purpose_row else None
-                if bp == "vocab_review":
+                # DB-authoritative level — needed by any curator that realizes vocab.
+                if bp in ("vocab_review", "story"):
                     lvl_row = await conn.fetchrow("""
                         SELECT sc.cycle_level
                         FROM session_interaction si
                         JOIN session_cycle sc ON si.cycle_id = sc.id
                         WHERE si.id = $1
                     """, session_interaction_id)
-                    vocab_level = int(lvl_row["cycle_level"]) if (lvl_row and lvl_row["cycle_level"] is not None) else 100
+                    curator_level = int(lvl_row["cycle_level"]) if (lvl_row and lvl_row["cycle_level"] is not None) else 100
                 else:
-                    vocab_level = None
+                    curator_level = None
             if bp == "vocab_review":
                 return await self.curate_vocab_review(
-                    interaction_id, vocab_level, db_pool,
+                    interaction_id, curator_level, db_pool,
+                    cycle_level_direction=cycle_level_direction,
+                    selection_mode=selection_mode, count=4,
+                )
+            elif bp == "story":
+                return await self.curate_story(
+                    interaction_id, curator_level, db_pool,
                     cycle_level_direction=cycle_level_direction,
                     selection_mode=selection_mode, count=4,
                 )
@@ -576,6 +590,149 @@ class AnswerSelectionService:
             return {
                 "answers": [], "selection_mode": selection_mode,
                 "correct_count": 0, "config": [], "difficulty": "vocab_review_empty"
+            }
+        answers = self._pick_vocab_answers(selected_config, available)
+        random.shuffle(answers)
+        correct_count = sum(1 for t in selected_config if t in ("perfect", "good"))
+        return {
+            "answers": answers,
+            "selection_mode": selection_mode,
+            "correct_count": correct_count,
+            "config": selected_config,
+            "difficulty": difficulty_used,
+        }
+
+    # ============================================================================
+    # STORY — own valid answers + borrowed wrong-conversation distractors
+    # ============================================================================
+
+    async def _fetch_answers_for_story(
+        self,
+        interaction_id: str,
+        user_level: int,
+        db_pool: asyncpg.Pool,
+        count: int = 4,
+        same_subtopic: bool = True
+    ) -> Dict[str, List[Dict]]:
+        """
+        Story fetch: same shape as _fetch_answers_for_vocab_review (realize the
+        interaction's own answers into perfect/good/false-good buckets) but the
+        `wrong` bucket is filled by find_story_distractors (answers borrowed from
+        OTHER, non-variant interactions — valid there, wrong here) instead of
+        frame-swap or authored wrongs.
+        """
+        async with db_pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT
+                    ba.id,
+                    ba.transcription_fr,
+                    ba.transcription_en,
+                    ba.image_url,
+                    ba.answer_optimum_level,
+                    ba.attribute_ids,
+                    bia.answer_type,
+                    ABS(COALESCE(ba.answer_optimum_level, 100) - $2) AS level_distance
+                FROM brain_interaction_answer bia
+                JOIN brain_answer ba ON bia.answer_id = ba.id
+                WHERE bia.interaction_id = $1
+                  AND ba.live = TRUE
+                  AND bia.answer_type IS NOT NULL
+                  AND COALESCE(bia.never_a_button, FALSE) = FALSE
+                ORDER BY level_distance ASC
+            """, interaction_id, user_level)
+
+            available: Dict[str, List[Dict]] = {
+                "perfect": [], "good": [], "false good": [], "wrong": []
+            }
+            for row in rows:
+                answer_type = row['answer_type']
+                if answer_type not in available:
+                    continue
+                fr = row['transcription_fr']
+                # Wrong bucket is NOT from authored wrongs — borrowed below.
+                if answer_type == "wrong":
+                    continue
+                if fr and find_entity_tokens(fr):
+                    # Template: realize up to `count` fills at this level.
+                    realized = await realize_template(
+                        conn, fr, row['attribute_ids'], user_level, max_fills=count
+                    )
+                    for text in realized:
+                        available[answer_type].append({
+                            "id": row['id'],                 # template id (Option A)
+                            "transcription_fr": text,        # realized display
+                            "transcription_en": row['transcription_en'],
+                            "image_url": row['image_url'],
+                            "answer_type": answer_type,
+                        })
+                    # non-realizable → contributes nothing (excluded)
+                elif fr:
+                    # Literal: use as-is.
+                    available[answer_type].append({
+                        "id": row['id'],
+                        "transcription_fr": fr,
+                        "transcription_en": row['transcription_en'],
+                        "image_url": row['image_url'],
+                        "answer_type": answer_type,
+                    })
+                # null fr → skipped (client requires non-null)
+
+            # WRONG bucket = answers borrowed from OTHER (non-variant) interactions:
+            # valid responses to a different question, wrong here. Deduped on text,
+            # capped at `count`.
+            wrong_seen = set()
+            borrowed = await find_story_distractors(
+                conn, interaction_id, user_level, count=count, same_subtopic=same_subtopic
+            )
+            if not borrowed:
+                # Tier fallback: a subtle-tier miss (e.g. every same-subtopic
+                # interaction is a declared variant) falls through to the obvious
+                # tier rather than leaving the user with no buttons.
+                borrowed = await find_story_distractors(
+                    conn, interaction_id, user_level, count=count, same_subtopic=not same_subtopic
+                )
+            for d in borrowed:
+                if d["transcription_fr"] in wrong_seen:
+                    continue
+                wrong_seen.add(d["transcription_fr"])
+                available["wrong"].append(d)
+                if len(available["wrong"]) >= count:
+                    break
+        return available
+
+    async def curate_story(
+        self,
+        interaction_id: str,
+        user_level: int,
+        db_pool: asyncpg.Pool,
+        cycle_level_direction: int = 0,
+        selection_mode: str = "single",
+        count: int = 4
+    ) -> Dict:
+        """
+        Story purpose: the interaction's own valid answers + borrowed
+        wrong-conversation distractors, composed by the config engine.
+        Distractor distance follows difficulty: hard -> same-subtopic (subtle),
+        easy -> cross-subtopic (obvious).
+        """
+        difficulty = self._determine_difficulty(False, cycle_level_direction)
+        # Distance is the difficulty lever: harder = closer (same scene, subtler).
+        same_subtopic = difficulty in ("hard", "medium")
+        available = await self._fetch_answers_for_story(
+            interaction_id, user_level, db_pool, count=count, same_subtopic=same_subtopic
+        )
+        config_matrix = (
+            MULTIPLE_SELECT_CONFIGS if selection_mode == "multiple"
+            else SINGLE_SELECT_CONFIGS
+        )
+        selected_config, difficulty_used = self._select_configuration(
+            available, config_matrix, difficulty
+        )
+        if not selected_config:
+            # No satisfiable config — return empty; caller decides fallback.
+            return {
+                "answers": [], "selection_mode": selection_mode,
+                "correct_count": 0, "config": [], "difficulty": "story_empty"
             }
         answers = self._pick_vocab_answers(selected_config, available)
         random.shuffle(answers)

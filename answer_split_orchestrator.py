@@ -522,11 +522,12 @@ async def _evaluate_multiple_buttons(interaction_id, answer_id, selected_answer_
     if not selected_answer_id:
         raise ValueError("selected_answer_id is required for multipleButtons mode")
 
-    # Frame-swap distractor: a synthetic same-frame, wrong-vocab button whose id
-    # is not a real answer on this interaction. Score it as a standard wrong (30)
-    # — from the learner's view it's an ordinary wrong answer — without the answer
-    # lookup (which would miss and log a misleading "not linked" warning).
-    if selected_answer_id == "FRAMESWAP":
+    # Borrowed distractor (FRAMESWAP = frame-swap wrong-vocab; BORROWED = story
+    # wrong-conversation): a synthetic button whose id is not a real answer on this
+    # interaction. Score it as a standard wrong (30) — from the learner's view it's
+    # an ordinary wrong answer — without the answer lookup (which would miss and
+    # log a misleading "not linked" warning).
+    if selected_answer_id in ("FRAMESWAP", "BORROWED"):
         score, verdict = 30.0, "wrong"
         await answer_service.update_answer_with_matching(
             answer_id=answer_id,

@@ -31,7 +31,8 @@ def decide_interaction_mode_and_purpose(
 
     STAGE 2 — button_purpose (only meaningful when mode == multipleButtons):
       intent cycle -> 'vocab_review'  (dormant: no intent cycles exist yet)
-      notion/story -> 'default'       (routes to the authored-button path)
+      story cycle  -> 'story'         (own answers + borrowed wrong-conversation)
+      notion cycle -> 'default'       (routes to the authored-button path)
       voice mode   -> None            (voice interactions have no button purpose)
 
     NOTE: rescue's quick-help is NOT decided here — it's a client-triggered
@@ -60,8 +61,10 @@ def decide_interaction_mode_and_purpose(
         goal = (cycle_goal or "").strip().lower()
         if goal == "intent":
             button_purpose = "vocab_review"   # dormant until intent cycles exist
+        elif goal == "story":
+            button_purpose = "story"
         else:
-            button_purpose = "default"        # notion/story -> authored-button path
+            button_purpose = "default"        # notion (not built yet) -> authored-button path
 
     return (answer_mode, button_purpose)
 
