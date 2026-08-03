@@ -526,6 +526,13 @@ class AnswerSelectionService:
                     if len(available["wrong"]) >= count:
                         break
 
+            # A frame-swap distractor can coincidentally be the SAME TEXT as one
+            # of THIS interaction's own valid answers (exclude_answer_ids filters
+            # by answer id, not by resulting text). Presenting it as wrong would
+            # be incorrect — drop those.
+            own_texts = {a["transcription_fr"] for k in ("perfect", "good", "false good") for a in available[k]}
+            available["wrong"] = [w for w in available["wrong"] if w["transcription_fr"] not in own_texts]
+
         # A `perfect` is a valid answer, so let perfects also count toward
         # `good` slots — otherwise an interaction with only a perfect (no
         # goods) satisfies no config at all (every config needs a `good`) and
@@ -586,26 +593,19 @@ class AnswerSelectionService:
         vocab answers. Reuses the config engine (answer-type composition by
         difficulty) over pre-realized template buckets. Difficulty from cycle
         direction for now (session_mood added later).
-
-        NOTE: `selection_mode` is accepted (callers pass it) but IGNORED — this
-        purpose is always single-select. See the comment below.
         """
         difficulty = self._determine_difficulty(False, cycle_level_direction)
         available = await self._fetch_answers_for_vocab_review(
             interaction_id, user_level, db_pool, count=count
         )
-        # Vocab-review is a pick-ONE presentation: always single-select. The
-        # interaction's authored selection_mode may be 'multiple', whose configs
-        # all need TWO `good` answers — a thin pool then satisfies nothing and
-        # yields zero buttons.
-        config_matrix = SINGLE_SELECT_CONFIGS
+        config_matrix = SINGLE_SELECT_CONFIGS if selection_mode == "single" else MULTIPLE_SELECT_CONFIGS
         selected_config, difficulty_used = self._select_configuration(
             available, config_matrix, difficulty
         )
         if not selected_config:
             # No realizable config — return empty; caller decides fallback.
             return {
-                "answers": [], "selection_mode": "single",
+                "answers": [], "selection_mode": selection_mode,
                 "correct_count": 0, "config": [], "difficulty": "vocab_review_empty"
             }
         answers = self._pick_vocab_answers(selected_config, available)
@@ -613,7 +613,7 @@ class AnswerSelectionService:
         correct_count = sum(1 for t in selected_config if t in ("perfect", "good"))
         return {
             "answers": answers,
-            "selection_mode": "single",
+            "selection_mode": selection_mode,
             "correct_count": correct_count,
             "config": selected_config,
             "difficulty": difficulty_used,
@@ -716,6 +716,13 @@ class AnswerSelectionService:
                 if len(available["wrong"]) >= count:
                     break
 
+            # A borrowed distractor can coincidentally be the SAME TEXT as one of
+            # THIS interaction's own valid answers (e.g. 'Voilà' borrowed as a
+            # distractor for an interaction whose perfect answer is 'Voilà').
+            # Presenting it as wrong would be incorrect — drop those.
+            own_texts = {a["transcription_fr"] for k in ("perfect", "good", "false good") for a in available[k]}
+            available["wrong"] = [w for w in available["wrong"] if w["transcription_fr"] not in own_texts]
+
         # A `perfect` is a valid answer, so let perfects also count toward
         # `good` slots — otherwise an interaction with only a perfect (no
         # goods) satisfies no config at all (every config needs a `good`) and
@@ -744,9 +751,6 @@ class AnswerSelectionService:
         wrong-conversation distractors, composed by the config engine.
         Distractor distance follows difficulty: hard -> same-subtopic (subtle),
         easy -> cross-subtopic (obvious).
-
-        NOTE: `selection_mode` is accepted (callers pass it) but IGNORED — this
-        purpose is always single-select. See the comment below.
         """
         difficulty = self._determine_difficulty(False, cycle_level_direction)
         # Distance is the difficulty lever: harder = closer (same scene, subtler).
@@ -754,17 +758,14 @@ class AnswerSelectionService:
         available = await self._fetch_answers_for_story(
             interaction_id, user_level, db_pool, count=count, same_subtopic=same_subtopic
         )
-        # Story is a pick-ONE presentation: always single-select. The interaction's
-        # authored selection_mode may be 'multiple', whose configs all need TWO
-        # `good` answers — a thin pool then satisfies nothing and yields zero buttons.
-        config_matrix = SINGLE_SELECT_CONFIGS
+        config_matrix = SINGLE_SELECT_CONFIGS if selection_mode == "single" else MULTIPLE_SELECT_CONFIGS
         selected_config, difficulty_used = self._select_configuration(
             available, config_matrix, difficulty
         )
         if not selected_config:
             # No satisfiable config — return empty; caller decides fallback.
             return {
-                "answers": [], "selection_mode": "single",
+                "answers": [], "selection_mode": selection_mode,
                 "correct_count": 0, "config": [], "difficulty": "story_empty"
             }
         answers = self._pick_vocab_answers(selected_config, available)
@@ -772,7 +773,7 @@ class AnswerSelectionService:
         correct_count = sum(1 for t in selected_config if t in ("perfect", "good"))
         return {
             "answers": answers,
-            "selection_mode": "single",
+            "selection_mode": selection_mode,
             "correct_count": correct_count,
             "config": selected_config,
             "difficulty": difficulty_used,
