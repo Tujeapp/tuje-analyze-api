@@ -28,6 +28,7 @@ from session_management import (
 )
 
 from cycle_manager.cycle_creation import advance_to_next_interaction, start_new_cycle
+from cycle_manager.interaction_dispatcher import resolve_mode_and_purpose
 from cycle_manager.cycle_completion import complete_cycle as cycle_completion_complete
 from cycle_manager.cycle_calculations import (
     calculate_cycle_level,
@@ -867,12 +868,21 @@ async def advance_after_interaction(interaction_id: str, user_id: str, db_pool: 
                          f"(size={len(pool_ids) if pool_ids else 0}). Cannot advance.")
             return base
 
+        # Stamp the presentation decision onto the next interaction row.
+        async with db_pool.acquire() as conn:
+            cycle_goal = await conn.fetchval(
+                "SELECT cycle_goal FROM session_cycle WHERE id = $1", cycle_id)
+        answer_mode, button_purpose = await resolve_mode_and_purpose(
+            db_pool, user_id, cycle_goal)
+
         advance_result = await advance_to_next_interaction(
             cycle_id=cycle_id,
             session_id=session_id,
             current_interaction_number=interaction_number,
             ordered_interaction_ids=list(pool_ids),
             db_pool=db_pool,
+            answer_mode=answer_mode,
+            button_purpose=button_purpose,
         )
         if not advance_result.get("cycle_complete"):
             base.update({

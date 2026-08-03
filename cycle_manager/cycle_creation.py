@@ -12,6 +12,7 @@ from interaction_search_notion import find_best_notion_interactions_with_fallbac
 from interaction_search_intent import find_best_intent_interactions_with_fallback
 from helpers import generate_id
 from .interaction_selection import select_cycle_interactions
+from .interaction_dispatcher import resolve_mode_and_purpose
 
 logger = logging.getLogger(__name__)
 
@@ -110,12 +111,15 @@ async def start_new_cycle(
     
     # Save first interaction as active
     first_interaction_id = generate_id("INT")
+    answer_mode, button_purpose = await resolve_mode_and_purpose(
+        db_pool, context.user_id, cycle_goal)
     await db_pool.execute("""
         INSERT INTO session_interaction (
             id, session_id, cycle_id, brain_interaction_id,
-            interaction_number, status, started_at
-        ) VALUES ($1, $2, $3, $4, 1, 'active', NOW())
-    """, first_interaction_id, session_id, cycle_id, ordered_ids[0])
+            interaction_number, status, started_at, answer_mode, button_purpose
+        ) VALUES ($1, $2, $3, $4, 1, 'active', NOW(), $5, $6)
+    """, first_interaction_id, session_id, cycle_id, ordered_ids[0],
+        answer_mode, button_purpose)
 
     # Cycle-1 backfill (NULL-marker notion model): the carry-forward / seed wrote this
     # session's notion rows with session_id NULL at session start (session_id did not
@@ -146,7 +150,9 @@ async def advance_to_next_interaction(
     session_id: str,
     current_interaction_number: int,
     ordered_interaction_ids: List[str],
-    db_pool: asyncpg.Pool
+    db_pool: asyncpg.Pool,
+    answer_mode: str = None,
+    button_purpose: str = None
 ) -> Dict[str, Any]:
     """
     Advance to the next interaction in the cycle
@@ -181,10 +187,10 @@ async def advance_to_next_interaction(
     await db_pool.execute("""
         INSERT INTO session_interaction (
             id, session_id, cycle_id, brain_interaction_id,
-            interaction_number, status, started_at
-        ) VALUES ($1, $2, $3, $4, $5, 'active', NOW())
-    """, next_interaction_id, session_id, cycle_id, 
-        next_brain_interaction_id, next_number)
+            interaction_number, status, started_at, answer_mode, button_purpose
+        ) VALUES ($1, $2, $3, $4, $5, 'active', NOW(), $6, $7)
+    """, next_interaction_id, session_id, cycle_id,
+        next_brain_interaction_id, next_number, answer_mode, button_purpose)
     
     logger.info(f"Advanced to interaction {next_number}/7 in cycle {cycle_id}")
     
