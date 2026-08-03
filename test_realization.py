@@ -1,7 +1,12 @@
 import asyncio
 import os
 import asyncpg
-from button_realization import realize_template, curate_quick_help, find_frame_swap_distractors
+from button_realization import (
+    realize_template,
+    curate_quick_help,
+    find_frame_swap_distractors,
+    find_story_distractors,
+)
 from answer_selection_service import answer_selection_service
 
 
@@ -67,6 +72,13 @@ async def main():
             print(f"[frameswap @level{lvl}]")
             for d in distractors:
                 print(f"    id={d['id']}  type={d['answer_type']}  text={d['transcription_fr']!r}")
+
+        print("\n=== find_story_distractors ===")
+        for same_sub, label in [(True, "same-subtopic (subtle)"), (False, "cross-subtopic (obvious)")]:
+            d = await find_story_distractors(conn, 'INT202607041224', user_level=100, count=4, same_subtopic=same_sub)
+            print(f"[story {label}]")
+            for x in d:
+                print(f"    id={x['id']}  type={x['answer_type']}  text={x['transcription_fr']!r}")
     finally:
         await conn.close()
 

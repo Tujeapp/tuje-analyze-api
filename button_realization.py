@@ -281,3 +281,118 @@ async def find_frame_swap_distractors(
             if len(distractors) >= count:
                 return distractors
     return distractors
+
+
+async def find_story_distractors(
+    conn,
+    interaction_id: str,
+    user_level: int,
+    count: int = 3,
+    same_subtopic: bool = True,
+) -> list[dict]:
+    """
+    Story-purpose distractors: borrow perfect/good answers from OTHER interactions
+    — valid responses to a DIFFERENT question, hence wrong for this one.
+
+    Distance is the difficulty lever:
+      same_subtopic=True  -> subtle (same scene, different question:
+                             "Votre billet ?" answers vs a passport question)
+      same_subtopic=False -> obvious (a different subtopic entirely)
+
+    Excludes the current interaction AND its variants (bidirectionally: both the
+    ids this interaction lists, and any interaction listing this one) — a variant's
+    answer would be VALID here, so borrowing it would create a false-wrong.
+
+    Returns dicts {id:"BORROWED", transcription_fr, transcription_en, image_url,
+    answer_type:"wrong"}. The sentinel id is used because the borrowed answer has
+    no brain_interaction_answer row for THIS interaction; the submit path scores a
+    BORROWED tap as wrong directly. Fails safe ([]).
+    """
+    # Current interaction: subtopic + its declared variants.
+    cur = await conn.fetchrow(
+        """
+        SELECT subtopic_id, COALESCE(variant_ids, ARRAY[]::text[]) AS variant_ids
+        FROM brain_interaction
+        WHERE id = $1
+        """,
+        interaction_id,
+    )
+    if not cur:
+        logger.warning(f"find_story_distractors: interaction {interaction_id} not found")
+        return []
+
+    # Bidirectional exclusion: self + ids it lists + ids that list it.
+    reverse = await conn.fetch(
+        "SELECT id FROM brain_interaction WHERE variant_ids @> ARRAY[$1]::text[]",
+        interaction_id,
+    )
+    excluded = {interaction_id}
+    excluded.update(cur["variant_ids"] or [])
+    excluded.update(r["id"] for r in reverse)
+
+    # Candidate source interactions by tier.
+    if same_subtopic:
+        rows = await conn.fetch(
+            """
+            SELECT id FROM brain_interaction
+            WHERE live = true AND subtopic_id = $1 AND id <> ALL($2::text[])
+            ORDER BY id
+            """,
+            cur["subtopic_id"], list(excluded),
+        )
+    else:
+        rows = await conn.fetch(
+            """
+            SELECT id FROM brain_interaction
+            WHERE live = true AND subtopic_id IS DISTINCT FROM $1 AND id <> ALL($2::text[])
+            ORDER BY id
+            LIMIT 50
+            """,
+            cur["subtopic_id"], list(excluded),
+        )
+    if not rows:
+        logger.info(f"find_story_distractors: no source interactions for {interaction_id} (same_subtopic={same_subtopic})")
+        return []
+
+    distractors: list[dict] = []
+    seen_text = set()
+    for r in rows:
+        # Borrow that interaction's VALID answers (valid there = wrong here).
+        answers = await conn.fetch(
+            """
+            SELECT ba.transcription_fr, ba.transcription_en, ba.image_url, ba.attribute_ids
+            FROM brain_interaction_answer bia
+            JOIN brain_answer ba ON ba.id = bia.answer_id
+            WHERE bia.interaction_id = $1
+              AND bia.live = true
+              AND bia.answer_type IN ('perfect','good')
+              AND ba.live = true
+              AND COALESCE(bia.never_a_button, false) = false
+            ORDER BY bia.answer_typicality DESC NULLS LAST, ba.id
+            """,
+            r["id"],
+        )
+        for a in answers:
+            fr = a["transcription_fr"]
+            if not fr:
+                continue
+            if find_entity_tokens(fr):
+                realized = await realize_template(conn, fr, a["attribute_ids"], user_level, max_fills=1)
+                if not realized:
+                    continue
+                text = realized[0]
+            else:
+                text = fr
+            if text in seen_text:
+                continue
+            seen_text.add(text)
+            distractors.append({
+                "id": "BORROWED",
+                "transcription_fr": text,
+                "transcription_en": a["transcription_en"],
+                "image_url": a["image_url"],
+                "answer_type": "wrong",
+            })
+            if len(distractors) >= count:
+                return distractors
+    return distractors
