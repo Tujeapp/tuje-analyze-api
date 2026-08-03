@@ -109,6 +109,8 @@ class StartCycleResponse(BaseModel):
     cycle_level: int
     cycle_boredom: float
     cycle_goal: str
+    answer_mode: Optional[str] = None
+    button_purpose: Optional[str] = None
 
 
 # ============================================================================
@@ -470,7 +472,9 @@ async def start_cycle_endpoint(request: StartCycleRequest, http_request: Request
             total_interactions=len(cycle_data.get('ordered_interactions', [])),
             cycle_level=cycle_level,
             cycle_boredom=cycle_boredom,
-            cycle_goal=cycle_goal
+            cycle_goal=cycle_goal,
+            answer_mode=cycle_data.get('answer_mode'),
+            button_purpose=cycle_data.get('button_purpose'),
         )
 
     except HTTPException:

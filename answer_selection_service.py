@@ -140,6 +140,33 @@ class AnswerSelectionService:
                 "difficulty": "quick_help",
             }
 
+        # Stamped purpose: if this interaction was dispatched as vocab-review, use
+        # that curator (dormant until intent cycles exist). Rescue (above) takes
+        # priority. 'default'/NULL falls through to the authored-button path.
+        if session_interaction_id:
+            async with db_pool.acquire() as conn:
+                purpose_row = await conn.fetchrow(
+                    "SELECT button_purpose FROM session_interaction WHERE id = $1",
+                    session_interaction_id,
+                )
+                bp = purpose_row["button_purpose"] if purpose_row else None
+                if bp == "vocab_review":
+                    lvl_row = await conn.fetchrow("""
+                        SELECT sc.cycle_level
+                        FROM session_interaction si
+                        JOIN session_cycle sc ON si.cycle_id = sc.id
+                        WHERE si.id = $1
+                    """, session_interaction_id)
+                    vocab_level = int(lvl_row["cycle_level"]) if (lvl_row and lvl_row["cycle_level"] is not None) else 100
+                else:
+                    vocab_level = None
+            if bp == "vocab_review":
+                return await self.curate_vocab_review(
+                    interaction_id, vocab_level, db_pool,
+                    cycle_level_direction=cycle_level_direction,
+                    selection_mode=selection_mode, count=4,
+                )
+
         # Step 2 — Fetch available answers by type
         available = await self._fetch_available_answers(interaction_id, user_level, db_pool)
         logger.info(f"📊 Available answers by type: { {k: len(v) for k, v in available.items()} }")

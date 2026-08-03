@@ -889,6 +889,8 @@ async def advance_after_interaction(interaction_id: str, user_id: str, db_pool: 
                 "next_interaction_id": advance_result["next_interaction_id"],
                 "next_brain_interaction_id": advance_result["brain_interaction_id"],
                 "interaction_number": advance_result["interaction_number"],
+                "answer_mode": answer_mode,
+                "button_purpose": button_purpose,
             })
         return base
 
@@ -947,6 +949,8 @@ async def advance_after_interaction(interaction_id: str, user_id: str, db_pool: 
             "cycle_boredom": float(next_cycle_boredom),
             "first_interaction_id": next_cycle_result["first_interaction_id"],
             "first_brain_interaction_id": next_cycle_result["ordered_interactions"][0],
+            "answer_mode": next_cycle_result["answer_mode"],
+            "button_purpose": next_cycle_result["button_purpose"],
         }
     else:
         base["session_complete"] = True

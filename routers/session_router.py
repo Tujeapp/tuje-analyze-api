@@ -101,6 +101,8 @@ class NextCycle(BaseModel):
     first_interaction_id: str
     first_brain_interaction_id: str
     total_interactions: int = 7
+    answer_mode: Optional[str] = None
+    button_purpose: Optional[str] = None
 
 
 class SessionSummary(BaseModel):
@@ -249,6 +251,8 @@ class AdvanceInteractionResponse(BaseModel):
     next_interaction_id: Optional[str] = None
     next_brain_interaction_id: Optional[str] = None
     interaction_number: Optional[int] = None
+    answer_mode: Optional[str] = None
+    button_purpose: Optional[str] = None
     next_cycle: Optional[NextCycle] = None
     cycle_summary: Optional[CycleSummary] = None
     session_complete: bool = False

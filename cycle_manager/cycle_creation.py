@@ -141,7 +141,9 @@ async def start_new_cycle(
         "subtopic_id": interactions[0].subtopic_id,
         "ordered_interactions": ordered_ids,
         "first_interaction_id": first_interaction_id,
-        "total_interactions": len(ordered_ids)
+        "total_interactions": len(ordered_ids),
+        "answer_mode": answer_mode,
+        "button_purpose": button_purpose,
     }
 
 
