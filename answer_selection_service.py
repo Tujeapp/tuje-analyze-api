@@ -525,6 +525,19 @@ class AnswerSelectionService:
                     available["wrong"].append(d)
                     if len(available["wrong"]) >= count:
                         break
+
+        # A `perfect` is a valid answer, so let perfects also count toward
+        # `good` slots — otherwise an interaction with only a perfect (no
+        # goods) satisfies no config at all (every config needs a `good`) and
+        # the user gets zero buttons. Genuine goods are kept first so they're
+        # preferred; _pick_vocab_answers dedups on transcription_fr, so the
+        # same answer can never be placed twice.
+        if available["perfect"]:
+            seen_good = {a["transcription_fr"] for a in available["good"]}
+            for p in available["perfect"]:
+                if p["transcription_fr"] not in seen_good:
+                    available["good"].append(p)
+                    seen_good.add(p["transcription_fr"])
         return available
 
     def _pick_vocab_answers(
@@ -698,6 +711,19 @@ class AnswerSelectionService:
                 available["wrong"].append(d)
                 if len(available["wrong"]) >= count:
                     break
+
+        # A `perfect` is a valid answer, so let perfects also count toward
+        # `good` slots — otherwise an interaction with only a perfect (no
+        # goods) satisfies no config at all (every config needs a `good`) and
+        # the user gets zero buttons. Genuine goods are kept first so they're
+        # preferred; _pick_vocab_answers dedups on transcription_fr, so the
+        # same answer can never be placed twice.
+        if available["perfect"]:
+            seen_good = {a["transcription_fr"] for a in available["good"]}
+            for p in available["perfect"]:
+                if p["transcription_fr"] not in seen_good:
+                    available["good"].append(p)
+                    seen_good.add(p["transcription_fr"])
         return available
 
     async def curate_story(
