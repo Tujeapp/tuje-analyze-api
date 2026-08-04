@@ -21,7 +21,7 @@
 
 import asyncpg
 import logging
-from typing import List
+from typing import List, Optional, Tuple
 from models import InteractionCandidate, InsufficientInteractionsError
 from session_context import SessionContext
 from notion_management import get_top_notions_list
@@ -36,9 +36,13 @@ async def find_best_notion_interactions_with_fallback(
     session_mood: str,
     context: SessionContext,
     cycle_goal: str = "notion",
-) -> List[InteractionCandidate]:
+) -> Tuple[List[InteractionCandidate], Optional[str]]:
     """
     Progressive fallback to find >= 7 notion-filtered interactions (total).
+
+    Returns (candidates, selected_notion_id) — the notion that actually filtered
+    the search, so the caller can persist it (session_cycle.target_notion_id) and
+    the runtime curator can filter on the SAME notion.
 
     Phase 1: New subtopics, current boredom, current level
     Phase 2: New + seen subtopics
@@ -79,7 +83,7 @@ async def find_best_notion_interactions_with_fallback(
     )
     if len(candidates) >= 7:
         logger.info(f"✅ Found {len(candidates)} notion interactions (new subtopics)")
-        return candidates
+        return candidates, first_notion
 
     attempt += 1
 
@@ -91,7 +95,7 @@ async def find_best_notion_interactions_with_fallback(
     )
     if len(candidates) >= 7:
         logger.info(f"✅ Found {len(candidates)} notion interactions (new + seen)")
-        return candidates
+        return candidates, first_notion
 
     attempt += 1
 
@@ -106,7 +110,7 @@ async def find_best_notion_interactions_with_fallback(
         )
         if len(candidates) >= 7:
             logger.info(f"✅ Found {len(candidates)} (boredom={current_boredom:.2f})")
-            return candidates
+            return candidates, first_notion
         attempt += 1
 
     # Phase 4: Level fallbacks
@@ -121,7 +125,7 @@ async def find_best_notion_interactions_with_fallback(
         )
         if len(candidates) >= 7:
             logger.warning(f"✅ Level fallback success: {len(candidates)} at level {current_level}")
-            return candidates
+            return candidates, first_notion
         attempt += 1
 
     # All fallbacks failed

@@ -147,10 +147,11 @@ class AnswerSelectionService:
             }
 
         # Stamped purpose: route to the matching curator (vocab_review is dormant
-        # until intent cycles exist; story borrows wrong-conversation distractors).
-        # Rescue (above) takes priority. 'default'/NULL falls through to the
-        # authored-button path.
+        # until intent cycles exist; story borrows wrong-conversation distractors;
+        # notion tests the cycle's target notion). Rescue (above) takes priority.
+        # 'default'/NULL falls through to the authored-button path.
         if session_interaction_id:
+            target_notion_id = None
             async with db_pool.acquire() as conn:
                 purpose_row = await conn.fetchrow(
                     "SELECT button_purpose FROM session_interaction WHERE id = $1",
@@ -158,14 +159,16 @@ class AnswerSelectionService:
                 )
                 bp = purpose_row["button_purpose"] if purpose_row else None
                 # DB-authoritative level — needed by any curator that realizes vocab.
-                if bp in ("vocab_review", "story"):
+                # The cycle's target notion comes from the same row (notion purpose).
+                if bp in ("vocab_review", "story", "notion"):
                     lvl_row = await conn.fetchrow("""
-                        SELECT sc.cycle_level
+                        SELECT sc.cycle_level, sc.target_notion_id
                         FROM session_interaction si
                         JOIN session_cycle sc ON si.cycle_id = sc.id
                         WHERE si.id = $1
                     """, session_interaction_id)
                     curator_level = int(lvl_row["cycle_level"]) if (lvl_row and lvl_row["cycle_level"] is not None) else 100
+                    target_notion_id = lvl_row["target_notion_id"] if lvl_row else None
                 else:
                     curator_level = None
             if bp == "vocab_review":
@@ -180,6 +183,21 @@ class AnswerSelectionService:
                     cycle_level_direction=cycle_level_direction,
                     selection_mode=selection_mode, count=4,
                 )
+            elif bp == "notion":
+                if not target_notion_id:
+                    # Notion-purpose interaction on a cycle with no target notion
+                    # (pre-dates the persistence, or a non-notion cycle mis-stamped).
+                    # Nothing to filter on — fall through to the authored-button path.
+                    logger.warning(
+                        f"notion purpose on {session_interaction_id} but the cycle has no "
+                        f"target_notion_id — falling back to the authored-button path"
+                    )
+                else:
+                    return await self.curate_notion(
+                        interaction_id, curator_level, db_pool, target_notion_id,
+                        cycle_level_direction=cycle_level_direction,
+                        selection_mode=selection_mode, count=4,
+                    )
 
         # Step 2 — Fetch available answers by type
         available = await self._fetch_available_answers(interaction_id, user_level, db_pool)
@@ -767,6 +785,169 @@ class AnswerSelectionService:
             return {
                 "answers": [], "selection_mode": selection_mode,
                 "correct_count": 0, "config": [], "difficulty": "story_empty"
+            }
+        answers = self._pick_vocab_answers(selected_config, available)
+        random.shuffle(answers)
+        correct_count = sum(1 for t in selected_config if t in ("perfect", "good"))
+        return {
+            "answers": answers,
+            "selection_mode": selection_mode,
+            "correct_count": correct_count,
+            "config": selected_config,
+            "difficulty": difficulty_used,
+        }
+
+    # ============================================================================
+    # NOTION — one dimension only: answers carrying the target notion, and wrongs
+    # whose mistakes belong entirely to that notion
+    # ============================================================================
+
+    async def _fetch_answers_for_notion(
+        self,
+        interaction_id: str,
+        user_level: int,
+        db_pool: asyncpg.Pool,
+        target_notion_id: str,
+        count: int = 4
+    ) -> Dict[str, List[Dict]]:
+        """
+        Notion fetch: valid answers are those CONTAINING the target notion
+        (brain_answer.matched_notion_ids @> [notion]); wrong answers are those whose
+        mistakes ALL belong to that notion (bia.mistake_ids <@ notion.mistake_ids) —
+        so the user is tested on exactly one dimension: this notion. An answer
+        carrying a notion-mistake PLUS an unrelated mistake is excluded.
+        """
+        available: Dict[str, List[Dict]] = {
+            "perfect": [], "good": [], "false good": [], "wrong": []
+        }
+        if not target_notion_id:
+            logger.info("notion fetch: no target_notion_id on the cycle — nothing to filter on")
+            return available
+
+        async with db_pool.acquire() as conn:
+            # The notion's mistake set. No mistakes on the notion → no wrong bucket.
+            notion_mistake_rows = await conn.fetchval(
+                "SELECT mistake_ids FROM brain_notion WHERE id = $1", target_notion_id
+            )
+            notion_mistakes = set(notion_mistake_rows or [])
+
+            rows = await conn.fetch("""
+                SELECT
+                    ba.id,
+                    ba.transcription_fr,
+                    ba.transcription_en,
+                    ba.image_url,
+                    ba.answer_optimum_level,
+                    ba.attribute_ids,
+                    ba.matched_notion_ids,
+                    bia.answer_type,
+                    bia.answer_typicality,
+                    bia.mistake_ids,
+                    ABS(COALESCE(ba.answer_optimum_level, 100) - $2) AS level_distance
+                FROM brain_interaction_answer bia
+                JOIN brain_answer ba ON bia.answer_id = ba.id
+                WHERE bia.interaction_id = $1
+                  AND ba.live = TRUE
+                  AND bia.answer_type IS NOT NULL
+                  AND COALESCE(bia.never_a_button, FALSE) = FALSE
+                ORDER BY level_distance ASC
+            """, interaction_id, user_level)
+
+            for row in rows:
+                answer_type = row['answer_type']
+                if answer_type not in available:
+                    continue
+                fr = row['transcription_fr']
+                if not fr:
+                    continue  # null fr → skipped (client requires non-null)
+
+                # Containment is done in Python, not SQL: bia.mistake_ids is
+                # varchar[] while brain_notion.mistake_ids is text[], and Postgres
+                # has no varchar[] <@ text[] operator (verified) — comparing sets
+                # here avoids the cast and reads clearer.
+                if answer_type == "wrong":
+                    answer_mistakes = set(row['mistake_ids'] or [])
+                    # Wrong ONLY if it carries mistakes and they ALL belong to this
+                    # notion — a notion-mistake plus an unrelated one is excluded.
+                    if not answer_mistakes or not answer_mistakes <= notion_mistakes:
+                        continue
+                else:
+                    # Valid answers must carry the target notion.
+                    if target_notion_id not in (row['matched_notion_ids'] or []):
+                        continue
+
+                if find_entity_tokens(fr):
+                    # Template: realize up to `count` fills at this level.
+                    realized = await realize_template(
+                        conn, fr, row['attribute_ids'], user_level, max_fills=count
+                    )
+                    for text in realized:
+                        available[answer_type].append({
+                            "id": row['id'],                 # template id (Option A)
+                            "transcription_fr": text,        # realized display
+                            "transcription_en": row['transcription_en'],
+                            "image_url": row['image_url'],
+                            "answer_type": answer_type,
+                        })
+                    # non-realizable → contributes nothing (excluded)
+                else:
+                    # Literal: use as-is.
+                    available[answer_type].append({
+                        "id": row['id'],
+                        "transcription_fr": fr,
+                        "transcription_en": row['transcription_en'],
+                        "image_url": row['image_url'],
+                        "answer_type": answer_type,
+                    })
+
+            # A wrong can coincidentally be the SAME TEXT as one of this
+            # interaction's own valid answers — presenting it as wrong would be
+            # incorrect. Drop those.
+            own_texts = {a["transcription_fr"] for k in ("perfect", "good", "false good") for a in available[k]}
+            available["wrong"] = [w for w in available["wrong"] if w["transcription_fr"] not in own_texts]
+
+        # A `perfect` is a valid answer, so let perfects also count toward
+        # `good` slots — otherwise an interaction with only a perfect (no
+        # goods) satisfies no config at all (every config needs a `good`) and
+        # the user gets zero buttons. Genuine goods are kept first so they're
+        # preferred; _pick_vocab_answers dedups on transcription_fr, so the
+        # same answer can never be placed twice.
+        if available["perfect"]:
+            seen_good = {a["transcription_fr"] for a in available["good"]}
+            for p in available["perfect"]:
+                if p["transcription_fr"] not in seen_good:
+                    available["good"].append(p)
+                    seen_good.add(p["transcription_fr"])
+        return available
+
+    async def curate_notion(
+        self,
+        interaction_id: str,
+        user_level: int,
+        db_pool: asyncpg.Pool,
+        target_notion_id: str,
+        cycle_level_direction: int = 0,
+        selection_mode: str = "single",
+        count: int = 4
+    ) -> Dict:
+        """
+        Notion purpose: tests exactly one dimension — the cycle's target notion.
+        Valid answers carry the notion; wrong answers carry only that notion's
+        mistakes. Composed by the config engine as usual.
+        """
+        difficulty = self._determine_difficulty(False, cycle_level_direction)
+        available = await self._fetch_answers_for_notion(
+            interaction_id, user_level, db_pool, target_notion_id, count=count
+        )
+        config_matrix = SINGLE_SELECT_CONFIGS if selection_mode == "single" else MULTIPLE_SELECT_CONFIGS
+        selected_config, difficulty_used = self._select_configuration(
+            available, config_matrix, difficulty
+        )
+        if not selected_config:
+            # No satisfiable config — return empty; caller decides fallback.
+            return {
+                "answers": [], "selection_mode": selection_mode,
+                "correct_count": 0, "config": [], "difficulty": "notion_empty"
             }
         answers = self._pick_vocab_answers(selected_config, available)
         random.shuffle(answers)

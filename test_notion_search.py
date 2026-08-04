@@ -88,7 +88,7 @@ async def main():
         hr("RUN - find_best_notion_interactions_with_fallback")
         context = await SessionContext.load(USER_ID, pool)
         try:
-            candidates = await find_best_notion_interactions_with_fallback(
+            candidates, _ = await find_best_notion_interactions_with_fallback(
                 db_pool=pool,
                 interaction_user_level=INTERACTION_USER_LEVEL,
                 cycle_boredom=CYCLE_BOREDOM,

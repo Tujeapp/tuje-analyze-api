@@ -2,7 +2,10 @@ import asyncpg
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from typing import List, Optional
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -1333,6 +1336,7 @@ async def get_answers_by_interaction(
         }
 
     except Exception as e:
+        logger.error(f"get_answers_by_interaction failed for {interaction_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/session-mood/{mood_name}")

@@ -60,8 +60,12 @@ async def start_new_cycle(
     # Find interactions with progressive fallback (goal-branched).
     # "story" and "intent" both fall to the subtopic search for now; "intent"
     # gets its own branch when built.
+    # The notion that actually filtered the search (notion cycles only); persisted
+    # on the cycle so the runtime curator can filter on the SAME notion.
+    target_notion_id = None
+
     if cycle_goal == "notion":
-        interactions = await find_best_notion_interactions_with_fallback(
+        interactions, target_notion_id = await find_best_notion_interactions_with_fallback(
             db_pool=db_pool,
             interaction_user_level=interaction_user_level,
             cycle_boredom=cycle_boredom,
@@ -104,10 +108,10 @@ async def start_new_cycle(
         INSERT INTO session_cycle (
             id, session_id, cycle_number, subtopic_id,
             status, started_at, cycle_level, cycle_boredom, cycle_goal,
-            candidate_pool_ids
-        ) VALUES ($1, $2, $3, $4, 'active', NOW(), $5, $6, $7, $8)
+            candidate_pool_ids, target_notion_id
+        ) VALUES ($1, $2, $3, $4, 'active', NOW(), $5, $6, $7, $8, $9)
     """, cycle_id, session_id, cycle_number, interactions[0].subtopic_id,
-        cycle_level, cycle_boredom, cycle_goal, ordered_ids)
+        cycle_level, cycle_boredom, cycle_goal, ordered_ids, target_notion_id)
     
     # Save first interaction as active
     first_interaction_id = generate_id("INT")
@@ -144,6 +148,7 @@ async def start_new_cycle(
         "total_interactions": len(ordered_ids),
         "answer_mode": answer_mode,
         "button_purpose": button_purpose,
+        "target_notion_id": target_notion_id,
     }
 
 

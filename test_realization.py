@@ -79,6 +79,27 @@ async def main():
             print(f"[story {label}]")
             for x in d:
                 print(f"    id={x['id']}  type={x['answer_type']}  text={x['transcription_fr']!r}")
+
+        print("\n=== curate_notion ===")
+        pool2 = await asyncpg.create_pool(_db_url(), min_size=1, max_size=2)
+        try:
+            # Buckets first, so we can see exactly what passed each filter.
+            buckets = await answer_selection_service._fetch_answers_for_notion(
+                'INT202607060930', 100, pool2, 'NOT202408091129', count=4
+            )
+            for k in ("perfect", "good", "false good", "wrong"):
+                print(f"    {k:12} ({len(buckets[k])}):")
+                for a in buckets[k]:
+                    print(f"        id={a['id']}  text={a['transcription_fr']!r}")
+            result = await answer_selection_service.curate_notion(
+                'INT202607060930', 100, pool2, 'NOT202408091129',
+                cycle_level_direction=0, selection_mode='single', count=4
+            )
+            print(f"    -> difficulty={result['difficulty']} config={result['config']}")
+            for a in result['answers']:
+                print(f"        id={a['id']}  type={a['answer_type']}  text={a['transcription_fr']!r}")
+        finally:
+            await pool2.close()
     finally:
         await conn.close()
 
