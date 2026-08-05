@@ -581,14 +581,11 @@ async def _evaluate_multiple_buttons(interaction_id, answer_id, selected_answer_
     await answer_service.update_answer_with_matching(
         answer_id=answer_id,
         similarity_score=score,
-        # Record WHICH answer the learner picked. Borrowed distractors carry a real,
-        # FK-valid id, so store it for analytics (mirrors voice, which sets
-        # matched_answer_id unconditionally from the matcher).
-        matched_answer_id=(
-            selected_answer_id
-            if (verdict in ("perfect", "good") or is_borrowed)
-            else None
-        ),
+        # WHICH answer they gave — not "they were right". Recorded unconditionally,
+        # mirroring voice. Safe now that _commit_recap reads the persisted verdict
+        # instead of inferring correctness from this field, and FK-safe because
+        # distractor ids are real brain_answer ids.
+        matched_answer_id=selected_answer_id,
         db_pool=db_pool,
         verdict=verdict,
     )
@@ -687,7 +684,7 @@ async def commit_answer(interaction_id: str, answer_id: str, db_pool: asyncpg.Po
     async with db_pool.acquire() as conn:
         answer = await conn.fetchrow("""
             SELECT answer_mode_used, similarity_score, matched_answer_id,
-                   tapped_at_seconds, user_id
+                   selected_answer_id, tapped_at_seconds, user_id
             FROM session_answer WHERE id = $1
         """, answer_id)
     if not answer:
@@ -696,14 +693,67 @@ async def commit_answer(interaction_id: str, answer_id: str, db_pool: asyncpg.Po
     mode = answer["answer_mode_used"]
     similarity = float(answer["similarity_score"] or 0)
     matched_answer_id = answer["matched_answer_id"]
+    selected_answer_id = answer["selected_answer_id"]
     user_level = interaction["cycle_level"]
 
     if mode == "multipleButtons":
-        # CHUNK 2: score was derived from answer_type at evaluate and stored on
-        # the answer's similarity_score. Use it directly instead of the old
-        # attempt-based calculate_multiple_buttons_score.
-        score = int(round(similarity))
+        # 3-phase model, same as voice — but keyed off selected_answer_id (the
+        # button they tapped), because matched_answer_id is a different notion
+        # here and the level we need belongs to the answer they actually chose.
         method = "multiple_buttons"
+        if selected_answer_id:
+            async with db_pool.acquire() as conn:
+                brow = await conn.fetchrow("""
+                    SELECT si.interaction_score      AS prior_score,
+                           bi.interaction_optimum_level,
+                           ba.answer_optimum_level,
+                           s.modulo
+                    FROM session_interaction si
+                    JOIN session s            ON si.session_id = s.id
+                    JOIN brain_interaction bi ON si.brain_interaction_id = bi.id
+                    JOIN brain_answer ba      ON ba.id = $2
+                    WHERE si.id = $1
+                """, interaction_id, selected_answer_id)
+
+            # A tapped button should always resolve to an answer with level data.
+            # If it doesn't, that's a content/data problem — we can't score
+            # reliably, so mark incomplete rather than invent a number.
+            if (brow is None
+                    or brow["answer_optimum_level"] is None
+                    or brow["interaction_optimum_level"] is None):
+                logger.warning(
+                    f"commit_answer: selected answer {selected_answer_id} on "
+                    f"{interaction_id} is missing optimum-level data — cannot "
+                    f"score, marking incomplete"
+                )
+                await answer_service.mark_as_final_answer(
+                    answer_id=answer_id, processing_method=method,
+                    cost_saved=0.002, db_pool=db_pool)
+                await interaction_service.mark_interaction_incomplete(
+                    interaction_id=interaction_id, final_answer_id=answer_id,
+                    db_pool=db_pool)
+                return await _commit_recap(interaction_id, db_pool)
+
+            gross = brow["prior_score"] if brow["prior_score"] is not None else 100
+            bm = await evaluate_interaction_bonus_malus(
+                session_interaction_id=interaction_id,
+                user_level=user_level,          # = cycle_level
+                db_pool=db_pool,
+            )
+            result = compute_interaction_score(
+                gross_score=gross,
+                answer_opt=brow["answer_optimum_level"],
+                interaction_opt=brow["interaction_optimum_level"],
+                cycle_level=user_level,
+                bonus_total=bm["bonus_total"],
+                malus_total=bm["malus_total"],
+                modulo=float(brow["modulo"] or 0),
+            )
+            score = result["interaction_score"]
+        else:
+            # No recorded selection (shouldn't happen) — keep the old behaviour
+            # rather than fail the commit.
+            score = int(round(similarity))
     elif mode == "singleButton":
         # Score was derived from the closest timing band at evaluate and stored
         # on the answer's similarity_score. Use it directly (mirrors multipleButtons)
