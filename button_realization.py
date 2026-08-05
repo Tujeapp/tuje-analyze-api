@@ -227,10 +227,13 @@ async def find_frame_swap_distractors(
 
     These are grammatically valid sentences (their templates are authored real
     answers elsewhere) but WRONG answers for this interaction. Returns dicts:
-      { id, transcription_fr, transcription_en, image_url, answer_type }
-    with answer_type = "wrong" and id = a sentinel ("FRAMESWAP") because the
-    borrowed template does NOT belong to this interaction (submit-scoring treats
-    a FRAMESWAP tap as a known wrong; that integration is handled by the caller).
+      { id, transcription_fr, transcription_en, image_url, answer_type,
+        answer_optimum_level }
+    with answer_type = "wrong" and id = the SOURCE answer's real id. The answer is
+    real, just not linked to THIS interaction — so submit-scoring detects "borrowed"
+    by the missing brain_interaction_answer join row, not by a sentinel id. Carrying
+    the real id also reaches answer_optimum_level and records which answer the
+    learner actually picked.
 
     Fails safe (returns []) if the target has no single entity token or no
     frame-mates realize.
@@ -245,7 +248,7 @@ async def find_frame_swap_distractors(
     rows = await conn.fetch(
         """
         SELECT DISTINCT ba.id, ba.transcription_fr, ba.transcription_en,
-               ba.image_url, ba.attribute_ids
+               ba.image_url, ba.attribute_ids, ba.answer_optimum_level
         FROM brain_answer ba
         WHERE ba.live = true
           AND ba.transcription_fr LIKE '%entity%'
@@ -272,11 +275,16 @@ async def find_frame_swap_distractors(
                 continue
             seen_text.add(text)
             distractors.append({
-                "id": "FRAMESWAP",                 # sentinel — not a real answer here
+                # The SOURCE answer's real id — it is a real brain_answer, just
+                # not linked to THIS interaction. Carrying it lets scoring reach
+                # answer_optimum_level and makes "which answer did they pick?"
+                # queryable. "Borrowed" is detected by the missing join row.
+                "id": r["id"],
                 "transcription_fr": text,
                 "transcription_en": r["transcription_en"],
                 "image_url": r["image_url"],
                 "answer_type": "wrong",
+                "answer_optimum_level": r["answer_optimum_level"],
             })
             if len(distractors) >= count:
                 return distractors
@@ -303,10 +311,11 @@ async def find_story_distractors(
     ids this interaction lists, and any interaction listing this one) — a variant's
     answer would be VALID here, so borrowing it would create a false-wrong.
 
-    Returns dicts {id:"BORROWED", transcription_fr, transcription_en, image_url,
-    answer_type:"wrong"}. The sentinel id is used because the borrowed answer has
-    no brain_interaction_answer row for THIS interaction; the submit path scores a
-    BORROWED tap as wrong directly. Fails safe ([]).
+    Returns dicts {id, transcription_fr, transcription_en, image_url,
+    answer_type:"wrong", answer_optimum_level}. `id` is the SOURCE answer's real id
+    — the answer is real, it just has no brain_interaction_answer row for THIS
+    interaction, which is exactly how the submit path detects "borrowed" and scores
+    it as wrong. Fails safe ([]).
     """
     # Current interaction: subtopic + its declared variants.
     cur = await conn.fetchrow(
@@ -360,7 +369,8 @@ async def find_story_distractors(
         # Borrow that interaction's VALID answers (valid there = wrong here).
         answers = await conn.fetch(
             """
-            SELECT ba.transcription_fr, ba.transcription_en, ba.image_url, ba.attribute_ids
+            SELECT ba.id, ba.transcription_fr, ba.transcription_en, ba.image_url,
+                   ba.attribute_ids, ba.answer_optimum_level
             FROM brain_interaction_answer bia
             JOIN brain_answer ba ON ba.id = bia.answer_id
             WHERE bia.interaction_id = $1
@@ -387,11 +397,15 @@ async def find_story_distractors(
                 continue
             seen_text.add(text)
             distractors.append({
-                "id": "BORROWED",
+                # The SOURCE answer's real id — valid on ITS interaction, not on
+                # this one. "Borrowed" is detected by the missing join row, and the
+                # real id reaches answer_optimum_level + records the learner's pick.
+                "id": a["id"],
                 "transcription_fr": text,
                 "transcription_en": a["transcription_en"],
                 "image_url": a["image_url"],
                 "answer_type": "wrong",
+                "answer_optimum_level": a["answer_optimum_level"],
             })
             if len(distractors) >= count:
                 return distractors

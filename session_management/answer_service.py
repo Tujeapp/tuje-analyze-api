@@ -109,25 +109,30 @@ class AnswerService:
         answer_id: str,
         similarity_score: float,
         matched_answer_id: Optional[str],
-        db_pool: asyncpg.Pool
+        db_pool: asyncpg.Pool,
+        verdict: Optional[str] = None
     ):
         """
         Update answer with matching service results
-        
+
         Args:
             answer_id: Answer to update
             similarity_score: Matching similarity (0-100)
             matched_answer_id: Matched brain_answer ID (if found)
             db_pool: Database connection pool
+            verdict: Evaluate-time verdict (perfect/good/wrong/not_understood),
+                persisted so the commit recap READS it instead of re-deriving it
+                (re-derivation drifted from what evaluate told the learner).
         """
         async with db_pool.acquire() as conn:
             await conn.execute("""
                 UPDATE session_answer
-                SET 
+                SET
                     similarity_score = $2,
-                    matched_answer_id = $3
+                    matched_answer_id = $3,
+                    verdict = $4
                 WHERE id = $1
-            """, answer_id, similarity_score, matched_answer_id)
+            """, answer_id, similarity_score, matched_answer_id, verdict)
         
         logger.info(f"✅ Answer updated with matching: {answer_id} (score: {similarity_score})")
     

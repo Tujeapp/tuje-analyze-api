@@ -369,12 +369,6 @@ async def _evaluate_voice(interaction_id, user_id, answer_id, original_transcrip
         threshold=MATCH_THRESHOLD,
     )
     similarity = matching_result.get("similarity_score") or 0
-    await answer_service.update_answer_with_matching(
-        answer_id=answer_id,
-        similarity_score=similarity,
-        matched_answer_id=matching_result.get("answer_id"),
-        db_pool=db_pool,
-    )
 
     # Match quality (similarity) tells us WHETHER we identified the answer;
     # answer_type tells us the QUALITY of that answer. Verdict = answer quality.
@@ -416,6 +410,16 @@ async def _evaluate_voice(interaction_id, user_id, answer_id, original_transcrip
     else:
         verdict = _answer_type_to_verdict(answer_type)
         tier = 1
+
+    # Persist matching + the verdict together, now that the verdict is settled
+    # (it depends on answer_type, which is only known after the fetch above).
+    await answer_service.update_answer_with_matching(
+        answer_id=answer_id,
+        similarity_score=similarity,
+        matched_answer_id=matching_result.get("answer_id"),
+        db_pool=db_pool,
+        verdict=verdict,
+    )
 
     # Tier 2c / Tier 3: intent identification.
     # Tier 2c — vocab-derived intent (adjuster already computed the intersection).
@@ -522,29 +526,6 @@ async def _evaluate_multiple_buttons(interaction_id, answer_id, selected_answer_
     if not selected_answer_id:
         raise ValueError("selected_answer_id is required for multipleButtons mode")
 
-    # Borrowed distractor (FRAMESWAP = frame-swap wrong-vocab; BORROWED = story
-    # wrong-conversation): a synthetic button whose id is not a real answer on this
-    # interaction. Score it as a standard wrong (30) — from the learner's view it's
-    # an ordinary wrong answer — without the answer lookup (which would miss and
-    # log a misleading "not linked" warning).
-    if selected_answer_id in ("FRAMESWAP", "BORROWED"):
-        score, verdict = 30.0, "wrong"
-        await answer_service.update_answer_with_matching(
-            answer_id=answer_id,
-            similarity_score=score,
-            matched_answer_id=None,   # wrong → no match; keeps selected_answer_id out of the FK column
-            db_pool=db_pool,
-        )
-        return {
-            "answer_id": answer_id,
-            "verdict": verdict,
-            "similarity_score": score,
-            "gpt_used": False,
-            "interpretation": None,
-            "mistakes": [],
-            "status": "evaluated",
-        }
-
     # CHUNK 2: correctness + score derive from answer_type (not linkage).
     # Live answer_type values: 'perfect' | 'good' | 'false good' | 'wrong'.
     # Also fetch the join-row id + mistake_ids so we can surface button mistakes
@@ -570,10 +551,28 @@ async def _evaluate_multiple_buttons(interaction_id, answer_id, selected_answer_
         "wrong":      (30.0,  "wrong"),
     }
 
+    # A borrowed distractor (frame-swap wrong-vocab, or a story wrong-conversation
+    # answer) is a REAL brain_answer that simply has no join row for THIS
+    # interaction. That missing row — not a sentinel id — is how we detect it.
+    is_borrowed = False
     if answer_type is None:
-        # Selected id isn't linked to this interaction at all — treat as wrong, score 0.
-        logger.warning(f"multipleButtons: answer {selected_answer_id} not linked to interaction {interaction_id}")
-        score, verdict = 0.0, "wrong"
+        async with db_pool.acquire() as conn:
+            source_exists = await conn.fetchval(
+                "SELECT answer_optimum_level FROM brain_answer WHERE id = $1",
+                selected_answer_id,
+            )
+            is_borrowed = source_exists is not None
+        if is_borrowed:
+            # Legitimate distractor: from the learner's view an ordinary wrong.
+            logger.info(
+                f"multipleButtons: {selected_answer_id} is a borrowed distractor "
+                f"(real answer, not linked to {interaction_id}) — scoring as wrong"
+            )
+            score, verdict = 30.0, "wrong"
+        else:
+            # Genuinely bogus id — not an answer at all.
+            logger.warning(f"multipleButtons: answer {selected_answer_id} not linked to interaction {interaction_id}")
+            score, verdict = 0.0, "wrong"
     else:
         score, verdict = type_map.get(answer_type, (0.0, "wrong"))
         if answer_type not in type_map:
@@ -582,8 +581,16 @@ async def _evaluate_multiple_buttons(interaction_id, answer_id, selected_answer_
     await answer_service.update_answer_with_matching(
         answer_id=answer_id,
         similarity_score=score,
-        matched_answer_id=selected_answer_id if verdict in ("perfect", "good") else None,
+        # Record WHICH answer the learner picked. Borrowed distractors carry a real,
+        # FK-valid id, so store it for analytics (mirrors voice, which sets
+        # matched_answer_id unconditionally from the matcher).
+        matched_answer_id=(
+            selected_answer_id
+            if (verdict in ("perfect", "good") or is_borrowed)
+            else None
+        ),
         db_pool=db_pool,
+        verdict=verdict,
     )
 
     mistakes = await _fetch_mistakes_by_ids(button_mistake_ids, db_pool)
@@ -624,6 +631,7 @@ async def _evaluate_single_button(interaction_id, answer_id, tapped_at_seconds, 
     if not targets:
         await answer_service.update_answer_with_matching(
             answer_id=answer_id, similarity_score=0.0, matched_answer_id=None, db_pool=db_pool,
+            verdict="not_understood",
         )
         return {"answer_id": answer_id, "verdict": "not_understood", "similarity_score": 0.0,
                 "gpt_used": False, "interpretation": None, "mistakes": [], "status": "evaluated"}
@@ -646,6 +654,7 @@ async def _evaluate_single_button(interaction_id, answer_id, tapped_at_seconds, 
         similarity_score=score,
         matched_answer_id=closest["id"] if verdict in ("perfect", "good") else None,
         db_pool=db_pool,
+        verdict=verdict,
     )
 
     return {"answer_id": answer_id,
@@ -781,7 +790,8 @@ async def _commit_recap(interaction_id: str, db_pool: asyncpg.Pool) -> Dict:
         row = await conn.fetchrow("""
             SELECT si.interaction_score, si.attempts_count,
                    sc.completed_interactions,
-                   sa.similarity_score, sa.matched_answer_id, sa.answer_mode_used
+                   sa.similarity_score, sa.matched_answer_id, sa.answer_mode_used,
+                   sa.verdict
             FROM session_interaction si
             JOIN session_cycle sc ON si.cycle_id = sc.id
             LEFT JOIN session_answer sa ON si.final_answer_id = sa.id
@@ -790,7 +800,14 @@ async def _commit_recap(interaction_id: str, db_pool: asyncpg.Pool) -> Dict:
 
     mode = row["answer_mode_used"]
     similarity = float(row["similarity_score"] or 0)
-    if mode == "voice":
+    # Prefer the verdict evaluate persisted — re-deriving it here drifted from
+    # what the learner was told (borrowed distractors recapped as "correct";
+    # voice recapped on similarity bands while evaluate used answer_type).
+    # The old derivations remain as a fallback for rows written before the column.
+    persisted = row["verdict"]
+    if persisted:
+        verdict = persisted
+    elif mode == "voice":
         verdict = _voice_verdict(similarity)
     else:
         verdict = "correct" if row["matched_answer_id"] is not None else "incorrect"
