@@ -605,6 +605,8 @@ class InteractionAnswerEntry(BaseEntry):
     allMatchedBonusMalusIds: Optional[List[str]] = None
     feedbackIds: Optional[List[str]] = None
     hintIds: Optional[List[str]] = None
+    answerTypicality: Optional[float] = 0.5
+    neverAButton: Optional[bool] = False
     archived: Optional[bool] = False
 
     @validator('interactionId', 'answerId', 'answerType')
@@ -612,6 +614,26 @@ class InteractionAnswerEntry(BaseEntry):
         if not v or len(v.strip()) == 0:
             raise ValueError('Required fields cannot be empty')
         return v.strip()
+
+    @validator('answerTypicality')
+    def default_answer_typicality(cls, v):
+        # The Postgres DEFAULT 0.5 only fires on INSERT. This sync UPSERTs and
+        # answer_typicality is in the columns list, so a payload carrying null
+        # would write NULL and override the default. The engine orders
+        # distractor and borrow selection on this value, so NULL is harmful.
+        if v is None:
+            return 0.5
+        return v
+
+    @validator('neverAButton')
+    def default_never_a_button(cls, v):
+        # Airtable checkboxes return null when never touched. The Postgres
+        # DEFAULT false only fires on INSERT, so on an UPSERT an explicit
+        # null would write NULL. This is an exclusion flag, and a NULL row
+        # is ambiguous to reads written as `never_a_button = false`.
+        if v is None:
+            return False
+        return v
 
     @validator('mistakeIds', 'allMatchedSameInteractionIds', 'allMatchedFollowInteractionIds',
                'allMatchedBonusMalusIds', 'feedbackIds', 'hintIds')
@@ -727,6 +749,7 @@ SYNC_CONFIGS = {
                    "mistake_ids", "all_matched_same_interaction_ids",
                    "all_matched_follow_interaction_ids", "all_matched_bonus_malus_ids",
                    "feedback_ids", "hint_ids",
+                   "answer_typicality", "never_a_button",
                    "airtable_record_id",
                    "created_at", "update_at", "live", "archived"],
         "timestamp_field": "LastContentSyncedAt",
@@ -934,7 +957,9 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "expectedAttributeIds": "expected_attribute_ids",
         "variantIds": "variant_ids",
         "followUpIds": "follow_up_ids",
-        "answerType": "answer_type"
+        "answerType": "answer_type",
+        "answerTypicality": "answer_typicality",
+        "neverAButton": "never_a_button"
     }
     
     for old_key, new_key in field_mappings.items():
