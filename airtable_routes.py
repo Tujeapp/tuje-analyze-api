@@ -497,6 +497,10 @@ class VocabEntry(BaseEntry):
     groupVocabIds: Optional[List[str]] = None
     matchedReferralVocabIds: Optional[List[str]] = None
     attributeIds: Optional[List[str]] = None
+    pairingAttributeIds: Optional[List[str]] = None
+    commonness: Optional[float] = 0.5
+    levelFrom: Optional[int] = None
+    levelOwn: Optional[int] = None
     archived: Optional[bool] = False
 
     @validator('entityTypeId')
@@ -508,8 +512,19 @@ class VocabEntry(BaseEntry):
                 return None
         return v
 
+    @validator('commonness')
+    def default_commonness(cls, v):
+        # The Postgres DEFAULT 0.5 only fires on INSERT. This sync UPSERTs and
+        # commonness is in the columns list, so a payload carrying null would
+        # write NULL and override the default. The realization engine ranks
+        # candidates on this value, so NULL is harmful.
+        if v is None:
+            return 0.5
+        return v
+
     @validator('mistakeIds', 'groupVocabIds', 'matchedReferralVocabIds',
-               'gender', 'plural', 'expectedIntentIds', 'expectedNotionIds', 'attributeIds')
+               'gender', 'plural', 'expectedIntentIds', 'expectedNotionIds', 'attributeIds',
+               'pairingAttributeIds')
     def validate_optional_arrays(cls, v):
         # Allow None or empty arrays
         if v is None:
@@ -674,6 +689,7 @@ SYNC_CONFIGS = {
                    "description", "examples", "gender", "plural",
                    "audio_normal_url", "audio_slow_url", "image_url",
                    "mistake_ids", "group_vocab_ids", "matched_referral_vocab_ids", "attribute_ids",
+                   "pairing_attribute_ids", "commonness", "level_from", "level_own",
                    "airtable_record_id",
                    "created_at", "update_at", "live", "archived"],
         "timestamp_field": "LastContentSyncedAt",
@@ -912,6 +928,8 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "attributeExpectedId": "attribute_expected_id",
         "attributeMatchedId": "attribute_matched_id",
         "attributeIds": "attribute_ids",
+        "pairingAttributeIds": "pairing_attribute_ids",
+        "levelOwn": "level_own",
         "interactionAttributeIds": "interaction_attribute_ids",
         "expectedAttributeIds": "expected_attribute_ids",
         "variantIds": "variant_ids",
@@ -974,7 +992,7 @@ async def sync_entity_to_database(entry_data: Dict, config: Dict) -> None:
             for col in columns:
                 value = entry_data.get(col)
                 # CHANGE 1: Add 'expected_intent_id' to this list (just add it to the existing list)
-                if col in ['intents', 'expected_entities_id', 'expected_vocab_id', 'expected_notion_id', 'interaction_notion', 'expected_intent_id', 'interaction_vocab_id', 'session_mood_ids', 'subtopic_ids', 'hint_ids', 'topics', 'user_goal_ids', 'matched_as_variant_ids', 'mistake_ids', 'vocab_ids', 'group_vocab_ids', 'matched_referral_vocab_ids', 'gender', 'plural', 'all_matched_same_interaction_ids', 'all_matched_follow_interaction_ids', 'all_matched_bonus_malus_ids', 'feedback_ids', 'attribute_ids', 'interaction_attribute_ids', 'expected_attribute_ids', 'variant_ids', 'follow_up_ids'] and isinstance(value, list):
+                if col in ['intents', 'expected_entities_id', 'expected_vocab_id', 'expected_notion_id', 'interaction_notion', 'expected_intent_id', 'interaction_vocab_id', 'session_mood_ids', 'subtopic_ids', 'hint_ids', 'topics', 'user_goal_ids', 'matched_as_variant_ids', 'mistake_ids', 'vocab_ids', 'group_vocab_ids', 'matched_referral_vocab_ids', 'gender', 'plural', 'all_matched_same_interaction_ids', 'all_matched_follow_interaction_ids', 'all_matched_bonus_malus_ids', 'feedback_ids', 'attribute_ids', 'interaction_attribute_ids', 'expected_attribute_ids', 'variant_ids', 'follow_up_ids', 'pairing_attribute_ids'] and isinstance(value, list):
                     values.append(value)  # PostgreSQL will handle the array
                 else:
                     values.append(value)
