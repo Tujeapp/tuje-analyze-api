@@ -95,6 +95,7 @@ class AnswerEntry(BaseEntry):
     mistakeIds: Optional[List[str]] = None
     vocabIds: Optional[List[str]] = None
     attributeIds: Optional[List[str]] = None
+    matchedNotionIds: Optional[List[str]] = None
     archived: Optional[bool] = False
 
     @validator('transcriptionFr', 'transcriptionEn', 'transcriptionAdjusted')
@@ -103,7 +104,7 @@ class AnswerEntry(BaseEntry):
             raise ValueError('Required text fields cannot be empty')
         return v.strip()
 
-    @validator('mistakeIds', 'vocabIds', 'attributeIds')
+    @validator('mistakeIds', 'vocabIds', 'attributeIds', 'matchedNotionIds')
     def validate_optional_arrays(cls, v):
         # Allow None or empty arrays
         if v is None:
@@ -444,14 +445,25 @@ class InterestEntry(BaseEntry):
 class NotionEntry(BaseEntry):
     nameFr: str
     nameEn: str
-    description: str
     rank: int
     score: float
     levelFrom: int
     levelOwned: int
     weightiness: float
-    
-    @validator('nameFr', 'nameEn', 'description')
+
+    # Lenient (optional, never raise on None)
+    # description is NOT gated by the Airtable ContentStatus formula, unlike the
+    # five numerics. Keeping Pydantic strict here let a record read Done in
+    # Airtable and then 422 on sync — the two layers disagreeing. The numerics
+    # stay strict because the formula gates them too, so those layers agree.
+    description: Optional[str] = None
+    type: Optional[str] = None
+    mistakeIds: Optional[List[str]] = None
+    requiredNotionIds: Optional[List[str]] = None
+    trickyVocabIds: Optional[List[str]] = None
+    archived: Optional[bool] = False
+
+    @validator('nameFr', 'nameEn')
     def validate_text_fields(cls, v):
         if not v or len(v.strip()) == 0:
             raise ValueError('Text fields cannot be empty')
@@ -476,6 +488,16 @@ class NotionEntry(BaseEntry):
         if v < 0.0 or v > 1.0:
             raise ValueError('Weightiness must be between 0.0 and 1.0')
         return round(v, 2)
+
+    @validator('mistakeIds', 'requiredNotionIds', 'trickyVocabIds')
+    def validate_optional_arrays(cls, v):
+        # Allow None or empty arrays
+        if v is None:
+            return []
+        if not isinstance(v, list):
+            return []
+        # Filter out None/empty values
+        return [str(item).strip() for item in v if item and str(item).strip()]
 
 class VocabEntry(BaseEntry):
     # All optional/lenient — Airtable ContentStatus formulas + IsTest enforce strictness
@@ -680,6 +702,7 @@ SYNC_CONFIGS = {
         "columns": ["id", "transcription_fr", "transcription_en", "transcription_adjusted",
                    "answer_optimum_level", "image_url", "timer_seconds", "is_button",
                    "audio_normal_url", "audio_slow_url", "mistake_ids", "vocab_ids", "attribute_ids",
+                   "matched_notion_ids",
                    "airtable_record_id", "created_at", "update_at", "live", "archived"],
         "timestamp_field": "LastContentSyncedAt",
         "use_now_timestamp": True
@@ -726,10 +749,13 @@ SYNC_CONFIGS = {
     "notion": {
         "table_name": "brain_notion",
         "airtable_table": "Notion",
-        "columns": ["id", "name_fr", "name_en", "description", "rank", "live", 
+        "columns": ["id", "name_fr", "name_en", "description", "rank", "live", "archived",
                    "score", "level_from", "level_owned", "weightiness",
+                   "type", "mistake_ids", "required_notion_ids", "tricky_vocab_ids",
                    "airtable_record_id", 
-                   "created_at", "update_at"]
+                   "created_at", "update_at"],
+        "timestamp_field": "LastContentSyncedAt",
+        "use_now_timestamp": True
     },
     "subtopic": {
         "table_name": "brain_subtopic",
@@ -945,6 +971,9 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "audioNormalUrl": "audio_normal_url",
         "audioSlowUrl": "audio_slow_url",
         "mistakeIds": "mistake_ids",
+        "requiredNotionIds": "required_notion_ids",
+        "trickyVocabIds": "tricky_vocab_ids",
+        "matchedNotionIds": "matched_notion_ids",
         "vocabIds": "vocab_ids",
         "mistakeId": "mistake_id",
         "vocabMatchedId": "vocab_matched_id",
@@ -1017,7 +1046,7 @@ async def sync_entity_to_database(entry_data: Dict, config: Dict) -> None:
             for col in columns:
                 value = entry_data.get(col)
                 # CHANGE 1: Add 'expected_intent_id' to this list (just add it to the existing list)
-                if col in ['intents', 'expected_entities_id', 'expected_vocab_id', 'expected_notion_id', 'interaction_notion', 'expected_intent_id', 'interaction_vocab_id', 'session_mood_ids', 'subtopic_ids', 'hint_ids', 'topics', 'user_goal_ids', 'matched_as_variant_ids', 'mistake_ids', 'vocab_ids', 'group_vocab_ids', 'matched_referral_vocab_ids', 'gender', 'plural', 'all_matched_same_interaction_ids', 'all_matched_follow_interaction_ids', 'all_matched_bonus_malus_ids', 'feedback_ids', 'attribute_ids', 'interaction_attribute_ids', 'expected_attribute_ids', 'variant_ids', 'follow_up_ids', 'pairing_attribute_ids'] and isinstance(value, list):
+                if col in ['intents', 'expected_entities_id', 'expected_vocab_id', 'expected_notion_id', 'interaction_notion', 'expected_intent_id', 'interaction_vocab_id', 'session_mood_ids', 'subtopic_ids', 'hint_ids', 'topics', 'user_goal_ids', 'matched_as_variant_ids', 'mistake_ids', 'vocab_ids', 'group_vocab_ids', 'matched_referral_vocab_ids', 'gender', 'plural', 'all_matched_same_interaction_ids', 'all_matched_follow_interaction_ids', 'all_matched_bonus_malus_ids', 'feedback_ids', 'attribute_ids', 'interaction_attribute_ids', 'expected_attribute_ids', 'variant_ids', 'follow_up_ids', 'pairing_attribute_ids', 'required_notion_ids', 'tricky_vocab_ids', 'matched_notion_ids'] and isinstance(value, list):
                     values.append(value)  # PostgreSQL will handle the array
                 else:
                     values.append(value)
