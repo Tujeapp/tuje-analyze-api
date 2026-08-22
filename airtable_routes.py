@@ -172,13 +172,23 @@ class BonusMalusEntry(BaseEntry):
     def validate_rule_code(cls, v):
         if not v or len(v.strip()) == 0:
             raise ValueError('Rule code cannot be empty')
-        
-        # Only allow alphanumeric and underscores
+
+        # CASE-PRESERVING. This used to `.lower()` the value, which silently
+        # broke every rule synced from Airtable: bonus_malus_engine._HANDLERS is
+        # keyed on uppercase ("ATTEMPT_COUNT") and looked up with a plain
+        # exact-match `.get()`, so a rule authored as ATTEMPT_COUNT was stored
+        # as attempt_count, matched nothing, and was skipped.
+        #
+        # Not uppercased either: session_management/bonus_malus_service.py
+        # matches lowercase codes ("streak_bonus", "hint_malus"), so the two
+        # consumers disagree and there is no canonical case to impose.
+        # rule_code has no CHECK constraint to anchor one. Preserve what the
+        # author typed and let the consumers match it.
         import re
-        if not re.match(r'^[a-z0-9_]+$', v.strip().lower()):
-            raise ValueError('Rule code must be lowercase alphanumeric with underscores only')
-        
-        return v.strip().lower()
+        if not re.match(r'^[A-Za-z0-9_]+$', v.strip()):
+            raise ValueError('Rule code must be alphanumeric with underscores only')
+
+        return v.strip()
 
     @validator('priority')
     def default_priority(cls, v):
