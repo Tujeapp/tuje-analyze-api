@@ -128,9 +128,17 @@ class BonusMalusEntry(BaseEntry):
     bonusMalusType: str
     ruleCode: str
     value: int
-    priority: int
+
+    # Lenient (optional, never raise on None)
+    # priority was `priority: int`. Relaxed because the column carries a
+    # sensible DEFAULT and the Airtable ContentStatus formula does not gate on
+    # it — keeping Pydantic strict recreated the layer disagreement fixed on
+    # Notion, where a record could read Done in Airtable and then 422 on sync.
+    priority: Optional[int] = 100
     conditions: Optional[str] = None
-    
+    scope: Optional[str] = "interaction"
+    archived: Optional[bool] = False
+
     @validator('nameFr', 'nameEn', 'description')
     def validate_text_fields(cls, v):
         if not v or len(v.strip()) == 0:
@@ -171,6 +179,30 @@ class BonusMalusEntry(BaseEntry):
             raise ValueError('Rule code must be lowercase alphanumeric with underscores only')
         
         return v.strip().lower()
+
+    @validator('priority')
+    def default_priority(cls, v):
+        # The Postgres DEFAULT 100 only fires on INSERT. This sync UPSERTs and
+        # priority is in the columns list, so a payload carrying null would
+        # write NULL and override the default.
+        if v is None:
+            return 100
+        return v
+
+    @validator('scope')
+    def default_scope(cls, v):
+        # The Postgres DEFAULT 'interaction' only fires on INSERT, and the
+        # scope CHECK does NOT reject NULL — `NULL = ANY(...)` is NULL, and a
+        # CHECK passes unless it evaluates to FALSE. Verified against the live
+        # DB: a null scope inserts silently. So this validator is the only
+        # thing standing between a blank Airtable cell and a NULL scope.
+        #
+        # No membership check here: the CHECK constraint and the Airtable
+        # single-select are the backstops. Hardcoding the allowed values would
+        # mean a code change every time an option is added.
+        if v is None:
+            return "interaction"
+        return v
 
 class HintEntry(BaseEntry):
     name: str
@@ -901,9 +933,12 @@ SYNC_CONFIGS = {
             "value",
             "priority",
             "conditions",
+            "scope",
             "airtable_record_id", 
-            "created_at", "update_at", "live"
-        ]
+            "created_at", "update_at", "live", "archived"
+        ],
+        "timestamp_field": "LastContentSyncedAt",
+        "use_now_timestamp": True
     }
 }
 
