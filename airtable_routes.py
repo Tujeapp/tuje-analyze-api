@@ -87,6 +87,11 @@ class AnswerEntry(BaseEntry):
     answerOptimumLevel: int
 
     # Lenient (optional, never raise on None)
+    # transcriptionPhonetic sits HERE, not beside transcriptionAdjusted above,
+    # despite the shared prefix: it is optional, and grouping it with the strict
+    # transcriptions would imply a strictness it does not have. It is
+    # deliberately absent from validate_required_text_fields.
+    transcriptionPhonetic: Optional[str] = None
     timerSeconds: Optional[float] = None
     isButton: Optional[bool] = None
     audioNormalUrl: Optional[str] = None
@@ -285,6 +290,7 @@ from typing import List, Optional
 class InteractionEntry(BaseEntry):
     transcriptionFr: str
     transcriptionEn: str
+    transcriptionPhonetic: Optional[str] = None
     intents: Optional[List[str]] = None
     subtopicId: Optional[str] = None
     expectedEntitiesIds: Optional[List[str]] = None
@@ -411,6 +417,7 @@ class AttributeMistakeEntry(BaseEntry):
     attributeMatchedId: str
 
     # Lenient (system-wide)
+    hintIds: Optional[List[str]] = None
     archived: Optional[bool] = False
 
     @validator('mistakeId', 'vocabMatchedId', 'attributeExpectedId', 'attributeMatchedId')
@@ -418,6 +425,16 @@ class AttributeMistakeEntry(BaseEntry):
         if not v or len(v.strip()) == 0:
             raise ValueError('Required fields cannot be empty')
         return v.strip()
+
+    @validator('hintIds')
+    def validate_optional_arrays(cls, v):
+        # Allow None or empty arrays
+        if v is None:
+            return []
+        if not isinstance(v, list):
+            return []
+        # Filter out None/empty values
+        return [str(item).strip() for item in v if item and str(item).strip()]
 
 class InterestEntry(BaseEntry):
     name: str
@@ -700,6 +717,7 @@ SYNC_CONFIGS = {
         "table_name": "brain_answer",
         "airtable_table": "Answer",
         "columns": ["id", "transcription_fr", "transcription_en", "transcription_adjusted",
+                   "transcription_phonetic",
                    "answer_optimum_level", "image_url", "timer_seconds", "is_button",
                    "audio_normal_url", "audio_slow_url", "mistake_ids", "vocab_ids", "attribute_ids",
                    "matched_notion_ids",
@@ -711,7 +729,7 @@ SYNC_CONFIGS = {
         "table_name": "brain_interaction",
         "airtable_table": "Interaction",
         "columns": [
-            "id", "transcription_fr", "transcription_en", "subtopic_id",
+            "id", "transcription_fr", "transcription_en", "transcription_phonetic", "subtopic_id",
             "intents", "expected_entities_id", "expected_vocab_id",
             "expected_notion_id", "interaction_notion", "interaction_vocab_id",
             "hint_ids", "interaction_attribute_ids", "expected_attribute_ids",
@@ -824,6 +842,7 @@ SYNC_CONFIGS = {
         "airtable_table": "Attribute-Mistake",
         "columns": ["id", "mistake_id", "vocab_matched_id",
                     "attribute_expected_id", "attribute_matched_id",
+                    "hint_ids",
                     "airtable_record_id",
                     "created_at", "update_at", "live", "archived"],
         "timestamp_field": "LastContentSyncedAt",
@@ -915,6 +934,7 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "transcriptionFr": "transcription_fr",
         "transcriptionEn": "transcription_en", 
         "transcriptionAdjusted": "transcription_adjusted",
+        "transcriptionPhonetic": "transcription_phonetic",
         "answerOptimumLevel": "answer_optimum_level",
         "entityTypeId": "entity_type_id",
         "entityPriority": "entity_priority",
