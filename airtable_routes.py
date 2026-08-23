@@ -215,37 +215,55 @@ class BonusMalusEntry(BaseEntry):
         return v
 
 class HintEntry(BaseEntry):
+    """Hint — REPLACED schema.
+
+    The old proficiency-range concept (value / description / levelFrom /
+    levelTo) was dropped and an unrelated 20-column schema built in its place.
+    Those four fields and their validators are gone with the columns: the
+    previous config already failed at the INSERT with UndefinedColumnError on
+    "value", so there was no working sync to preserve.
+    """
+
+    # Strict (required, non-empty) — these are what the Airtable ContentStatus
+    # formula gates on, so Pydantic and Airtable agree about what "Done" means.
     name: str
-    value: int
-    description: str
-    levelFrom: int
-    levelTo: int
-    
-    @validator('name', 'description')
-    def validate_text_fields(cls, v):
+    button: str
+    hintLevel: int
+    mediaKind: str
+
+    # Lenient (optional, never raise on None)
+    usage: Optional[str] = None
+    type: Optional[str] = None
+    textEn: Optional[str] = None
+    textFr: Optional[str] = None
+    textPhonetic: Optional[str] = None
+    # media_url is wired but not yet authored — the Cloudinary pipeline for
+    # hints does not exist. The column stays empty until it does.
+    mediaUrl: Optional[str] = None
+    appliesToTier: Optional[int] = None
+    bonusMalusIds: Optional[List[str]] = None
+    mistakeIds: Optional[List[str]] = None
+    feedbackIds: Optional[List[str]] = None
+    archived: Optional[bool] = False
+
+    # NO membership checks on button / type / usage / mediaKind. The backend
+    # never hardcodes those values — it filters structurally on button +
+    # hint_level + live. Airtable single-selects constrain them upstream.
+    @validator('name', 'button', 'mediaKind')
+    def validate_required_fields(cls, v):
         if not v or len(v.strip()) == 0:
-            raise ValueError('Text fields cannot be empty')
+            raise ValueError('Required fields cannot be empty')
         return v.strip()
-    
-    @validator('value')
-    def validate_value(cls, v):
+
+    @validator('bonusMalusIds', 'mistakeIds', 'feedbackIds')
+    def validate_optional_arrays(cls, v):
+        # Allow None or empty arrays
         if v is None:
-            raise ValueError('Value cannot be None')
-        if v < 0:
-            raise ValueError('Value must be non-negative')
-        return v
-    
-    @validator('levelFrom', 'levelTo')
-    def validate_level_fields(cls, v):
-        if v < 0 or v > 500:
-            raise ValueError('Level must be between 0 and 500')
-        return v
-    
-    @validator('levelTo')
-    def validate_level_range(cls, v, values):
-        if 'levelFrom' in values and v < values['levelFrom']:
-            raise ValueError('levelTo must be greater than or equal to levelFrom')
-        return v
+            return []
+        if not isinstance(v, list):
+            return []
+        # Filter out None/empty values
+        return [str(item).strip() for item in v if item and str(item).strip()]
 
 from typing import List
 
@@ -893,9 +911,14 @@ SYNC_CONFIGS = {
     "hint": {
         "table_name": "brain_hint",
         "airtable_table": "Hint",
-        "columns": ["id", "name", "value", "description", "level_from", "level_to",
+        "columns": ["id", "name", "button", "hint_level", "usage", "type",
+                   "media_kind", "text_en", "text_fr", "text_phonetic",
+                   "media_url", "applies_to_tier",
+                   "bonus_malus_ids", "mistake_ids", "feedback_ids",
                    "airtable_record_id", 
-                   "created_at", "update_at", "live"]
+                   "created_at", "update_at", "live", "archived"],
+        "timestamp_field": "LastContentSyncedAt",
+        "use_now_timestamp": True
     },
     "interaction_type": {
         "table_name": "brain_interaction_type",
@@ -1012,6 +1035,14 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "allMatchedFollowInteractionIds": "all_matched_follow_interaction_ids",
         "allMatchedBonusMalusIds": "all_matched_bonus_malus_ids",
         "feedbackIds": "feedback_ids",
+        "hintLevel": "hint_level",
+        "mediaKind": "media_kind",
+        "textEn": "text_en",
+        "textFr": "text_fr",
+        "textPhonetic": "text_phonetic",
+        "mediaUrl": "media_url",
+        "appliesToTier": "applies_to_tier",
+        "bonusMalusIds": "bonus_malus_ids",
         "bonusMalusType": "bonus_malus_type",
         "ruleCode": "rule_code",
         "userLevel": "user_level",
@@ -1111,7 +1142,7 @@ async def sync_entity_to_database(entry_data: Dict, config: Dict) -> None:
             for col in columns:
                 value = entry_data.get(col)
                 # CHANGE 1: Add 'expected_intent_id' to this list (just add it to the existing list)
-                if col in ['intents', 'expected_entities_id', 'expected_vocab_id', 'expected_notion_id', 'interaction_notion', 'expected_intent_id', 'interaction_vocab_id', 'session_mood_ids', 'subtopic_ids', 'hint_ids', 'topics', 'user_goal_ids', 'matched_as_variant_ids', 'mistake_ids', 'vocab_ids', 'group_vocab_ids', 'matched_referral_vocab_ids', 'gender', 'plural', 'all_matched_same_interaction_ids', 'all_matched_follow_interaction_ids', 'all_matched_bonus_malus_ids', 'feedback_ids', 'attribute_ids', 'interaction_attribute_ids', 'expected_attribute_ids', 'variant_ids', 'follow_up_ids', 'pairing_attribute_ids', 'required_notion_ids', 'tricky_vocab_ids', 'matched_notion_ids'] and isinstance(value, list):
+                if col in ['intents', 'expected_entities_id', 'expected_vocab_id', 'expected_notion_id', 'interaction_notion', 'expected_intent_id', 'interaction_vocab_id', 'session_mood_ids', 'subtopic_ids', 'hint_ids', 'topics', 'user_goal_ids', 'matched_as_variant_ids', 'mistake_ids', 'vocab_ids', 'group_vocab_ids', 'matched_referral_vocab_ids', 'gender', 'plural', 'all_matched_same_interaction_ids', 'all_matched_follow_interaction_ids', 'all_matched_bonus_malus_ids', 'feedback_ids', 'attribute_ids', 'interaction_attribute_ids', 'expected_attribute_ids', 'variant_ids', 'follow_up_ids', 'pairing_attribute_ids', 'required_notion_ids', 'tricky_vocab_ids', 'matched_notion_ids', 'bonus_malus_ids'] and isinstance(value, list):
                     values.append(value)  # PostgreSQL will handle the array
                 else:
                     values.append(value)
