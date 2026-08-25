@@ -755,10 +755,21 @@ class InitialInteractionEntry(BaseEntry):
     interactionId: str
 
 class EntityEntry(BaseEntry):
+    # Strict — the Airtable ContentStatus formula gates Name and Priority, so
+    # these layers agree about what "Done" means.
     name: str
-    description: str
     priority: int  # numeric type in your schema
-    
+
+    # Lenient (optional, never raise on None)
+    # description is NOT gated by ContentStatus, and the column is nullable.
+    # Keeping Pydantic strict left a record able to read Done in Airtable and
+    # then 422 on sync — the disagreement corrected on Notion. Narrower here
+    # than there (description carries no validator, so an empty string already
+    # passed; only absent-or-null raised), which makes it less likely to fire,
+    # not less wrong.
+    description: Optional[str] = None
+    archived: Optional[bool] = False
+
     @validator('name')
     def validate_name(cls, v):
         if not v or len(v.strip()) == 0:
@@ -874,7 +885,9 @@ SYNC_CONFIGS = {
         "airtable_table": "Entity",
         "columns": ["id", "name", "description", "priority",
                    "created_at", "update_at", "airtable_record_id",
-                   "live"]
+                   "live", "archived"],
+        "timestamp_field": "LastContentSyncedAt",
+        "use_now_timestamp": True
     },
     "mistake": {
         "table_name": "brain_mistake",
