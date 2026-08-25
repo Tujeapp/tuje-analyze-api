@@ -634,8 +634,24 @@ class VocabEntry(BaseEntry):
         return [str(item).strip() for item in v if item and str(item).strip()]
 
 class IntentEntry(BaseEntry):
+    # Strict — the Airtable ContentStatus formula gates Name only.
+    #
+    # NOTE: there is deliberately no validate_name here, so name='' passes
+    # while ContentStatus treats Name as gated. That is the same layer
+    # disagreement in the opposite direction — Pydantic looser than the
+    # formula rather than stricter. Left alone on purpose: fixing it would be
+    # a tightening, not one of the relaxations this pass is making, and all
+    # rows are currently clean.
     name: str
-    description: str
+
+    # Lenient (optional, never raise on None)
+    # description is NOT gated by ContentStatus, and the column is nullable.
+    # Keeping Pydantic strict left a record able to read Done in Airtable and
+    # then 422 on sync — the disagreement corrected on Notion, BonusMalus and
+    # Entity. With no validator on the field, an empty string already passed;
+    # only absent-or-null raised.
+    description: Optional[str] = None
+    archived: Optional[bool] = False
 
 class UserGoalEntry(BaseEntry):
     """User goal — one of 6 motivations for learning French.
@@ -833,7 +849,9 @@ SYNC_CONFIGS = {
         "table_name": "brain_intent",
         "airtable_table": "Intent",
         "columns": ["id", "name", "description", "airtable_record_id",
-                   "created_at", "update_at", "live"]
+                   "created_at", "update_at", "live", "archived"],
+        "timestamp_field": "LastContentSyncedAt",
+        "use_now_timestamp": True
     },
     "notion": {
         "table_name": "brain_notion",
