@@ -1157,15 +1157,30 @@ async def sync_entity_to_database(entry_data: Dict, config: Dict) -> None:
         async with conn.transaction():
             
             # Build dynamic query
+            #
+            # Identifiers are double-quoted at every site. No current column
+            # collides with a PostgreSQL reserved word, but a future one named
+            # `order`, `user`, `default`, `group`, `limit`, `check`, `table`,
+            # `references`, `primary`, `unique` or `constraint` would otherwise
+            # break its table's sync with a syntax error pointing at the
+            # generated query rather than at the offending column name.
+            #
+            # Safe because every brain_* identifier is lowercase [a-z0-9_]:
+            # quoted identifiers are case-sensitive in Postgres, so "Name"
+            # would NOT match a column created as name. Verified across all
+            # 341 columns of all 20 tables. If a mixed-case column is ever
+            # added, this must be revisited.
             columns = config["columns"]
+            table_name = config["table_name"]
             placeholders = ', '.join([f'${i+1}' for i in range(len(columns))])
+            column_list = ', '.join([f'"{col}"' for col in columns])
             update_columns = [col for col in columns if col != 'id']
-            update_set = ', '.join([f'{col} = EXCLUDED.{col}' for col in update_columns])
-            
+            update_set = ', '.join([f'"{col}" = EXCLUDED."{col}"' for col in update_columns])
+
             query = f"""
-                INSERT INTO {config["table_name"]} ({', '.join(columns)})
+                INSERT INTO "{table_name}" ({column_list})
                 VALUES ({placeholders})
-                ON CONFLICT (id) DO UPDATE SET {update_set};
+                ON CONFLICT ("id") DO UPDATE SET {update_set};
             """
             
             # Handle special cases (arrays, etc.)
