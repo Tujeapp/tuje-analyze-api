@@ -4,7 +4,7 @@ Bubble.io-optimized endpoints for TuJe French learning API
 ✅ Fixed GET interaction endpoint to match actual PostgreSQL schema
 ✅ All other endpoints remain unchanged
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, validator
 from typing import Optional, List, Dict, Any
 import logging
@@ -22,6 +22,9 @@ from gpt_fallback_router import analyze_original_transcript_intent
 from adjustement_types import TranscriptionAdjustRequest
 from matching_answer_types import MatchAnswerRequest
 from gpt_fallback_types import GPTFallbackRequest
+
+from user_routes import get_current_user_optional
+from media_urls import media_for_interaction
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -452,7 +455,10 @@ class BubbleInteractionResponse(BaseModel):
 
 
 @router.get("/get-interaction/{interaction_id}", response_model=BubbleInteractionResponse)
-async def bubble_get_interaction(interaction_id: str):
+async def bubble_get_interaction(
+    interaction_id: str,
+    current_user: Optional[dict] = Depends(get_current_user_optional),
+):
     """
     🎥 ENDPOINT 4: GET INTERACTION DATA - ✅ FIXED TO MATCH YOUR DATABASE
     
@@ -557,7 +563,23 @@ async def bubble_get_interaction(interaction_id: str):
                 logger.info(f"   Has video: {'Yes' if data.get('video_url') else 'No'}")
                 
                 processing_time = round((time.time() - start_time) * 1000, 2)
-                
+
+                # Media URLs. Called unconditionally: while USE_R2_MEDIA is off
+                # this returns the stored Cloudinary values unchanged, so the
+                # flag is the only thing that changes behaviour.
+                #
+                # `plan` picks the rendition (720 vs 1080). current_user is None
+                # for unauthenticated callers (Bubble, tooling), which the
+                # resolver treats as the default tier.
+                plan = (current_user or {}).get("subscription_tier")
+                video_url, video_poster_url = media_for_interaction(
+                    interaction_id=data["id"],
+                    subtopic_id=data.get("subtopic_id"),
+                    plan=plan,
+                    stored_video_url=data.get("video_url"),
+                    stored_poster_url=data.get("video_poster_url"),
+                )
+
                 # Return perfectly matched response
                 return BubbleInteractionResponse(
                     success=True,
@@ -569,9 +591,9 @@ async def bubble_get_interaction(interaction_id: str):
                     subtopic_id=data.get('subtopic_id'),
                     subtopic_name=data.get('subtopic_name'),
                     
-                    # Video URLs (directly from database)
-                    video_url=data.get('video_url'),
-                    video_poster_url=data.get('video_poster_url'),
+                    # Video URLs (derived above — stored values while the flag is off)
+                    video_url=video_url,
+                    video_poster_url=video_poster_url,
 
                     speak=row["speak"],
                     

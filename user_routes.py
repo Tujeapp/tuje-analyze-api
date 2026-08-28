@@ -507,6 +507,27 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     return dict(user)
 
 
+# HTTPBearer(auto_error=False) returns None instead of raising 403 when the
+# Authorization header is absent — the only difference from `security` above.
+optional_security = HTTPBearer(auto_error=False)
+
+
+async def get_current_user_optional(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(optional_security)
+) -> Optional[dict]:
+    """Resolve the user if a token is present; return None if not.
+
+    Used by public endpoints that tailor their response to the user
+    (media tier) but must remain reachable unauthenticated.
+    """
+    if not credentials:
+        return None
+    try:
+        return await get_current_user(credentials)
+    except Exception:
+        return None
+
+
 # ========================================
 # Authentication Endpoints
 # ========================================

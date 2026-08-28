@@ -1,11 +1,12 @@
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import Response
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
 import asyncpg
 import os
 
-from user_routes import get_current_user
+from user_routes import get_current_user, get_current_user_optional
+from media_urls import media_for_interaction
 
 router = APIRouter()
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -45,7 +46,10 @@ async def get_subtopics():
         await pool.close()
 
 @router.get("/subtopics/{subtopic_id}/interactions")
-async def get_interactions_by_subtopic(subtopic_id: str):
+async def get_interactions_by_subtopic(
+    subtopic_id: str,
+    current_user: Optional[dict] = Depends(get_current_user_optional),
+):
     pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=2)
     try:
         async with pool.acquire() as conn:
@@ -56,9 +60,34 @@ async def get_interactions_by_subtopic(subtopic_id: str):
                 AND subtopic_id = $1
                 ORDER BY id ASC
             """, subtopic_id)
+
+            # Media URLs, per row. Called unconditionally: while USE_R2_MEDIA is
+            # off this returns the stored value unchanged.
+            #
+            # The SELECT does not include subtopic_id — it is the path
+            # parameter, and every row is filtered on it, so it is the same
+            # value for all rows.
+            #
+            # This is a dev/QA surface (the SessionPicker), so signing for the
+            # caller's own tier is correct: it shows what a user of that tier
+            # actually sees. No poster is returned by this endpoint.
+            plan = (current_user or {}).get("subscription_tier")
+            interactions = []
+            for row in rows:
+                item = dict(row)
+                video_url, _ = media_for_interaction(
+                    interaction_id=row["id"],
+                    subtopic_id=subtopic_id,
+                    plan=plan,
+                    stored_video_url=row["video_url"],
+                    stored_poster_url=None,
+                )
+                item["video_url"] = video_url
+                interactions.append(item)
+
             return {
                 "success": True,
-                "interactions": [dict(row) for row in rows]
+                "interactions": interactions
             }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
