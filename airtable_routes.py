@@ -670,7 +670,12 @@ class SubtopicEntry(BaseEntry):
     iconUrl: Optional[str] = None
     levelFrom: Optional[int] = None
     levelTo: Optional[int] = None
-    topics: Optional[List[str]] = None
+    # Topic is a single-select in Airtable; each option holds both languages
+    # as "English | Français". The Airtable script splits on " | " and sends
+    # the halves separately — stored as sent (whitespace-trimmed), no parsing here. Replaces the
+    # old `topics` multi-select array (column dropped).
+    topicEn: Optional[str] = None
+    topicFr: Optional[str] = None
     userGoalIds: Optional[List[str]] = None
     matchedAsVariantIds: Optional[List[str]] = None
     archived: Optional[bool] = False
@@ -688,6 +693,17 @@ class SubtopicEntry(BaseEntry):
         v = v.strip()
         return v if v else None
 
+    # The script splits on " | " and trims, so halves should arrive clean. But
+    # an option authored as "English |Français" would leave a trailing space —
+    # invisible in Airtable, visible in the app. Same shape as
+    # validate_optional_text_fields above: strip, empty → None.
+    @validator('topicEn', 'topicFr')
+    def validate_optional_topic_fields(cls, v):
+        if v is None:
+            return None
+        v = v.strip()
+        return v if v else None
+
     @validator('boredom')
     def validate_boredom(cls, v):
         if v is None:
@@ -696,7 +712,7 @@ class SubtopicEntry(BaseEntry):
             raise ValueError('Boredom must be between 0.0 and 1.0')
         return round(v, 2)
 
-    @validator('topics', 'userGoalIds', 'matchedAsVariantIds')
+    @validator('userGoalIds', 'matchedAsVariantIds')
     def validate_optional_arrays(cls, v):
         # Allow None or empty arrays
         if v is None:
@@ -869,7 +885,7 @@ SYNC_CONFIGS = {
         "airtable_table": "Subtopic",
         "columns": ["id", "name_fr", "name_en", "description_fr", "description_en", "boredom",
                    "video_cover_url", "icon_url",
-                   "level_from", "level_to", "topics", "user_goal_ids", "matched_as_variant_ids",
+                   "level_from", "level_to", "topic_en", "topic_fr", "user_goal_ids", "matched_as_variant_ids",
                    "airtable_record_id",
                    "created_at", "update_at", "live", "archived"],
         "timestamp_field": "LastContentSyncedAt",
@@ -1061,6 +1077,8 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "sessionMoodIds": "session_mood_ids",
         "subtopicsIds": "subtopic_ids",
         "subtopicId": "subtopic_id",
+        "topicEn": "topic_en",
+        "topicFr": "topic_fr",
         "levelAnswerRate": "level_answer_rate",
         "allMatchedSameInteractionIds": "all_matched_same_interaction_ids",
         "allMatchedFollowInteractionIds": "all_matched_follow_interaction_ids",
@@ -1188,7 +1206,7 @@ async def sync_entity_to_database(entry_data: Dict, config: Dict) -> None:
             for col in columns:
                 value = entry_data.get(col)
                 # CHANGE 1: Add 'expected_intent_id' to this list (just add it to the existing list)
-                if col in ['intents', 'expected_entities_id', 'expected_vocab_id', 'expected_notion_id', 'interaction_notion', 'expected_intent_id', 'interaction_vocab_id', 'session_mood_ids', 'subtopic_ids', 'hint_ids', 'topics', 'user_goal_ids', 'matched_as_variant_ids', 'mistake_ids', 'vocab_ids', 'group_vocab_ids', 'matched_referral_vocab_ids', 'gender', 'plural', 'all_matched_same_interaction_ids', 'all_matched_follow_interaction_ids', 'all_matched_bonus_malus_ids', 'feedback_ids', 'attribute_ids', 'interaction_attribute_ids', 'expected_attribute_ids', 'variant_ids', 'follow_up_ids', 'pairing_attribute_ids', 'required_notion_ids', 'tricky_vocab_ids', 'matched_notion_ids', 'bonus_malus_ids'] and isinstance(value, list):
+                if col in ['intents', 'expected_entities_id', 'expected_vocab_id', 'expected_notion_id', 'interaction_notion', 'expected_intent_id', 'interaction_vocab_id', 'session_mood_ids', 'subtopic_ids', 'hint_ids', 'user_goal_ids', 'matched_as_variant_ids', 'mistake_ids', 'vocab_ids', 'group_vocab_ids', 'matched_referral_vocab_ids', 'gender', 'plural', 'all_matched_same_interaction_ids', 'all_matched_follow_interaction_ids', 'all_matched_bonus_malus_ids', 'feedback_ids', 'attribute_ids', 'interaction_attribute_ids', 'expected_attribute_ids', 'variant_ids', 'follow_up_ids', 'pairing_attribute_ids', 'required_notion_ids', 'tricky_vocab_ids', 'matched_notion_ids', 'bonus_malus_ids'] and isinstance(value, list):
                     values.append(value)  # PostgreSQL will handle the array
                 else:
                     values.append(value)
