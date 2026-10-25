@@ -1012,7 +1012,8 @@ async def advance_after_interaction(interaction_id: str, user_id: str, db_pool: 
             "cycle_id": next_cycle_result["cycle_id"],
             "cycle_number": next_cycle_number,
             "subtopic_id": next_cycle_result["subtopic_id"],
-            "cycle_goal": next_cycle_goal,
+            # Effective goal (may be 'story' after a notion/intent fallback).
+            "cycle_goal": next_cycle_result["cycle_goal"],
             "cycle_level": next_cycle_level,
             "cycle_boredom": float(next_cycle_boredom),
             "first_interaction_id": next_cycle_result["first_interaction_id"],

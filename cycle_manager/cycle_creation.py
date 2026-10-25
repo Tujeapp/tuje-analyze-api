@@ -5,7 +5,7 @@
 import asyncpg
 import logging
 from typing import Dict, Any, List
-from models import InteractionCandidate
+from models import InteractionCandidate, InsufficientInteractionsError
 from session_context import SessionContext
 from interaction_search import find_best_subtopic_with_fallback
 from interaction_search_notion import find_best_notion_interactions_with_fallback
@@ -46,7 +46,10 @@ async def start_new_cycle(
         Dict with cycle_id, subtopic_id, ordered_interactions, first_interaction_id
     
     Raises:
-        InsufficientInteractionsError: If cannot find ≥7 interactions
+        InsufficientInteractionsError: If the STORY search cannot find ≥7
+            interactions. A notion/intent search that fails this way falls back
+            to a story cycle instead of raising (see below); only the story
+            search's own failure propagates.
     """
     
     logger.info(f"""
@@ -64,25 +67,44 @@ async def start_new_cycle(
     # on the cycle so the runtime curator can filter on the SAME notion.
     target_notion_id = None
 
-    if cycle_goal == "notion":
-        interactions, target_notion_id = await find_best_notion_interactions_with_fallback(
-            db_pool=db_pool,
-            interaction_user_level=interaction_user_level,
-            cycle_boredom=cycle_boredom,
-            session_mood=session_mood,
-            context=context,
-            cycle_goal=cycle_goal
-        )
-    elif cycle_goal == "intent":
-        interactions = await find_best_intent_interactions_with_fallback(
-            db_pool=db_pool,
-            interaction_user_level=interaction_user_level,
-            cycle_boredom=cycle_boredom,
-            session_mood=session_mood,
-            context=context,
-            cycle_goal=cycle_goal
-        )
-    else:
+    # HOTFIX: a notion/intent search that can't build (InsufficientInteractionsError)
+    # must not crash the session. Fall back to a STORY cycle. This runs BEFORE the
+    # session_cycle INSERT, so the row records cycle_goal='story' and
+    # target_notion_id=NULL, and resolve_mode_and_purpose sees 'story'.
+    # Only InsufficientInteractionsError is caught; the story search is NOT wrapped,
+    # so if it fails too, it raises exactly as before.
+    interactions = None
+
+    if cycle_goal in ("notion", "intent"):
+        try:
+            if cycle_goal == "notion":
+                interactions, target_notion_id = await find_best_notion_interactions_with_fallback(
+                    db_pool=db_pool,
+                    interaction_user_level=interaction_user_level,
+                    cycle_boredom=cycle_boredom,
+                    session_mood=session_mood,
+                    context=context,
+                    cycle_goal=cycle_goal
+                )
+            else:
+                interactions = await find_best_intent_interactions_with_fallback(
+                    db_pool=db_pool,
+                    interaction_user_level=interaction_user_level,
+                    cycle_boredom=cycle_boredom,
+                    session_mood=session_mood,
+                    context=context,
+                    cycle_goal=cycle_goal
+                )
+        except InsufficientInteractionsError as e:
+            logger.warning(
+                f"Cycle {cycle_number} '{cycle_goal}' search could not build — "
+                f"falling back to 'story' (user={context.user_id}, session={session_id}, "
+                f"cycle_number={cycle_number}, original_goal={cycle_goal}): {e}"
+            )
+            cycle_goal = "story"
+            target_notion_id = None
+
+    if interactions is None:
         interactions = await find_best_subtopic_with_fallback(
             db_pool=db_pool,
             interaction_user_level=interaction_user_level,
@@ -149,6 +171,9 @@ async def start_new_cycle(
         "answer_mode": answer_mode,
         "button_purpose": button_purpose,
         "target_notion_id": target_notion_id,
+        # The EFFECTIVE goal — 'story' if a notion/intent search fell back above.
+        # Callers must report this, not the goal they passed in.
+        "cycle_goal": cycle_goal,
     }
 
 

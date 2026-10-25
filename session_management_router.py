@@ -472,7 +472,8 @@ async def start_cycle_endpoint(request: StartCycleRequest, http_request: Request
             total_interactions=len(cycle_data.get('ordered_interactions', [])),
             cycle_level=cycle_level,
             cycle_boredom=cycle_boredom,
-            cycle_goal=cycle_goal,
+            # Effective goal (may be 'story' after a notion/intent fallback).
+            cycle_goal=cycle_data['cycle_goal'],
             answer_mode=cycle_data.get('answer_mode'),
             button_purpose=cycle_data.get('button_purpose'),
         )
