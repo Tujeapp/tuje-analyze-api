@@ -96,6 +96,7 @@ async def initialize_brand_new_user(
         seen_subtopics=set(),
         seen_interaction_ids=set(),
         seen_intents=set(),
+        seen_transcriptions=set(),
     )
 
     # Persist the session row. Every NOT NULL column on the live `session`
