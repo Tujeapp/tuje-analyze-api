@@ -940,8 +940,12 @@ async def advance_after_interaction(interaction_id: str, user_id: str, db_pool: 
         async with db_pool.acquire() as conn:
             cycle_goal = await conn.fetchval(
                 "SELECT cycle_goal FROM session_cycle WHERE id = $1", cycle_id)
+        # The row about to be created is ordered_ids[next_number - 1] in
+        # advance_to_next_interaction, i.e. pool_ids[interaction_number].
+        next_brain_interaction_id = (
+            pool_ids[interaction_number] if interaction_number < len(pool_ids) else None)
         answer_mode, button_purpose = await resolve_mode_and_purpose(
-            db_pool, user_id, cycle_goal)
+            db_pool, user_id, cycle_goal, brain_interaction_id=next_brain_interaction_id)
 
         advance_result = await advance_to_next_interaction(
             cycle_id=cycle_id,

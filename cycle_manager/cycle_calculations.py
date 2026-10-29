@@ -168,8 +168,11 @@ async def calculate_cycle_goal(
     Per TuJe_Session_RampUp_and_Cycle_Goal_Logic.md §4: the first regular
     session (session_rank = 1) forces all three cycles to "story" — the
     intent/notion goals require history that does not yet exist on the
-    first regular session. Cycle-goal selection (per §6) begins from the
-    second regular session.
+    first regular session. Exception: a level-0 first session
+    (session.session_level = 0) runs "notion" for every cycle — notion steps
+    need no history (a notion cycle that can't build falls back to story in
+    start_new_cycle). Cycle-goal selection (per §6) begins from the second
+    regular session.
 
     For session_rank >= 2, falls through to the rotation pattern. (The full
     boredom-band cycle-goal algorithm per §6 is deferred to a later chunk
@@ -178,13 +181,17 @@ async def calculate_cycle_goal(
     # First-regular-session override.
     async with db_pool.acquire() as conn:
         session_row = await conn.fetchrow(
-            "SELECT session_rank, user_id FROM session WHERE id = $1",
+            "SELECT session_rank, user_id, session_level FROM session WHERE id = $1",
             session_id,
         )
     session_rank = session_row["session_rank"] if session_row else None
     user_id = session_row["user_id"] if session_row else None
+    session_level = session_row["session_level"] if session_row else None
 
     if session_rank == 1:
+        if session_level == 0:
+            logger.debug(f"Cycle {cycle_number} goal: notion (session_rank=1, session_level=0)")
+            return "notion"
         logger.debug(f"Cycle {cycle_number} goal: story (session_rank=1, all cycles forced to story)")
         return "story"
 
