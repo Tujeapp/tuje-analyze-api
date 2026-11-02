@@ -299,6 +299,20 @@ class AnswerSelectionService:
             if answer_type in available:
                 available[answer_type].append(dict(row))
 
+        # A `perfect` is a valid answer, but every config needs a `good` — so an
+        # interaction with perfects and NO goods satisfies no config and drops to
+        # the unshuffled fallback. Only in that case, move the perfects into
+        # `good`. When goods exist, both buckets are left untouched so the
+        # perfect+good configs behave exactly as before. (Moved, not copied:
+        # a copy would let a perfect+good config pick the same answer twice.)
+        if not available["good"] and available["perfect"]:
+            logger.info(
+                f"📊 {interaction_id}: no 'good' answers — promoting "
+                f"{len(available['perfect'])} 'perfect' to 'good'"
+            )
+            available["good"] = available["perfect"]
+            available["perfect"] = []
+
         return available
 
     # ============================================================================

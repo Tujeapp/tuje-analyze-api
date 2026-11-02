@@ -35,6 +35,8 @@ def decide_interaction_mode_and_purpose(
       unknown    -> voice (safe default)
 
     STAGE 2 — button_purpose (only meaningful when mode == multipleButtons):
+      authored buttons -> 'default'      (the interaction's own authored answers,
+                                          whatever the cycle goal)
       intent cycle -> 'vocab_review'  (dormant: no intent cycles exist yet)
       story cycle  -> 'story'         (own answers + borrowed wrong-conversation)
       notion cycle -> 'notion'        (answers carrying the cycle's target notion)
@@ -65,6 +67,10 @@ def decide_interaction_mode_and_purpose(
     # STAGE 2
     if answer_mode != "multipleButtons":
         button_purpose = None
+    elif authored_mode in _AUTHORED_BUTTON_MODES:
+        # Mode came from the authored interaction type: present its own authored
+        # answers (the normal path), not a goal curator.
+        button_purpose = "default"
     else:
         goal = (cycle_goal or "").strip().lower()
         if goal == "intent":
