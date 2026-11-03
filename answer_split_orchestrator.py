@@ -19,6 +19,7 @@ from matching_answer_service import answer_matching_service
 from gpt_fallback_service import gpt_fallback_service
 from bonus_malus_engine import evaluate_interaction_bonus_malus
 from interaction_scoring import binary_level0_score, compute_interaction_score
+from notion_steps.engine import on_interaction_committed
 
 from session_management import (
     answer_service,
@@ -669,7 +670,7 @@ async def commit_answer(interaction_id: str, answer_id: str, db_pool: asyncpg.Po
     Idempotent: re-committing an already-completed interaction returns its recap."""
     async with db_pool.acquire() as conn:
         interaction = await conn.fetchrow("""
-            SELECT si.status, si.cycle_id, sc.cycle_level,
+            SELECT si.status, si.cycle_id, sc.cycle_level, sc.cycle_goal,
                    bi.interaction_optimum_level
             FROM session_interaction si
             JOIN session_cycle sc ON si.cycle_id = sc.id
@@ -756,6 +757,8 @@ async def commit_answer(interaction_id: str, answer_id: str, db_pool: asyncpg.Po
                 await interaction_service.mark_interaction_incomplete(
                     interaction_id=interaction_id, final_answer_id=answer_id,
                     db_pool=db_pool)
+                if interaction["cycle_goal"] == "notion":
+                    await _notion_step_hook(interaction_id, answer_id, db_pool)
                 return await _commit_recap(interaction_id, db_pool)
 
             gross = brow["prior_score"] if brow["prior_score"] is not None else 100
@@ -794,6 +797,8 @@ async def commit_answer(interaction_id: str, answer_id: str, db_pool: asyncpg.Po
             await interaction_service.complete_interaction(
                 interaction_id=interaction_id, final_answer_id=answer_id,
                 interaction_score=score, db_pool=db_pool)
+            if interaction["cycle_goal"] == "notion":
+                await _notion_step_hook(interaction_id, answer_id, db_pool)
         elif matched_answer_id:
             async with db_pool.acquire() as conn:
                 srow = await conn.fetchrow("""
@@ -825,6 +830,8 @@ async def commit_answer(interaction_id: str, answer_id: str, db_pool: asyncpg.Po
                 await interaction_service.mark_interaction_incomplete(
                     interaction_id=interaction_id, final_answer_id=answer_id,
                     db_pool=db_pool)
+                if interaction["cycle_goal"] == "notion":
+                    await _notion_step_hook(interaction_id, answer_id, db_pool)
                 return await _commit_recap(interaction_id, db_pool)
 
             gross = srow["prior_score"] if srow["prior_score"] is not None else 100
@@ -848,6 +855,8 @@ async def commit_answer(interaction_id: str, answer_id: str, db_pool: asyncpg.Po
             await interaction_service.complete_interaction(
                 interaction_id=interaction_id, final_answer_id=answer_id,
                 interaction_score=result["interaction_score"], db_pool=db_pool)
+            if interaction["cycle_goal"] == "notion":
+                await _notion_step_hook(interaction_id, answer_id, db_pool)
         else:
             # No matched answer — user forced past. Incomplete, unscored.
             await answer_service.mark_as_final_answer(
@@ -856,6 +865,8 @@ async def commit_answer(interaction_id: str, answer_id: str, db_pool: asyncpg.Po
             await interaction_service.mark_interaction_incomplete(
                 interaction_id=interaction_id, final_answer_id=answer_id,
                 db_pool=db_pool)
+            if interaction["cycle_goal"] == "notion":
+                await _notion_step_hook(interaction_id, answer_id, db_pool)
         return await _commit_recap(interaction_id, db_pool)
 
     # Button modes only (voice returns early above): shared completion tail.
@@ -864,8 +875,22 @@ async def commit_answer(interaction_id: str, answer_id: str, db_pool: asyncpg.Po
     await interaction_service.complete_interaction(
         interaction_id=interaction_id, final_answer_id=answer_id,
         interaction_score=score, db_pool=db_pool)
+    if interaction["cycle_goal"] == "notion":
+        await _notion_step_hook(interaction_id, answer_id, db_pool)
 
     return await _commit_recap(interaction_id, db_pool)
+
+
+async def _notion_step_hook(interaction_id: str, answer_id: str, db_pool: asyncpg.Pool) -> None:
+    """Notion-step evidence + tail re-plan (spec §4.4). Runs after the commit
+    (complete OR incomplete — a failed step still gets re-planned), on its own
+    connection; any failure is logged and the commit stands."""
+    try:
+        async with db_pool.acquire() as conn:
+            await on_interaction_committed(conn, interaction_id, answer_id)
+    except Exception:
+        logger.error(f"notion-step hook failed for {interaction_id} — commit kept, "
+                     f"tail unchanged", exc_info=True)
 
 
 async def _commit_recap(interaction_id: str, db_pool: asyncpg.Pool) -> Dict:

@@ -154,6 +154,17 @@ def plan_slots(
     return PlanResult(ids=plan, warnings=warnings)
 
 
+def splice_tail(pool_ids: List[str], played_count: int, tail: List[str],
+                size: int = 7) -> Optional[List[str]]:
+    """Keep positions 1..played_count untouched and replace the rest with
+    `tail`. Returns None (caller keeps the old pool) unless the result is
+    exactly `size` long."""
+    if played_count < 0 or played_count > len(pool_ids):
+        return None
+    new_pool = list(pool_ids[:played_count]) + list(tail)
+    return new_pool if len(new_pool) == size else None
+
+
 def _break_runs(ids: List[str], last_played_id: Optional[str]) -> None:
     """Safety pass: swap a slot that repeats its predecessor with the next
     later slot that doesn't. Leaves a repeat only when unavoidable."""

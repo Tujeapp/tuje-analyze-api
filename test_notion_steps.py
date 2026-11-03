@@ -17,7 +17,7 @@ from notion_steps.rules import (
     current_step,
     is_discovered,
 )
-from notion_steps.planner import plan_slots, PlannerError
+from notion_steps.planner import plan_slots, PlannerError, splice_tail
 
 
 AW = Step("aw", "awareness", 1)
@@ -187,6 +187,21 @@ def test_errors():
     print("  PASS")
 
 
+def test_splice_tail():
+    print("=" * 60); print("TEST 11 - splice_tail (played prefix + re-planned tail)"); print("=" * 60)
+    pool = ["aw1", "und1", "und2", "pg1", "pg2", "pg3", "pg1"]
+    new = splice_tail(pool, 2, ["aw2", "und2", "und3", "pg1", "pg2"])
+    assert new == ["aw1", "und1", "aw2", "und2", "und3", "pg1", "pg2"], new
+    assert new[:2] == pool[:2]
+    assert splice_tail(pool, 7, []) == pool
+    assert splice_tail(pool, 2, ["x"] * 4) is None      # too short
+    assert splice_tail(pool, 2, ["x"] * 6) is None      # too long
+    assert splice_tail(pool, 8, []) is None             # more played than pool
+    assert splice_tail(pool, -1, ["x"] * 8) is None
+    assert splice_tail(["a", "b"], 2, ["x"] * 5) == ["a", "b", "x", "x", "x", "x", "x"]
+    print("  PASS")
+
+
 def main():
     test_normalize()
     test_validation()
@@ -198,6 +213,7 @@ def main():
     test_content_gap()
     test_exhaustion()
     test_errors()
+    test_splice_tail()
     print("\nALL TESTS PASSED")
 
 

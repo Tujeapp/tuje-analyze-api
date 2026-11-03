@@ -172,3 +172,66 @@ async def upsert_in_progress(conn: asyncpg.Connection, user_id: str, notion_id: 
             updated_at = NOW()
         WHERE unp.state IS NULL OR unp.state NOT IN ('discovered', 'owned')
     """, user_id, notion_id, current_step_id)
+
+
+async def upsert_evidence(conn: asyncpg.Connection, user_id: str, step_id: str, notion_id: str,
+                          brain_interaction_id: str, verdict: str,
+                          session_interaction_id: str) -> None:
+    """One row per (user, step, brain interaction); keeps the best verdict."""
+    await conn.execute("""
+        INSERT INTO user_notion_step_evidence
+          (user_id, step_id, notion_id, brain_interaction_id, best_verdict, session_interaction_id)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (user_id, step_id, brain_interaction_id) DO UPDATE
+        SET best_verdict = CASE WHEN EXCLUDED.best_verdict = 'perfect' THEN 'perfect'
+                                ELSE user_notion_step_evidence.best_verdict END,
+            updated_at = NOW()
+    """, user_id, step_id, notion_id, brain_interaction_id, verdict, session_interaction_id)
+
+
+async def insert_validations(conn: asyncpg.Connection, user_id: str, notion_id: str,
+                             validated: Dict[str, str]) -> List[str]:
+    """Insert validated steps; returns the step ids that were NEW (not already there)."""
+    new_ids: List[str] = []
+    for step_id, validated_by in validated.items():
+        status = await conn.execute("""
+            INSERT INTO user_notion_step_progress (user_id, step_id, notion_id, validated_by, validated_at)
+            VALUES ($1, $2, $3, $4, NOW())
+            ON CONFLICT (user_id, step_id) DO NOTHING
+        """, user_id, step_id, notion_id, validated_by)
+        if status == "INSERT 0 1":
+            new_ids.append(step_id)
+    return new_ids
+
+
+async def write_notion_progress(conn: asyncpg.Connection, user_id: str, notion_id: str,
+                                current_step_id, discovered: bool) -> None:
+    """current_step_id + (when discovered) state/discovered_at. Never touches a
+    discovered/owned row."""
+    await conn.execute("""
+        INSERT INTO user_notion_progress AS unp (
+            user_id, notion_id, state, current_step_id, started_at, discovered_at, updated_at
+        ) VALUES ($1, $2, CASE WHEN $4::bool THEN 'discovered' ELSE 'in_progress' END,
+                  $3, NOW(), CASE WHEN $4::bool THEN NOW() END, NOW())
+        ON CONFLICT (user_id, notion_id) DO UPDATE
+        SET current_step_id = EXCLUDED.current_step_id,
+            state = EXCLUDED.state,
+            discovered_at = COALESCE(unp.discovered_at, EXCLUDED.discovered_at),
+            updated_at = NOW()
+        WHERE unp.state IS NULL OR unp.state NOT IN ('discovered', 'owned')
+    """, user_id, notion_id, current_step_id, discovered)
+
+
+async def update_cycle_tail(conn: asyncpg.Connection, cycle_id: str, played_count: int,
+                            new_pool: List[str]) -> bool:
+    """Write the re-planned pool unless a later position was already created
+    (advance ran) — then the tail is moot. Returns True if written."""
+    status = await conn.execute("""
+        UPDATE session_cycle SET candidate_pool_ids = $2
+        WHERE id = $1
+          AND NOT EXISTS (
+              SELECT 1 FROM session_interaction
+              WHERE cycle_id = $1 AND interaction_number > $3
+          )
+    """, cycle_id, new_pool, played_count)
+    return status == "UPDATE 1"
