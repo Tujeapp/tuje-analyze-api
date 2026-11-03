@@ -74,3 +74,10 @@ def compute_interaction_score(
         "bonus_malus_score": bonus_malus,
         "coefficient": compute_coefficient(answer_opt, interaction_opt, cycle_level),
     }
+
+
+def binary_level0_score(verdict) -> int:
+    """Level-0 scoring (interaction_optimum_level = 0, or the chosen answer's
+    answer_optimum_level = 0) is BINARY: a correct final verdict (perfect/good)
+    → 100, anything else → 0. No coefficient, no bonus-malus."""
+    return 100 if verdict in ("perfect", "good") else 0

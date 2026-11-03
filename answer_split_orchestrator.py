@@ -18,7 +18,7 @@ from adjustement_types import TranscriptionAdjustRequest
 from matching_answer_service import answer_matching_service
 from gpt_fallback_service import gpt_fallback_service
 from bonus_malus_engine import evaluate_interaction_bonus_malus
-from interaction_scoring import compute_interaction_score
+from interaction_scoring import binary_level0_score, compute_interaction_score
 
 from session_management import (
     answer_service,
@@ -669,9 +669,11 @@ async def commit_answer(interaction_id: str, answer_id: str, db_pool: asyncpg.Po
     Idempotent: re-committing an already-completed interaction returns its recap."""
     async with db_pool.acquire() as conn:
         interaction = await conn.fetchrow("""
-            SELECT si.status, si.cycle_id, sc.cycle_level
+            SELECT si.status, si.cycle_id, sc.cycle_level,
+                   bi.interaction_optimum_level
             FROM session_interaction si
             JOIN session_cycle sc ON si.cycle_id = sc.id
+            JOIN brain_interaction bi ON si.brain_interaction_id = bi.id
             WHERE si.id = $1
         """, interaction_id)
     if not interaction:
@@ -682,10 +684,19 @@ async def commit_answer(interaction_id: str, answer_id: str, db_pool: asyncpg.Po
         return await _commit_recap(interaction_id, db_pool)
 
     async with db_pool.acquire() as conn:
+        # The chosen answer's level rides on the same query: the tapped button
+        # for multipleButtons, the matched answer otherwise.
         answer = await conn.fetchrow("""
-            SELECT answer_mode_used, similarity_score, matched_answer_id,
-                   selected_answer_id, tapped_at_seconds, user_id
-            FROM session_answer WHERE id = $1
+            SELECT sa.answer_mode_used, sa.similarity_score, sa.matched_answer_id,
+                   sa.selected_answer_id, sa.tapped_at_seconds, sa.user_id,
+                   sa.verdict,
+                   ba.answer_optimum_level AS chosen_answer_optimum_level
+            FROM session_answer sa
+            LEFT JOIN brain_answer ba ON ba.id = CASE
+                WHEN sa.answer_mode_used = 'multipleButtons' THEN sa.selected_answer_id
+                ELSE sa.matched_answer_id
+            END
+            WHERE sa.id = $1
         """, answer_id)
     if not answer:
         raise ValueError(f"Answer not found: {answer_id}")
@@ -695,13 +706,26 @@ async def commit_answer(interaction_id: str, answer_id: str, db_pool: asyncpg.Po
     matched_answer_id = answer["matched_answer_id"]
     selected_answer_id = answer["selected_answer_id"]
     user_level = interaction["cycle_level"]
+    verdict = answer["verdict"]
+
+    # Level-0 is scored binary on the evaluate verdict (voice and multipleButtons
+    # only): the interaction's level is 0, or the chosen answer's level is 0.
+    # NULL is never treated as 0 — it keeps the normal 3-phase model.
+    level0_trigger = None
+    if interaction["interaction_optimum_level"] is not None and interaction["interaction_optimum_level"] == 0:
+        level0_trigger = "interaction"
+    elif answer["chosen_answer_optimum_level"] is not None and answer["chosen_answer_optimum_level"] == 0:
+        level0_trigger = "answer"
 
     if mode == "multipleButtons":
         # 3-phase model, same as voice — but keyed off selected_answer_id (the
         # button they tapped), because matched_answer_id is a different notion
         # here and the level we need belongs to the answer they actually chose.
         method = "multiple_buttons"
-        if selected_answer_id:
+        if selected_answer_id and level0_trigger:
+            score = binary_level0_score(verdict)
+            logger.info(f"level-0 binary score: {verdict} -> {score} (trigger={level0_trigger})")
+        elif selected_answer_id:
             async with db_pool.acquire() as conn:
                 brow = await conn.fetchrow("""
                     SELECT si.interaction_score      AS prior_score,
@@ -761,7 +785,16 @@ async def commit_answer(interaction_id: str, answer_id: str, db_pool: asyncpg.Po
         score = int(round(similarity))
         method = "single_button"
     else:  # voice — 3-phase model, gated on a matched answer
-        if matched_answer_id:
+        if matched_answer_id and level0_trigger:
+            score = binary_level0_score(verdict)
+            logger.info(f"level-0 binary score: {verdict} -> {score} (trigger={level0_trigger})")
+            await answer_service.mark_as_final_answer(
+                answer_id=answer_id, processing_method="answer_match",
+                cost_saved=0.002, db_pool=db_pool)
+            await interaction_service.complete_interaction(
+                interaction_id=interaction_id, final_answer_id=answer_id,
+                interaction_score=score, db_pool=db_pool)
+        elif matched_answer_id:
             async with db_pool.acquire() as conn:
                 srow = await conn.fetchrow("""
                     SELECT si.interaction_score      AS prior_score,
