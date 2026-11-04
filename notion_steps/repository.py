@@ -7,7 +7,7 @@
 # ============================================================================
 
 import logging
-from typing import Dict, Iterable, List, Set, Tuple
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 import asyncpg
 
@@ -46,6 +46,10 @@ async def load_steps(conn: asyncpg.Connection, notion_id: str) -> Tuple[List[Ste
             continue
         steps.append(Step(id=r["id"], purpose=purpose, rank=int(r["rank"])))
     return steps, warnings
+
+
+async def load_notion_type(conn: asyncpg.Connection, notion_id: str) -> Optional[str]:
+    return await conn.fetchval("SELECT type FROM brain_notion WHERE id = $1", notion_id)
 
 
 async def pick_notion_ids(conn: asyncpg.Connection, user_id: str, cycle_level: int,
@@ -101,6 +105,8 @@ async def load_candidates(conn: asyncpg.Connection, steps: Iterable[Step],
                           cycle_level: int) -> Dict[str, List[str]]:
     """
     brain_interaction_id -> this notion's step ids it is tagged with.
+    Upper level bound only (level_from <= cycle_level + 50): easier interactions
+    always stay eligible, so low-level notions remain servable at any level.
     Deliberately NOT filtered on subtopic live or on the session-mood type list.
     """
     step_ids = [s.id for s in steps]
@@ -112,7 +118,7 @@ async def load_candidates(conn: asyncpg.Connection, steps: Iterable[Step],
         FROM brain_interaction i
         WHERE i.live = TRUE
           AND i.notion_step_ids::text[] && $1::text[]
-          AND i.level_from BETWEEN GREATEST(0, $2::int - 50) AND $2::int + 50
+          AND i.level_from <= $2::int + 50
           AND EXISTS (
               SELECT 1 FROM brain_interaction_answer bia
               WHERE bia.interaction_id = i.id
@@ -205,21 +211,26 @@ async def insert_validations(conn: asyncpg.Connection, user_id: str, notion_id: 
 
 
 async def write_notion_progress(conn: asyncpg.Connection, user_id: str, notion_id: str,
-                                current_step_id, discovered: bool) -> None:
-    """current_step_id + (when discovered) state/discovered_at. Never touches a
-    discovered/owned row."""
-    await conn.execute("""
+                                current_step_id, state: str, score: int) -> bool:
+    """Write state/score/current_step_id. Never downgrades: an 'owned' row is
+    never changed, a 'discovered' row may only move to 'owned', notion_score only
+    increases, discovered_at keeps the earliest. Returns True if a row was written."""
+    status = await conn.execute("""
         INSERT INTO user_notion_progress AS unp (
-            user_id, notion_id, state, current_step_id, started_at, discovered_at, updated_at
-        ) VALUES ($1, $2, CASE WHEN $4::bool THEN 'discovered' ELSE 'in_progress' END,
-                  $3, NOW(), CASE WHEN $4::bool THEN NOW() END, NOW())
+            user_id, notion_id, state, current_step_id, notion_score,
+            started_at, discovered_at, updated_at
+        ) VALUES ($1, $2, $3::text, $4, $5::int, NOW(),
+                  CASE WHEN $3::text IN ('discovered', 'owned') THEN NOW() END, NOW())
         ON CONFLICT (user_id, notion_id) DO UPDATE
         SET current_step_id = EXCLUDED.current_step_id,
             state = EXCLUDED.state,
+            notion_score = GREATEST(unp.notion_score, EXCLUDED.notion_score),
             discovered_at = COALESCE(unp.discovered_at, EXCLUDED.discovered_at),
             updated_at = NOW()
-        WHERE unp.state IS NULL OR unp.state NOT IN ('discovered', 'owned')
-    """, user_id, notion_id, current_step_id, discovered)
+        WHERE unp.state IS DISTINCT FROM 'owned'
+          AND (unp.state IS DISTINCT FROM 'discovered' OR EXCLUDED.state = 'owned')
+    """, user_id, notion_id, state, current_step_id, score)
+    return status == "INSERT 0 1"
 
 
 async def update_cycle_tail(conn: asyncpg.Connection, cycle_id: str, played_count: int,

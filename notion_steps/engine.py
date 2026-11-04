@@ -16,6 +16,7 @@ from .repository import (
     insert_validations,
     load_candidates,
     load_evidence,
+    load_notion_type,
     load_seen,
     load_steps,
     pick_notion_ids,
@@ -24,7 +25,7 @@ from .repository import (
     upsert_in_progress,
     write_notion_progress,
 )
-from .rules import Step, current_step, is_discovered, validated_steps
+from .rules import Step, current_step, discovery_outcome, is_discovered, validated_steps
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,7 @@ async def build_notion_cycle(
         if not dry_run:
             await upsert_in_progress(conn, user_id, notion_id, step.id)
 
+        notion_type = await load_notion_type(conn, notion_id)
         all_warnings: List[str] = warnings + plan.warnings
         logger.info(
             f"build_notion_cycle: user={user_id} notion={notion_id} "
@@ -101,6 +103,7 @@ async def build_notion_cycle(
             "current_step_id": step.id,
             "notion_step_pool": {
                 "notion_id": notion_id,
+                "notion_type": notion_type,
                 "steps": [
                     {"id": s.id, "purpose": s.purpose, "rank": s.rank}
                     for s in sorted(steps, key=lambda s: (s.rank, s.id))
@@ -177,8 +180,16 @@ async def on_interaction_committed(conn: asyncpg.Connection, session_interaction
         # c) Notion progress.
         step = current_step(steps, evidence)
         discovered = is_discovered(steps, evidence)
-        await write_notion_progress(conn, user_id, notion_id,
-                                    step.id if step else None, discovered)
+        state, score = "in_progress", 0
+        if discovered:
+            # Snapshots from before notion_type existed lack the key.
+            notion_type = (pool["notion_type"] if "notion_type" in pool
+                           else await load_notion_type(conn, notion_id))
+            state, score = discovery_outcome(notion_type)
+        written = await write_notion_progress(conn, user_id, notion_id,
+                                              step.id if step else None, state, score)
+        if discovered and written:
+            logger.info(f"notion outcome: user={user_id} notion={notion_id} {state}, score {score}")
 
         # d) Re-plan the not-yet-played tail; played positions never change.
         remaining = CYCLE_SIZE - played_count

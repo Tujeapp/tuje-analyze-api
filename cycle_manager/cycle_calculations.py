@@ -165,6 +165,10 @@ async def calculate_cycle_goal(
     """
     Determine cycle goal.
 
+    Intro phase (checked first): a bucket-0 user (brain_user.initial_level_bucket
+    = 0) with a pending initial notion gets "notion". Pending = live, type
+    'initial notion', at least one live single-notion step, not yet 'owned'.
+
     Per TuJe_Session_RampUp_and_Cycle_Goal_Logic.md §4: the first regular
     session (session_rank = 1) forces all three cycles to "story" — the
     intent/notion goals require history that does not yet exist on the
@@ -184,15 +188,45 @@ async def calculate_cycle_goal(
             "SELECT session_rank, user_id, session_level FROM session WHERE id = $1",
             session_id,
         )
-    session_rank = session_row["session_rank"] if session_row else None
-    user_id = session_row["user_id"] if session_row else None
-    session_level = session_row["session_level"] if session_row else None
+        session_rank = session_row["session_rank"] if session_row else None
+        user_id = session_row["user_id"] if session_row else None
+        session_level = session_row["session_level"] if session_row else None
+
+        # Two params, same value: brain_user.id and user_notion_progress.user_id
+        # may not share a column type, and one $n can only have one type.
+        intro_pending = None
+        if user_id is not None:
+            intro_pending = await conn.fetchval("""
+                SELECT bu.initial_level_bucket = 0 AND EXISTS (
+                    SELECT 1 FROM brain_notion bn
+                    WHERE bn.live = TRUE
+                      AND lower(trim(bn.type)) = 'initial notion'
+                      AND EXISTS (
+                          SELECT 1 FROM brain_notion_step st
+                          WHERE st.live = TRUE
+                            AND cardinality(st.notion_ids) = 1
+                            AND (st.notion_ids::text[])[1] = bn.id::text
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1 FROM user_notion_progress unp
+                          WHERE unp.user_id = $2
+                            AND unp.notion_id = bn.id
+                            AND unp.state = 'owned'
+                      )
+                )
+                FROM brain_user bu
+                WHERE bu.id = $1
+            """, str(user_id), str(user_id))
+
+    if intro_pending:
+        logger.info(f"Cycle {cycle_number} goal: notion (rule=intro_phase, user={user_id})")
+        return "notion"
 
     if session_rank == 1:
         if session_level == 0:
-            logger.debug(f"Cycle {cycle_number} goal: notion (session_rank=1, session_level=0)")
+            logger.info(f"Cycle {cycle_number} goal: notion (rule=first_session_level0)")
             return "notion"
-        logger.debug(f"Cycle {cycle_number} goal: story (session_rank=1, all cycles forced to story)")
+        logger.info(f"Cycle {cycle_number} goal: story (rule=first_session)")
         return "story"
 
     # §6 empty-intent exception: if the user has no tracked intents yet,
@@ -224,8 +258,29 @@ async def calculate_cycle_goal(
             f"empty for user {user_id} → falling back to 'story' (§6 exception)."
         )
         goal = "story"
-    logger.debug(f"Cycle {cycle_number} goal: {goal} (session_rank={session_rank})")
+    logger.info(f"Cycle {cycle_number} goal: {goal} (rule=rotation, session_rank={session_rank})")
     return goal
+
+
+def resolve_cycle_level(
+    cycle_goal: str,
+    cycle_number: int,
+    dynamic_level: int,
+    session_level: Optional[int],
+) -> int:
+    """
+    The level a cycle actually runs at: notion cycles use the user's level
+    (session_level, NULL = 0); story/intent keep the dynamic cycle level. If a
+    notion cycle later falls back to story, it keeps this level on purpose.
+    """
+    if cycle_goal == "notion":
+        level = session_level if session_level is not None else 0
+        rule = "notion_user_level"
+    else:
+        level = dynamic_level
+        rule = "dynamic"
+    logger.info(f"Cycle {cycle_number} level: {level} (rule={rule})")
+    return level
 
 
 async def calculate_interaction_user_level(

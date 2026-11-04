@@ -24,7 +24,8 @@ from cycle_manager.cycle_completion import complete_cycle, get_cycle_summary
 from cycle_manager.cycle_calculations import (
     calculate_cycle_level,
     calculate_cycle_boredom,
-    calculate_cycle_goal
+    calculate_cycle_goal,
+    resolve_cycle_level
 )
 from helpers import (
     validate_session_type,
@@ -431,7 +432,7 @@ async def start_cycle_endpoint(request: StartCycleRequest, http_request: Request
         context = await SessionContext.load(session['user_id'], pool)
 
         # Calculate cycle parameters
-        cycle_level = await calculate_cycle_level(
+        dynamic_level = await calculate_cycle_level(
             request.session_id,
             request.cycle_number,
             session['session_level'],
@@ -451,6 +452,10 @@ async def start_cycle_endpoint(request: StartCycleRequest, http_request: Request
             pool
         )
 
+        cycle_level = resolve_cycle_level(
+            cycle_goal, request.cycle_number, dynamic_level, session['session_level']
+        )
+
         # Start the cycle
         cycle_data = await start_new_cycle(
             session_id=request.session_id,
@@ -461,7 +466,8 @@ async def start_cycle_endpoint(request: StartCycleRequest, http_request: Request
             cycle_level=cycle_level,
             interaction_user_level=cycle_level,
             session_mood=request.session_mood,
-            db_pool=pool
+            db_pool=pool,
+            fallback_cycle_level=dynamic_level if cycle_goal == "notion" else None
         )
 
         return StartCycleResponse(
@@ -470,7 +476,8 @@ async def start_cycle_endpoint(request: StartCycleRequest, http_request: Request
             first_interaction_id=cycle_data['first_interaction_id'],
             first_brain_interaction_id=cycle_data['ordered_interactions'][0],
             total_interactions=len(cycle_data.get('ordered_interactions', [])),
-            cycle_level=cycle_level,
+            # Effective level (the dynamic one after a notion fallback).
+            cycle_level=cycle_data['cycle_level'],
             cycle_boredom=cycle_boredom,
             # Effective goal (may be 'story' after a notion/intent fallback).
             cycle_goal=cycle_data['cycle_goal'],

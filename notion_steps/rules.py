@@ -90,6 +90,19 @@ def is_discovered(steps: Iterable[Step], ev: Evidence) -> bool:
     return bool(ordered) and current_step(ordered, ev) is None
 
 
+def is_initial_notion(type_value: Optional[str]) -> bool:
+    """brain_notion.type marks onboarding notions as 'initial notion'."""
+    if type_value is None:
+        return False
+    return str(type_value).strip().lower() == "initial notion"
+
+
+def discovery_outcome(type_value: Optional[str]) -> Tuple[str, int]:
+    """(state, notion_score) once a notion is discovered: an initial notion is
+    owned outright (100); any other is discovered (50)."""
+    return ("owned", 100) if is_initial_notion(type_value) else ("discovered", 50)
+
+
 def remaining_need(step: Step, ev: Evidence, validated: Optional[Dict[str, str]] = None) -> int:
     """
     How many more interactions this step wants planned. Pass the

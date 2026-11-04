@@ -16,6 +16,8 @@ from notion_steps.rules import (
     validated_steps,
     current_step,
     is_discovered,
+    is_initial_notion,
+    discovery_outcome,
 )
 from notion_steps.planner import plan_slots, PlannerError, splice_tail
 
@@ -202,6 +204,17 @@ def test_splice_tail():
     print("  PASS")
 
 
+def test_initial_notion():
+    print("=" * 60); print("TEST 12 - is_initial_notion / discovery_outcome"); print("=" * 60)
+    for value in ("initial notion", " Initial Notion ", "INITIAL NOTION"):
+        assert is_initial_notion(value), value
+        assert discovery_outcome(value) == ("owned", 100), value
+    for value in (None, "", "initial", "notion"):
+        assert not is_initial_notion(value), value
+        assert discovery_outcome(value) == ("discovered", 50), value
+    print("  PASS")
+
+
 def main():
     test_normalize()
     test_validation()
@@ -214,6 +227,7 @@ def main():
     test_exhaustion()
     test_errors()
     test_splice_tail()
+    test_initial_notion()
     print("\nALL TESTS PASSED")
 
 

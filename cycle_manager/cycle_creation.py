@@ -5,7 +5,7 @@
 import asyncpg
 import json
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from models import InteractionCandidate, InsufficientInteractionsError
 from session_context import SessionContext
 from interaction_search import find_best_subtopic_with_fallback
@@ -27,7 +27,8 @@ async def start_new_cycle(
     cycle_level: int,
     interaction_user_level: int,
     session_mood: str,
-    db_pool: asyncpg.Pool
+    db_pool: asyncpg.Pool,
+    fallback_cycle_level: Optional[int] = None
 ) -> Dict[str, Any]:
     """
     Start a new cycle with optimized interaction search
@@ -42,10 +43,14 @@ async def start_new_cycle(
         interaction_user_level: Current interaction user level
         session_mood: Session mood type
         db_pool: Database connection pool
-    
+        fallback_cycle_level: If set and a notion cycle falls back to story, the
+            story cycle runs at this level instead of cycle_level /
+            interaction_user_level.
+
     Returns:
-        Dict with cycle_id, subtopic_id, ordered_interactions, first_interaction_id
-    
+        Dict with cycle_id, subtopic_id, ordered_interactions, first_interaction_id,
+        and the effective cycle_goal / cycle_level
+
     Raises:
         InsufficientInteractionsError: If the STORY search cannot find ≥7
             interactions. A notion cycle with no buildable step plan, or an
@@ -103,6 +108,10 @@ async def start_new_cycle(
                 f"cycle_number={cycle_number}, level={interaction_user_level})"
             )
             cycle_goal = "story"
+            if fallback_cycle_level is not None:
+                cycle_level = fallback_cycle_level
+                interaction_user_level = fallback_cycle_level
+                logger.info(f"Cycle {cycle_number} level: {cycle_level} (rule=notion_fallback_dynamic)")
         else:
             ordered_ids = notion_plan["ordered_ids"]
             target_notion_id = notion_plan["notion_id"]
@@ -202,6 +211,8 @@ async def start_new_cycle(
         # The EFFECTIVE goal — 'story' if a notion/intent search fell back above.
         # Callers must report this, not the goal they passed in.
         "cycle_goal": cycle_goal,
+        # The EFFECTIVE level — fallback_cycle_level if a notion cycle fell back.
+        "cycle_level": cycle_level,
     }
 
 

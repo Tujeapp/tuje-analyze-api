@@ -35,6 +35,7 @@ from cycle_manager.cycle_calculations import (
     calculate_cycle_level,
     calculate_cycle_boredom,
     calculate_cycle_goal,
+    resolve_cycle_level,
 )
 from session_context import SessionContext
 
@@ -1051,12 +1052,14 @@ async def advance_after_interaction(interaction_id: str, user_id: str, db_pool: 
 
     if completed_cycles < 3:
         next_cycle_number = completed_cycles + 1
-        next_cycle_level = await calculate_cycle_level(
+        next_dynamic_level = await calculate_cycle_level(
             session_id, next_cycle_number, session_level, db_pool)
         next_cycle_boredom = await calculate_cycle_boredom(
             session_id, next_cycle_number, session_boredom, db_pool)
         next_cycle_goal = await calculate_cycle_goal(
             session_id, next_cycle_number, db_pool)
+        next_cycle_level = resolve_cycle_level(
+            next_cycle_goal, next_cycle_number, next_dynamic_level, session_level)
 
         next_context = await SessionContext.load(user_id, db_pool)
         next_cycle_result = await start_new_cycle(
@@ -1069,6 +1072,7 @@ async def advance_after_interaction(interaction_id: str, user_id: str, db_pool: 
             interaction_user_level=next_cycle_level,
             session_mood=session_mood,
             db_pool=db_pool,
+            fallback_cycle_level=next_dynamic_level if next_cycle_goal == "notion" else None,
         )
         base["next_cycle"] = {
             "cycle_id": next_cycle_result["cycle_id"],
@@ -1076,7 +1080,8 @@ async def advance_after_interaction(interaction_id: str, user_id: str, db_pool: 
             "subtopic_id": next_cycle_result["subtopic_id"],
             # Effective goal (may be 'story' after a notion/intent fallback).
             "cycle_goal": next_cycle_result["cycle_goal"],
-            "cycle_level": next_cycle_level,
+            # Effective level (the dynamic one after a notion fallback).
+            "cycle_level": next_cycle_result["cycle_level"],
             "cycle_boredom": float(next_cycle_boredom),
             "first_interaction_id": next_cycle_result["first_interaction_id"],
             "first_brain_interaction_id": next_cycle_result["ordered_interactions"][0],
