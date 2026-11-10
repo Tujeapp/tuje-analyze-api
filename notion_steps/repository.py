@@ -18,25 +18,21 @@ logger = logging.getLogger(__name__)
 
 async def load_steps(conn: asyncpg.Connection, notion_id: str) -> Tuple[List[Step], List[str]]:
     """
-    Live steps belonging to exactly this notion (cardinality(notion_ids) = 1).
-    Rows with an unknown purpose or NULL rank are skipped with a warning; live
-    steps shared with other notions are skipped with a warning too.
+    Live steps of this notion (brain_notion_step.notion_id = notion_id). A step
+    with a NULL notion_id belongs to no notion and is never found. Rows with an
+    unknown purpose or NULL rank are skipped with a warning.
     """
     rows = await conn.fetch("""
-        SELECT id::text AS id, notion_ids::text[] AS notion_ids, rank, purpose
+        SELECT id::text AS id, rank, purpose
         FROM brain_notion_step
         WHERE live = TRUE
-          AND $1::text = ANY(notion_ids::text[])
+          AND notion_id = $1::text
         ORDER BY rank NULLS LAST, id
     """, notion_id)
 
     steps: List[Step] = []
     warnings: List[str] = []
     for r in rows:
-        notion_ids = r["notion_ids"] or []
-        if len(notion_ids) != 1:
-            warnings.append(f"step {r['id']} skipped: linked to {len(notion_ids)} notions {notion_ids}")
-            continue
         purpose = normalize_purpose(r["purpose"])
         if purpose is None:
             warnings.append(f"step {r['id']} skipped: unknown purpose {r['purpose']!r}")
@@ -57,7 +53,7 @@ async def pick_notion_ids(conn: asyncpg.Connection, user_id: str, cycle_level: i
     """
     Priority: (a) the user's in-progress notions, most recently touched first;
     (b) live notions at or below cycle_level, not discovered/owned by the user,
-    with at least one live single-notion step — easiest first.
+    with at least one live step (brain_notion_step.notion_id) — easiest first.
     """
     if limit <= 0:
         return []
@@ -84,8 +80,7 @@ async def pick_notion_ids(conn: asyncpg.Connection, user_id: str, cycle_level: i
           AND EXISTS (
               SELECT 1 FROM brain_notion_step st
               WHERE st.live = TRUE
-                AND cardinality(st.notion_ids) = 1
-                AND (st.notion_ids::text[])[1] = bn.id::text
+                AND st.notion_id = bn.id::text
           )
         ORDER BY bn.level_from ASC, bn.rank ASC NULLS LAST, bn.id
         LIMIT $3

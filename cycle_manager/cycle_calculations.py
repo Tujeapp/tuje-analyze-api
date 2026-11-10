@@ -167,7 +167,8 @@ async def calculate_cycle_goal(
 
     Intro phase (checked first): a bucket-0 user (brain_user.initial_level_bucket
     = 0) with a pending initial notion gets "notion". Pending = live, type
-    'initial notion', at least one live single-notion step, not yet 'owned'.
+    'initial notion', at least one live step (brain_notion_step.notion_id),
+    not yet 'owned'.
 
     Per TuJe_Session_RampUp_and_Cycle_Goal_Logic.md §4: the first regular
     session (session_rank = 1) forces all three cycles to "story" — the
@@ -204,8 +205,7 @@ async def calculate_cycle_goal(
                       AND EXISTS (
                           SELECT 1 FROM brain_notion_step st
                           WHERE st.live = TRUE
-                            AND cardinality(st.notion_ids) = 1
-                            AND (st.notion_ids::text[])[1] = bn.id::text
+                            AND st.notion_id = bn.id::text
                       )
                       AND NOT EXISTS (
                           SELECT 1 FROM user_notion_progress unp
