@@ -576,6 +576,26 @@ class NotionEntry(BaseEntry):
         # Filter out None/empty values
         return [str(item).strip() for item in v if item and str(item).strip()]
 
+class NotionStepEntry(BaseEntry):
+    # Strict — what ContentStatus gates and the engine needs
+    notionId: str
+    rank: int
+    purpose: str
+
+    # Lenient
+    # purpose values are NOT validated here: notion_steps/rules.py (PURPOSES +
+    # normalize_purpose) is the authority; the Airtable single-select constrains
+    # them upstream.
+    name: Optional[str] = None
+    notionRank: Optional[int] = None
+    archived: Optional[bool] = False
+
+    @validator('notionId', 'purpose')
+    def validate_required_fields(cls, v):
+        if not v or len(v.strip()) == 0:
+            raise ValueError('Required fields cannot be empty')
+        return v.strip()
+
 class VocabEntry(BaseEntry):
     # All optional/lenient — Airtable ContentStatus formulas + IsTest enforce strictness
     transcriptionFr: Optional[str] = None
@@ -880,6 +900,16 @@ SYNC_CONFIGS = {
         "timestamp_field": "LastContentSyncedAt",
         "use_now_timestamp": True
     },
+    "notion_step": {
+        "table_name": "brain_notion_step",
+        "airtable_table": "Notion-Step",
+        "columns": ["id", "name", "notion_id", "notion_rank", "rank", "purpose",
+                   "live", "archived",
+                   "airtable_record_id",
+                   "created_at", "update_at"],
+        "timestamp_field": "LastContentSyncedAt",
+        "use_now_timestamp": True
+    },
     "subtopic": {
         "table_name": "brain_subtopic",
         "airtable_table": "Subtopic",
@@ -1119,6 +1149,8 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "requiredNotionIds": "required_notion_ids",
         "trickyVocabIds": "tricky_vocab_ids",
         "matchedNotionIds": "matched_notion_ids",
+        "notionId": "notion_id",
+        "notionRank": "notion_rank",
         "vocabIds": "vocab_ids",
         "mistakeId": "mistake_id",
         "vocabMatchedId": "vocab_matched_id",
@@ -1322,6 +1354,10 @@ async def webhook_sync_entity(entry: EntityEntry, background_tasks: BackgroundTa
 async def webhook_sync_notion(entry: NotionEntry, background_tasks: BackgroundTasks):
     """Webhook endpoint to sync notion data from Airtable"""
     return await generic_sync_webhook(entry, "notion", background_tasks)
+
+@router.post("/webhook-sync-notion-step")
+async def webhook_sync_notion_step(entry: NotionStepEntry, background_tasks: BackgroundTasks):
+    return await generic_sync_webhook(entry, "notion_step", background_tasks)
 
 @router.post("/webhook-sync-bonus-malus")
 async def webhook_sync_bonus_malus(entry: BonusMalusEntry, background_tasks: BackgroundTasks):
