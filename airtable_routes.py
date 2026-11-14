@@ -363,6 +363,11 @@ class InteractionEntry(BaseEntry):
     expectedAttributeIds: Optional[List[str]] = None
     variantIds: Optional[List[str]] = None
     followUpIds: Optional[List[str]] = None
+    # Deliberately [] (NOT None like the arrays above): the validator does not
+    # run on omitted keys, and brain_interaction.notion_step_ids is NOT NULL
+    # (default '{}'). With = None, a payload without notionStepIds would write
+    # NULL and fail the whole Interaction sync. Do not "fix" back to None.
+    notionStepIds: Optional[List[str]] = []
     interactionTypeId: Optional[str] = None
     interactionOptimumLevel: Optional[int] = None
     levelFrom: Optional[int] = None
@@ -406,7 +411,7 @@ class InteractionEntry(BaseEntry):
     @validator('hintIds', 'expectedEntitiesIds', 'expectedVocabIds',
                'expectedNotionIds', 'interactionNotion', 'interactionVocabIds', 'intents',
                'interactionAttributeIds', 'expectedAttributeIds',
-               'variantIds', 'followUpIds')
+               'variantIds', 'followUpIds', 'notionStepIds')
     def validate_optional_arrays(cls, v):
         # Allow None or empty arrays
         if v is None:
@@ -856,7 +861,7 @@ SYNC_CONFIGS = {
             "intents", "expected_entities_id", "expected_vocab_id",
             "expected_notion_id", "interaction_notion", "interaction_vocab_id",
             "hint_ids", "interaction_attribute_ids", "expected_attribute_ids",
-            "variant_ids", "follow_up_ids", "interaction_type_id",
+            "variant_ids", "follow_up_ids", "notion_step_ids", "interaction_type_id",
             "interaction_optimum_level", "level_from", "boredom",
             "airtable_record_id",
             "created_at", "update_at", "live", "archived", "video_url", "video_poster_url", "speak", "selection_mode", "entry_point", "entry_point_type"
@@ -1163,6 +1168,7 @@ def prepare_entry_data(entry: BaseEntry, entity_type: str) -> Dict:
         "expectedAttributeIds": "expected_attribute_ids",
         "variantIds": "variant_ids",
         "followUpIds": "follow_up_ids",
+        "notionStepIds": "notion_step_ids",
         "answerType": "answer_type",
         "answerTypicality": "answer_typicality",
         "neverAButton": "never_a_button"
@@ -1238,7 +1244,7 @@ async def sync_entity_to_database(entry_data: Dict, config: Dict) -> None:
             for col in columns:
                 value = entry_data.get(col)
                 # CHANGE 1: Add 'expected_intent_id' to this list (just add it to the existing list)
-                if col in ['intents', 'expected_entities_id', 'expected_vocab_id', 'expected_notion_id', 'interaction_notion', 'expected_intent_id', 'interaction_vocab_id', 'session_mood_ids', 'subtopic_ids', 'hint_ids', 'user_goal_ids', 'matched_as_variant_ids', 'mistake_ids', 'vocab_ids', 'group_vocab_ids', 'matched_referral_vocab_ids', 'gender', 'plural', 'all_matched_same_interaction_ids', 'all_matched_follow_interaction_ids', 'all_matched_bonus_malus_ids', 'feedback_ids', 'attribute_ids', 'interaction_attribute_ids', 'expected_attribute_ids', 'variant_ids', 'follow_up_ids', 'pairing_attribute_ids', 'required_notion_ids', 'tricky_vocab_ids', 'matched_notion_ids', 'bonus_malus_ids'] and isinstance(value, list):
+                if col in ['intents', 'expected_entities_id', 'expected_vocab_id', 'expected_notion_id', 'interaction_notion', 'expected_intent_id', 'interaction_vocab_id', 'session_mood_ids', 'subtopic_ids', 'hint_ids', 'user_goal_ids', 'matched_as_variant_ids', 'mistake_ids', 'vocab_ids', 'group_vocab_ids', 'matched_referral_vocab_ids', 'gender', 'plural', 'all_matched_same_interaction_ids', 'all_matched_follow_interaction_ids', 'all_matched_bonus_malus_ids', 'feedback_ids', 'attribute_ids', 'interaction_attribute_ids', 'expected_attribute_ids', 'variant_ids', 'follow_up_ids', 'pairing_attribute_ids', 'required_notion_ids', 'tricky_vocab_ids', 'matched_notion_ids', 'bonus_malus_ids', 'notion_step_ids'] and isinstance(value, list):
                     values.append(value)  # PostgreSQL will handle the array
                 else:
                     values.append(value)
