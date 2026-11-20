@@ -676,6 +676,11 @@ class IntentEntry(BaseEntry):
     # Entity. With no validator on the field, an empty string already passed;
     # only absent-or-null raised.
     description: Optional[str] = None
+    # levelFrom: lenient with no validator on purpose, matching Interaction,
+    # Vocab and Subtopic; brain_intent.level_from is nullable. ContentStatus
+    # DOES gate it in Airtable, so the layers disagree in the loose direction
+    # here — same as name on this model.
+    levelFrom: Optional[int] = None
     archived: Optional[bool] = False
 
 class UserGoalEntry(BaseEntry):
@@ -889,7 +894,7 @@ SYNC_CONFIGS = {
     "intent": {
         "table_name": "brain_intent",
         "airtable_table": "Intent",
-        "columns": ["id", "name", "description", "airtable_record_id",
+        "columns": ["id", "name", "description", "level_from", "airtable_record_id",
                    "created_at", "update_at", "live", "archived"],
         "timestamp_field": "LastContentSyncedAt",
         "use_now_timestamp": True
