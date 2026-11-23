@@ -13,6 +13,8 @@ from typing import List, Dict, Optional, Tuple
 from button_realization import (
     curate_quick_help,
     realize_template,
+    realize_template_variants,
+    assign_template_variants,
     find_frame_swap_distractors,
     find_story_distractors,
     find_entity_tokens,
@@ -97,6 +99,10 @@ class AnswerSelectionService:
         """
         logger.info(f"🎯 Answer selection — interaction: {interaction_id}, "
                    f"rescue: {rescue_triggered}, direction: {cycle_level_direction}")
+
+        # brain_interaction.selection_mode can be NULL or cased differently;
+        # anything but 'multiple' is single-select.
+        selection_mode = "multiple" if (selection_mode or "").strip().lower() == "multiple" else "single"
 
         # Step 1 — Determine difficulty
         difficulty = self._determine_difficulty(rescue_triggered, cycle_level_direction)
@@ -208,10 +214,18 @@ class AnswerSelectionService:
         selected_config, difficulty_used = self._select_configuration(
             available, config_matrix, difficulty
         )
+        if not selected_config and selection_mode == "multiple":
+            # Multi-select needs >= 2 correct answers; with fewer, single-select
+            # is the only presentation that works.
+            logger.info("⚠️ multiple-select not satisfiable — retrying as single-select")
+            selection_mode = "single"
+            selected_config, difficulty_used = self._select_configuration(
+                available, SINGLE_SELECT_CONFIGS, difficulty
+            )
 
         if not selected_config:
             logger.warning("⚠️ No valid configuration found — falling back to all available answers")
-            return await self._fallback(interaction_id, db_pool)
+            return await self._fallback(interaction_id, user_level, db_pool)
 
         logger.info(f"📊 Selected config: {selected_config} ({difficulty_used})")
 
@@ -264,9 +278,17 @@ class AnswerSelectionService:
     ) -> Dict[str, List[Dict]]:
         """
         Fetch all display-ready answers for this interaction grouped by type.
-        Ordered by closeness to user_level.
+        Ordered by closeness to user_level. Template answers are realized
+        (FR + EN): with expected_vocab_id, expected-word variants keep the
+        answer's type and other variants of the same template become
+        'false good'; without, the most common variant keeps the type.
+        Non-realizable templates are excluded (never shown raw).
         """
         async with db_pool.acquire() as conn:
+            expected_vocab_ids = await conn.fetchval(
+                "SELECT expected_vocab_id FROM brain_interaction WHERE id = $1",
+                interaction_id,
+            ) or []
             rows = await conn.fetch("""
                 SELECT
                     ba.id,
@@ -275,6 +297,7 @@ class AnswerSelectionService:
                     ba.image_url,
                     ba.answer_optimum_level,
                     ba.is_button,
+                    ba.attribute_ids,
                     bia.answer_type,
                     ABS(COALESCE(ba.answer_optimum_level, 100) - $2) AS level_distance
                 FROM brain_interaction_answer bia
@@ -286,18 +309,39 @@ class AnswerSelectionService:
                 ORDER BY level_distance ASC
             """, interaction_id, user_level)
 
-        # Group by type
-        available: Dict[str, List[Dict]] = {
-            "perfect": [],
-            "good": [],
-            "false good": [],
-            "wrong": []
-        }
+            available: Dict[str, List[Dict]] = {
+                "perfect": [], "good": [], "false good": [], "wrong": []
+            }
+            for row in rows:
+                answer_type = row['answer_type']
+                if answer_type not in available:
+                    continue
+                fr = row['transcription_fr']
+                if fr and find_entity_tokens(fr):
+                    variants = await realize_template_variants(
+                        conn, fr, row['transcription_en'], row['attribute_ids'],
+                        user_level, include_vocab_ids=expected_vocab_ids,
+                    )
+                    assigned = assign_template_variants(answer_type, variants, expected_vocab_ids)
+                    if not assigned:
+                        logger.info(f"📊 {interaction_id}: template {row['id']} not realizable "
+                                    f"at level {user_level} — excluded")
+                    for variant, vtype in assigned:
+                        available[vtype].append({
+                            **dict(row),
+                            "transcription_fr": variant["transcription_fr"],
+                            "transcription_en": variant["transcription_en"],
+                            "answer_type": vtype,
+                            "realized_vocab_id": variant["vocab_id"],
+                        })
+                else:
+                    available[answer_type].append({**dict(row), "realized_vocab_id": None})
 
-        for row in rows:
-            answer_type = row['answer_type']
-            if answer_type in available:
-                available[answer_type].append(dict(row))
+        # A distractor with the same text as a correct answer would be shown as
+        # wrong while being right — drop those.
+        correct_texts = {a["transcription_fr"] for k in ("perfect", "good") for a in available[k]}
+        for k in ("false good", "wrong"):
+            available[k] = [a for a in available[k] if a["transcription_fr"] not in correct_texts]
 
         # A `perfect` is a valid answer, but every config needs a `good` — so an
         # interaction with perfects and NO goods satisfies no config and drops to
@@ -385,6 +429,9 @@ class AnswerSelectionService:
         Closest to user_level wins (already sorted).
         Never reuses the same answer.
         """
+        # Variants of one template share its id (Option A): dedup on
+        # (id, realized_vocab_id) so a 'good' and a 'false good' variant of the
+        # same template can both be placed.
         used_ids = set()
         picked = []
 
@@ -399,14 +446,16 @@ class AnswerSelectionService:
             while idx < len(candidates):
                 candidate = candidates[idx]
                 idx += 1
-                if candidate['id'] not in used_ids:
-                    used_ids.add(candidate['id'])
+                key = (candidate['id'], candidate.get('realized_vocab_id'))
+                if key not in used_ids:
+                    used_ids.add(key)
                     picked.append({
                         "id": candidate['id'],
                         "transcription_fr": candidate['transcription_fr'],
                         "transcription_en": candidate['transcription_en'],
                         "image_url": candidate['image_url'],
-                        "answer_type": answer_type
+                        "answer_type": answer_type,
+                        "realized_vocab_id": candidate.get('realized_vocab_id'),
                     })
                     break
 
@@ -421,11 +470,13 @@ class AnswerSelectionService:
     async def _fallback(
         self,
         interaction_id: str,
+        user_level: int,
         db_pool: asyncpg.Pool
     ) -> Dict:
         """
         Last resort — return up to 4 display-ready answers
-        when no valid configuration can be built.
+        when no valid configuration can be built. Templates are realized to
+        their most common variant (non-realizable ones are skipped).
         """
         async with db_pool.acquire() as conn:
             rows = await conn.fetch("""
@@ -434,6 +485,7 @@ class AnswerSelectionService:
                     ba.transcription_fr,
                     ba.transcription_en,
                     ba.image_url,
+                    ba.attribute_ids,
                     bia.answer_type
                 FROM brain_interaction_answer bia
                 JOIN brain_answer ba ON bia.answer_id = ba.id
@@ -441,11 +493,28 @@ class AnswerSelectionService:
                   AND ba.live = TRUE
                   AND ba.is_button = TRUE
                 ORDER BY ba.created_at ASC
-                LIMIT 4
             """, interaction_id)
+            answers = []
+            for row in rows:
+                fr = row['transcription_fr']
+                entry = {"id": row['id'], "transcription_fr": fr,
+                         "transcription_en": row['transcription_en'],
+                         "image_url": row['image_url'], "answer_type": row['answer_type'],
+                         "realized_vocab_id": None}
+                if fr and find_entity_tokens(fr):
+                    variants = await realize_template_variants(
+                        conn, fr, row['transcription_en'], row['attribute_ids'], user_level)
+                    if not variants:
+                        continue
+                    entry.update(transcription_fr=variants[0]["transcription_fr"],
+                                 transcription_en=variants[0]["transcription_en"],
+                                 realized_vocab_id=variants[0]["vocab_id"])
+                answers.append(entry)
+                if len(answers) >= 4:
+                    break
 
         return {
-            "answers": [dict(row) for row in rows],
+            "answers": answers,
             "selection_mode": "single",
             "correct_count": 1,
             "config": [],
@@ -606,6 +675,7 @@ class AnswerSelectionService:
                         "transcription_en": candidate['transcription_en'],
                         "image_url": candidate['image_url'],
                         "answer_type": answer_type,
+                        "realized_vocab_id": candidate.get('realized_vocab_id'),
                     })
                     break
             type_index[answer_type] = idx

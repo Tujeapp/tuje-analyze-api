@@ -156,6 +156,7 @@ class EvaluateAnswerRequest(BaseModel):
     original_transcript: Optional[str] = None
     selected_answer_id: Optional[str] = None
     tapped_at_seconds: Optional[float] = None
+    selected_vocab_id: Optional[str] = None
     debug: bool = False
 
 
@@ -674,6 +675,7 @@ async def evaluate_answer(request: EvaluateAnswerRequest, http_request: Request)
             original_transcript=request.original_transcript,
             selected_answer_id=request.selected_answer_id,
             tapped_at_seconds=request.tapped_at_seconds,
+            selected_vocab_id=request.selected_vocab_id,
             debug=request.debug,
         )
         return EvaluateAnswerResponse(**result)

@@ -20,6 +20,7 @@ from gpt_fallback_service import gpt_fallback_service
 from bonus_malus_engine import evaluate_interaction_bonus_malus
 from interaction_scoring import binary_level0_score, compute_interaction_score
 from notion_steps.engine import on_interaction_committed
+from button_realization import find_entity_tokens, template_expected_ids, expected_word_verdict
 
 from session_management import (
     answer_service,
@@ -303,6 +304,7 @@ async def evaluate_user_answer(
     original_transcript: Optional[str] = None,
     selected_answer_id: Optional[str] = None,
     tapped_at_seconds: Optional[float] = None,
+    selected_vocab_id: Optional[str] = None,
     debug: bool = False,
 ) -> Dict:
     """Evaluate one attempt. Creates the answer row, increments the attempt
@@ -322,7 +324,8 @@ async def evaluate_user_answer(
     if answer_mode_used == "voice":
         return await _evaluate_voice(interaction_id, user_id, answer_id, original_transcript, db_pool, debug=debug)
     elif answer_mode_used == "multipleButtons":
-        return await _evaluate_multiple_buttons(interaction_id, answer_id, selected_answer_id, db_pool)
+        return await _evaluate_multiple_buttons(interaction_id, answer_id, selected_answer_id, db_pool,
+                                                selected_vocab_id=selected_vocab_id)
     elif answer_mode_used == "singleButton":
         return await _evaluate_single_button(interaction_id, answer_id, tapped_at_seconds, db_pool)
     else:
@@ -339,10 +342,14 @@ async def _evaluate_voice(interaction_id, user_id, answer_id, original_transcrip
     # (create_answer / update_answer_* still use the session id — they key on
     # session_answer / session_interaction — so those calls are unchanged.)
     async with db_pool.acquire() as conn:
-        brain_interaction_id = await conn.fetchval(
-            "SELECT brain_interaction_id FROM session_interaction WHERE id = $1",
-            interaction_id,
-        )
+        irow = await conn.fetchrow("""
+            SELECT si.brain_interaction_id, bi.expected_vocab_id
+            FROM session_interaction si
+            LEFT JOIN brain_interaction bi ON bi.id = si.brain_interaction_id
+            WHERE si.id = $1
+        """, interaction_id)
+    brain_interaction_id = irow["brain_interaction_id"] if irow else None
+    expected_vocab_ids = (irow["expected_vocab_id"] if irow else None) or []
     if not brain_interaction_id:
         raise ValueError(f"No brain_interaction_id for session interaction {interaction_id}")
 
@@ -412,6 +419,25 @@ async def _evaluate_voice(interaction_id, user_id, answer_id, original_transcrip
     else:
         verdict = _answer_type_to_verdict(answer_type)
         tier = 1
+        # Template answer + expected words: matching saw only the entity slot
+        # ("c'est ma entityfamilymember"); the word itself is in the adjuster's
+        # vocab list. A correct template said with a non-expected word is wrong.
+        if expected_vocab_ids and verdict in ("perfect", "good"):
+            details = matching_result.get("answer_details") or {}
+            matched_fr = details.get("transcription_fr")
+            if find_entity_tokens(matched_fr or ""):
+                found_ids = [v.id for v in (adjustment_result.list_of_vocabulary or [])]
+                async with db_pool.acquire() as conn:
+                    attrs = await conn.fetchval(
+                        "SELECT attribute_ids FROM brain_answer WHERE id = $1",
+                        matching_result.get("answer_id"),
+                    )
+                    hits = await template_expected_ids(conn, matched_fr, attrs, expected_vocab_ids)
+                if expected_word_verdict(found_ids, hits) is False:
+                    logger.info(
+                        f"voice: {interaction_id} matched template '{matched_fr}' but none of the "
+                        f"expected words {sorted(hits)} was said (found {found_ids}) — verdict wrong")
+                    verdict = "wrong"
 
     # Persist matching + the verdict together, now that the verdict is settled
     # (it depends on answer_type, which is only known after the fetch above).
@@ -524,7 +550,8 @@ async def _fetch_intents_by_ids(intent_ids, db_pool):
         return []
 
 
-async def _evaluate_multiple_buttons(interaction_id, answer_id, selected_answer_id, db_pool) -> Dict:
+async def _evaluate_multiple_buttons(interaction_id, answer_id, selected_answer_id, db_pool,
+                                     selected_vocab_id: Optional[str] = None) -> Dict:
     if not selected_answer_id:
         raise ValueError("selected_answer_id is required for multipleButtons mode")
 
@@ -534,12 +561,14 @@ async def _evaluate_multiple_buttons(interaction_id, answer_id, selected_answer_
     # (same model as voice Tier 1 — mistakes are authored on brain_interaction_answer).
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("""
-            SELECT bia.id AS interaction_answer_id, bia.answer_type, bia.mistake_ids
-            FROM brain_interaction_answer bia
-            WHERE bia.interaction_id = (
-                SELECT brain_interaction_id FROM session_interaction WHERE id = $1
-            )
-            AND bia.answer_id = $2
+            SELECT bia.id AS interaction_answer_id, bia.answer_type, bia.mistake_ids,
+                   ba.transcription_fr, ba.attribute_ids, bi.expected_vocab_id
+            FROM session_interaction si
+            JOIN brain_interaction bi ON bi.id = si.brain_interaction_id
+            JOIN brain_interaction_answer bia
+              ON bia.interaction_id = si.brain_interaction_id AND bia.answer_id = $2
+            JOIN brain_answer ba ON ba.id = bia.answer_id
+            WHERE si.id = $1
         """, interaction_id, selected_answer_id)
 
     answer_type = row["answer_type"] if row else None
@@ -579,6 +608,21 @@ async def _evaluate_multiple_buttons(interaction_id, answer_id, selected_answer_
         score, verdict = type_map.get(answer_type, (0.0, "wrong"))
         if answer_type not in type_map:
             logger.warning(f"multipleButtons: unknown answer_type '{answer_type}' — scoring 0")
+
+    # Template button: its id is the template's, so answer_type alone can't tell
+    # which word filled it. New clients send selected_vocab_id; old ones don't
+    # (None → today's behaviour).
+    if row and selected_vocab_id is not None and answer_type in ("perfect", "good"):
+        async with db_pool.acquire() as conn:
+            hits = await template_expected_ids(
+                conn, row["transcription_fr"], row["attribute_ids"], row["expected_vocab_id"])
+        if expected_word_verdict([selected_vocab_id], hits) is False:
+            logger.info(
+                f"multipleButtons: {selected_answer_id} filled with {selected_vocab_id}, not an "
+                f"expected word {sorted(hits)} — scoring as wrong")
+            score, verdict = type_map["false good"]
+    if selected_vocab_id is not None:
+        await answer_service.update_answer_selected_vocab(answer_id, selected_vocab_id, db_pool)
 
     await answer_service.update_answer_with_matching(
         answer_id=answer_id,

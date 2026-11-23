@@ -26,21 +26,71 @@ def find_entity_tokens(text: str) -> list[str]:
     return ENTITY_TOKEN_RE.findall(text or "")
 
 
-async def realize_template(
+CORRECT_TYPES = ("perfect", "good")
+
+
+def realize_en(template_en: Optional[str], token: str, vocab_en: Optional[str]) -> Optional[str]:
+    """EN for one variant: the same token replaced by the vocab's EN. None when
+    the slot can't be filled (the client then hides the EN line instead of
+    showing the raw token). A token-free EN is returned as-is."""
+    if not template_en:
+        return None
+    if token not in template_en:
+        return template_en
+    return template_en.replace(token, vocab_en) if vocab_en else None
+
+
+def assign_template_variants(answer_type: str, variants: list, expected_vocab_ids,
+                             max_variants: int = 4) -> list:
+    """
+    Which realized variants of ONE template answer are offered, and as what.
+    variants: realize_template_variants() output, most common first.
+      - correct template (perfect/good) and some variant uses an expected word:
+        every expected-word variant keeps answer_type; up to max_variants-1
+        other variants become 'false good' (same sentence, wrong word).
+      - otherwise: the most common variant keeps answer_type.
+    Returns [(variant, assigned_type)].
+    """
+    if not variants:
+        return []
+    expected = set(expected_vocab_ids or [])
+    if answer_type in CORRECT_TYPES and expected:
+        hits = [v for v in variants if v["vocab_id"] in expected]
+        if hits:
+            others = [v for v in variants if v["vocab_id"] not in expected]
+            return ([(v, answer_type) for v in hits]
+                    + [(v, "false good") for v in others[:max(0, max_variants - 1)]])
+    return [(variants[0], answer_type)]
+
+
+def expected_word_verdict(chosen_vocab_ids, template_expected_ids) -> Optional[bool]:
+    """
+    Template answers only. template_expected_ids = expected words that can fill
+    THIS template. None = the rule doesn't apply (no expected word fits, or
+    chosen_vocab_ids is None = unknown, e.g. an old client); else True iff a
+    chosen word is expected. An empty chosen list (voice: no word recognised)
+    is False.
+    """
+    hits = set(template_expected_ids or [])
+    if not hits or chosen_vocab_ids is None:
+        return None
+    return bool(set(chosen_vocab_ids) & hits)
+
+
+async def realize_template_variants(
     conn,
     template_transcription_fr: str,
-    template_attribute_ids: list[str],
+    template_transcription_en: Optional[str],
+    template_attribute_ids: list,
     user_level: int,
-    max_fills: int = 1,
-) -> list[str]:
+    include_vocab_ids: Optional[list] = None,
+) -> list:
     """
-    Realize a single-entity template into up to max_fills display strings.
-
-    Returns [] if: no entity token found (caller should treat a literal template
-    as already-displayable), or the entity is unknown, or no vocab qualifies.
-
-    A literal answer (no entity token) is NOT this function's job — the caller
-    decides that a token-free template is used as-is.
+    Every vocab that can fill a single-entity template, most common first:
+    [{vocab_id, transcription_fr, transcription_en}]. Same filter as
+    realize_template, except include_vocab_ids bypass the level_own gate
+    (expected words are always offered). [] for a literal, a multi-slot
+    template, an unknown entity, or no qualifying vocab.
     """
     tokens = find_entity_tokens(template_transcription_fr)
     if not tokens:
@@ -65,39 +115,77 @@ async def realize_template(
         logger.warning(f"realize_template: no brain_entity named '{token}'")
         return []
 
-    # Candidate vocab in this entity, level-gated, ranked by commonness.
-    # Union-match: the template's required attributes must all be present in the
-    # vocab's own attribute_ids OR its pairing_attribute_ids.
+    # Candidate vocab in this entity, level-gated (expected words bypass the
+    # gate), ranked by commonness. Union-match: the template's required
+    # attributes must all be present in the vocab's own attribute_ids OR its
+    # pairing_attribute_ids.
     rows = await conn.fetch(
         """
-        SELECT transcription_fr, attribute_ids, pairing_attribute_ids, commonness
+        SELECT id, transcription_fr, transcription_en,
+               attribute_ids, pairing_attribute_ids, commonness
         FROM brain_vocab
         WHERE entity_type_id = $1
           AND live = true
-          AND (level_own IS NULL OR level_own <= $2)
+          AND (level_own IS NULL OR level_own <= $2 OR id = ANY($3::varchar[]))
         ORDER BY commonness DESC NULLS LAST, transcription_fr
         """,
-        entity_id, user_level,
+        entity_id, user_level, list(include_vocab_ids or []),
     )
 
     required = set(template_attribute_ids or [])
-    picks: list[str] = []
+    variants = []
     for r in rows:
         own = set(r["attribute_ids"] or [])
         pairing = set(r["pairing_attribute_ids"] or [])
-        if required.issubset(own | pairing):
-            # Replace the token with this vocab's readable form.
-            display = template_transcription_fr.replace(token, r["transcription_fr"])
-            picks.append(display)
-            if len(picks) >= max_fills:
-                break
+        if not required.issubset(own | pairing):
+            continue
+        variants.append({
+            "vocab_id": r["id"],
+            "transcription_fr": template_transcription_fr.replace(token, r["transcription_fr"]),
+            "transcription_en": realize_en(template_transcription_en, token, r["transcription_en"]),
+        })
 
-    if not picks:
+    if not variants:
         logger.info(
             f"realize_template: no vocab in {entity_id} satisfied required attrs "
             f"{required} at level {user_level}"
         )
-    return picks
+    return variants
+
+
+async def template_expected_ids(conn, template_fr: Optional[str], template_attribute_ids,
+                                expected_vocab_ids) -> set:
+    """Expected words that can fill this template. Level-independent (expected
+    words bypass level_own), so display and evaluate always agree."""
+    expected = [e for e in (expected_vocab_ids or []) if e]
+    if not expected or not find_entity_tokens(template_fr or ""):
+        return set()
+    variants = await realize_template_variants(
+        conn, template_fr, None, template_attribute_ids, 0, include_vocab_ids=expected)
+    return {v["vocab_id"] for v in variants} & set(expected)
+
+
+async def realize_template(
+    conn,
+    template_transcription_fr: str,
+    template_attribute_ids: list[str],
+    user_level: int,
+    max_fills: int = 1,
+) -> list[str]:
+    """
+    Realize a single-entity template into up to max_fills display strings.
+
+    Returns [] if: no entity token found (caller should treat a literal template
+    as already-displayable), or the entity is unknown, or no vocab qualifies.
+
+    A literal answer (no entity token) is NOT this function's job — the caller
+    decides that a token-free template is used as-is.
+    """
+    # Same query and logs as before, via the shared variant builder (an empty
+    # include list leaves the level gate unchanged).
+    variants = await realize_template_variants(
+        conn, template_transcription_fr, None, template_attribute_ids, user_level)
+    return [v["transcription_fr"] for v in variants[:max_fills]]
 
 
 async def curate_quick_help(

@@ -135,6 +135,20 @@ class AnswerService:
             """, answer_id, similarity_score, matched_answer_id, verdict)
         
         logger.info(f"✅ Answer updated with matching: {answer_id} (score: {similarity_score})")
+
+    async def update_answer_selected_vocab(
+        self,
+        answer_id: str,
+        selected_vocab_id: str,
+        db_pool: asyncpg.Pool
+    ):
+        """Which word filled the template button the learner chose (sent by new
+        clients only)."""
+        async with db_pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE session_answer SET selected_vocab_id = $2 WHERE id = $1",
+                answer_id, selected_vocab_id,
+            )
     
     async def update_answer_with_gpt(
         self,
