@@ -1,0 +1,255 @@
+#!/usr/bin/env python3
+# ============================================================================
+# test_intent_vocab.py - Unit tests for intent vocab rules + slot planner
+# ============================================================================
+# Pure-logic (no DB, no .env):
+#   intent_vocab.rules:   increment, apply_evidence, is_owned, pack ratios/state
+#   intent_vocab.planner: plan_slots (spread, f weighting, saturation, errors)
+#
+# RUN: cd ~/Desktop/tuje-analyze-api ; source venv/bin/activate ; python test_intent_vocab.py
+# ============================================================================
+
+from intent_vocab.rules import (
+    PASSIVE_INC,
+    ACTIVE_VOICE_INC,
+    ACTIVE_BUTTON_INC,
+    WordScore,
+    PackWord,
+    increment,
+    apply_evidence,
+    apply_downgrade,
+    is_owned,
+    weight_of,
+    pack_ratios,
+    pack_state,
+)
+from intent_vocab.planner import Candidate, plan_slots, PlannerError
+
+
+def no_consecutive(ids, last=None):
+    prev = last
+    for i in ids:
+        if i == prev:
+            return False
+        prev = i
+    return True
+
+
+def approx(a, b):
+    return abs(a - b) < 1e-9
+
+
+def test_increment():
+    print("=" * 60); print("TEST 1 - increment per kind/mode"); print("=" * 60)
+    for mode in ("voice", "multipleButtons", "singleButton"):
+        assert increment("passive", mode) == PASSIVE_INC == 50
+    assert increment("active", "voice") == ACTIVE_VOICE_INC == 50
+    assert increment("active", "multipleButtons") == ACTIVE_BUTTON_INC == 25
+    assert increment("active", "singleButton") == 0
+    assert increment("active", "voice", {"level": 3}) == 50  # context unused in v1
+    for bad in (("bogus", "voice"), ("active", "bogus")):
+        try:
+            increment(*bad)
+            raise AssertionError(f"expected ValueError for {bad}")
+        except ValueError:
+            pass
+    print("  PASS")
+
+
+def test_apply_evidence():
+    print("=" * 60); print("TEST 2 - apply_evidence"); print("=" * 60)
+    scores = {"a": WordScore(80, 90)}
+    d = apply_evidence(scores, ["a", "b", "b"], ["a", "b"], "voice")
+    assert d == {"a": (20, 10), "b": (50, 50)}, d          # cap + duplicate once
+    assert scores["a"] == WordScore(100, 100)
+    assert scores["b"] == WordScore(50, 50)                 # created
+    d = apply_evidence(scores, ["a"], ["a"], "voice")
+    assert d == {"a": (0, 0)}                               # already maxed
+    d = apply_evidence(scores, [], ["b"], "multipleButtons")
+    assert d == {"b": (0, 25)} and scores["b"] == WordScore(50, 75)
+    d = apply_evidence(scores, ["c"], ["c"], "singleButton")
+    assert d == {"c": (50, 0)} and scores["c"] == WordScore(50, 0)
+    print("  PASS")
+
+
+def test_is_owned():
+    print("=" * 60); print("TEST 3 - is_owned"); print("=" * 60)
+    assert is_owned(WordScore(100, 100), None, 1)
+    assert not is_owned(WordScore(100, 99), None, 1)
+    assert not is_owned(WordScore(0, 0), None, 99)
+    assert is_owned(WordScore(0, 0), 3, 3)
+    assert is_owned(WordScore(0, 0), 3, 5)
+    assert not is_owned(WordScore(0, 0), 3, 2)
+    print("  PASS")
+
+
+def test_pack_ratios():
+    print("=" * 60); print("TEST 4 - pack_ratios"); print("=" * 60)
+    assert weight_of(None) == 0.5 and weight_of(-2) == 0 and weight_of(0.8) == 0.8
+    words = [
+        PackWord("a", 1.0, 100, 100, True),   # owned
+        PackWord("b", None, 100, 0, False),   # understood, weight 0.5
+        PackWord("c", 0.5, 0, 0, False),
+    ]
+    r = pack_ratios(words)
+    assert approx(r["understood_ratio"], 1.5 / 2.0), r
+    assert approx(r["owned_ratio"], 1.0 / 2.0), r
+    assert approx(r["avg_passive"], (100 + 50) / 2.0), r
+    assert approx(r["avg_active"], 100 / 2.0), r
+    # owned via level counts as understood even with passive < 100
+    r = pack_ratios([PackWord("x", 1.0, 0, 0, True)])
+    assert r["understood_ratio"] == 1.0 and r["owned_ratio"] == 1.0
+    zero = {"understood_ratio": 0.0, "owned_ratio": 0.0, "avg_passive": 0.0, "avg_active": 0.0}
+    assert pack_ratios([]) == zero
+    assert pack_ratios([PackWord("z", -1, 100, 100, True)]) == zero
+    print("  PASS")
+
+
+def test_pack_state():
+    print("=" * 60); print("TEST 5 - pack_state thresholds + never downgrade"); print("=" * 60)
+    r = lambda u, o: {"understood_ratio": u, "owned_ratio": o}
+    assert pack_state(r(0.69, 0.0), None, None) == "in_progress"
+    assert pack_state(r(0.7, 0.0), None, None) == "discovered"
+    assert pack_state(r(0.7, 0.7), None, None) == "owned"
+    assert pack_state(r(0.5, 0.0), 0.5, None) == "discovered"
+    assert pack_state(r(0.9, 0.9), 0.95, None) == "in_progress"
+    assert pack_state(r(0.0, 0.0), None, "discovered") == "discovered"
+    assert pack_state(r(0.8, 0.0), None, "owned") == "owned"
+    assert pack_state(r(0.8, 0.8), None, "discovered") == "owned"
+    print("  PASS")
+
+
+def _pack():
+    return {
+        "A": PackWord("A", 1.0, 0, 0, False),
+        "B": PackWord("B", 0.5, 0, 0, False),
+        "C": PackWord("C", 0.2, 0, 0, False),
+    }
+
+
+def _cands():
+    return [
+        Candidate("cA", {"A"}, {"A"}, "voice"),
+        Candidate("cAB", {"A", "B"}, set(), "multipleButtons"),
+        Candidate("cB", {"B"}, {"B"}, "voice"),
+        Candidate("cC", {"C"}, {"C"}, "voice"),
+    ]
+
+
+def test_planner_spread():
+    print("=" * 60); print("TEST 6 - planner: 3 words x 4 candidates, 7 slots"); print("=" * 60)
+    words = _pack()
+    res = plan_slots(words, _cands(), [], set(), 7)
+    print("  plan:", res.ids)
+    assert len(res.ids) == 7
+    assert res.ids[0] == "cA"                       # heaviest, lowest-scored word
+    assert res.ids == ["cA", "cAB", "cB", "cA", "cC", "cB", "cC"], res.ids
+    assert set(res.ids) == {"cA", "cAB", "cB", "cC"}  # simulated credit spreads picks
+    assert no_consecutive(res.ids)
+    assert res.warnings == []
+    # caller's scores untouched by the simulation
+    assert all(w.passive == 0 and w.active == 0 for w in words.values())
+    # last_played_id blocks a first-slot repeat
+    res = plan_slots(_pack(), _cands(), ["cA"], set(), 3, last_played_id="cA")
+    assert res.ids[0] != "cA" and len(res.ids) == 3 and no_consecutive(res.ids, "cA")
+    # single candidate: repeats allowed since there's no alternative
+    res = plan_slots(_pack(), [Candidate("only", {"A"}, {"A"}, "voice")], [], set(), 3, "only")
+    assert res.ids == ["only"] * 3
+    assert plan_slots(_pack(), _cands(), [], set(), 0).ids == []
+    print("  PASS")
+
+
+def test_planner_f_weighting():
+    print("=" * 60); print("TEST 7 - planner: voice outranks buttons once passive is 100"); print("=" * 60)
+    words = {"X": PackWord("X", 1.0, 100, 0, False)}
+    cands = [
+        Candidate("a_btn", {"X"}, {"X"}, "multipleButtons"),
+        Candidate("b_single", {"X"}, {"X"}, "singleButton"),
+        Candidate("z_voice", {"X"}, {"X"}, "voice"),
+    ]
+    res = plan_slots(words, cands, [], set(), 1)
+    assert res.ids == ["z_voice"], res.ids          # 100 vs 50 vs 0, despite id order
+    print("  PASS")
+
+
+def test_planner_saturated():
+    print("=" * 60); print("TEST 8 - planner: saturated pack"); print("=" * 60)
+    words = {
+        "A": PackWord("A", 1.0, 100, 100, True),
+        "B": PackWord("B", 1.0, 10, 0, True),        # owned by level
+    }
+    cands = [
+        Candidate("c1", {"A"}, {"A"}, "voice"),
+        Candidate("c2", {"B"}, {"B"}, "voice"),
+        Candidate("c3", {"A", "B"}, set(), "multipleButtons"),
+    ]
+    res = plan_slots(words, cands, ["c1"], {"c2"}, 5)
+    print("  plan:", res.ids, res.warnings)
+    assert len(res.ids) == 5 and no_consecutive(res.ids)
+    assert res.warnings == ["pack saturated"]
+    assert res.ids[0] == "c3"                       # not played, not seen
+    print("  PASS")
+
+
+def test_owned_ignores_evidence():
+    print("=" * 60); print("TEST 10 - owned words ignore positive evidence"); print("=" * 60)
+    scores = {"o": WordScore(30, 0)}
+    d = apply_evidence(scores, ["o", "n", "ghost"], ["o", "n", "ghost"], "voice",
+                       owned_ids={"o", "ghost"})
+    assert d == {"n": (50, 50)}, d
+    assert scores["o"] == WordScore(30, 0)          # unchanged
+    assert "ghost" not in scores                    # no entry created
+    assert apply_evidence(scores, ["o"], [], "voice", owned_ids=None) == {"o": (50, 0)}
+    print("  PASS")
+
+
+def test_downgrade():
+    print("=" * 60); print("TEST 11 - apply_downgrade + downgraded ownership"); print("=" * 60)
+    # owned by level, with some passive score
+    scores = {"lvl": WordScore(80, 40), "low": WordScore(20, 10)}
+    assert is_owned(scores["lvl"], 2, 3)
+    d = apply_downgrade(scores, ["lvl", "lvl", "low", "new"])
+    assert d == {"lvl": -50, "low": -20, "new": 0}, d   # duplicate once, floor 0
+    assert scores["lvl"] == WordScore(30, 40)
+    assert scores["low"] == WordScore(0, 10)            # active untouched
+    assert scores["new"] == WordScore(0, 0)             # created, 0 stays 0
+    assert not is_owned(scores["lvl"], 2, 3, downgraded=True)
+    assert is_owned(scores["lvl"], 2, 3, downgraded=False)
+    # score ownership survives the downgraded flag
+    assert is_owned(WordScore(100, 100), 2, 3, downgraded=True)
+    # downgrade hits a score-owned word too
+    s = {"full": WordScore(100, 100)}
+    assert apply_downgrade(s, ["full"], amount=30) == {"full": -30}
+    assert s["full"] == WordScore(70, 100) and not is_owned(s["full"], None, 1)
+    assert apply_downgrade(s, ["full"], amount=0) == {"full": 0}
+    print("  PASS")
+
+
+def test_planner_errors():
+    print("=" * 60); print("TEST 9 - planner: no candidates"); print("=" * 60)
+    try:
+        plan_slots(_pack(), [], [], set(), 3)
+        raise AssertionError("expected PlannerError")
+    except PlannerError:
+        pass
+    assert plan_slots(_pack(), [], [], set(), 0).ids == []
+    print("  PASS")
+
+
+def main():
+    test_increment()
+    test_apply_evidence()
+    test_is_owned()
+    test_pack_ratios()
+    test_pack_state()
+    test_planner_spread()
+    test_planner_f_weighting()
+    test_planner_saturated()
+    test_planner_errors()
+    test_owned_ignores_evidence()
+    test_downgrade()
+    print("\nALL TESTS PASSED")
+
+
+if __name__ == "__main__":
+    main()
