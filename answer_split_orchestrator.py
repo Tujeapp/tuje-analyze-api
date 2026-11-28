@@ -20,6 +20,7 @@ from gpt_fallback_service import gpt_fallback_service
 from bonus_malus_engine import evaluate_interaction_bonus_malus
 from interaction_scoring import binary_level0_score, compute_interaction_score
 from notion_steps.engine import on_interaction_committed
+from intent_vocab.hook import on_commit_credit_words
 from button_realization import find_entity_tokens, template_expected_ids, expected_word_verdict
 
 from session_management import (
@@ -804,6 +805,7 @@ async def commit_answer(interaction_id: str, answer_id: str, db_pool: asyncpg.Po
                     db_pool=db_pool)
                 if interaction["cycle_goal"] == "notion":
                     await _notion_step_hook(interaction_id, answer_id, db_pool)
+                await _intent_vocab_hook(interaction_id, answer_id, db_pool)
                 return await _commit_recap(interaction_id, db_pool)
 
             gross = brow["prior_score"] if brow["prior_score"] is not None else 100
@@ -844,6 +846,7 @@ async def commit_answer(interaction_id: str, answer_id: str, db_pool: asyncpg.Po
                 interaction_score=score, db_pool=db_pool)
             if interaction["cycle_goal"] == "notion":
                 await _notion_step_hook(interaction_id, answer_id, db_pool)
+            await _intent_vocab_hook(interaction_id, answer_id, db_pool)
         elif matched_answer_id:
             async with db_pool.acquire() as conn:
                 srow = await conn.fetchrow("""
@@ -877,6 +880,7 @@ async def commit_answer(interaction_id: str, answer_id: str, db_pool: asyncpg.Po
                     db_pool=db_pool)
                 if interaction["cycle_goal"] == "notion":
                     await _notion_step_hook(interaction_id, answer_id, db_pool)
+                await _intent_vocab_hook(interaction_id, answer_id, db_pool)
                 return await _commit_recap(interaction_id, db_pool)
 
             gross = srow["prior_score"] if srow["prior_score"] is not None else 100
@@ -902,6 +906,7 @@ async def commit_answer(interaction_id: str, answer_id: str, db_pool: asyncpg.Po
                 interaction_score=result["interaction_score"], db_pool=db_pool)
             if interaction["cycle_goal"] == "notion":
                 await _notion_step_hook(interaction_id, answer_id, db_pool)
+            await _intent_vocab_hook(interaction_id, answer_id, db_pool)
         else:
             # No matched answer — user forced past. Incomplete, unscored.
             await answer_service.mark_as_final_answer(
@@ -912,6 +917,7 @@ async def commit_answer(interaction_id: str, answer_id: str, db_pool: asyncpg.Po
                 db_pool=db_pool)
             if interaction["cycle_goal"] == "notion":
                 await _notion_step_hook(interaction_id, answer_id, db_pool)
+            await _intent_vocab_hook(interaction_id, answer_id, db_pool)
         return await _commit_recap(interaction_id, db_pool)
 
     # Button modes only (voice returns early above): shared completion tail.
@@ -922,6 +928,7 @@ async def commit_answer(interaction_id: str, answer_id: str, db_pool: asyncpg.Po
         interaction_score=score, db_pool=db_pool)
     if interaction["cycle_goal"] == "notion":
         await _notion_step_hook(interaction_id, answer_id, db_pool)
+    await _intent_vocab_hook(interaction_id, answer_id, db_pool)
 
     return await _commit_recap(interaction_id, db_pool)
 
@@ -936,6 +943,19 @@ async def _notion_step_hook(interaction_id: str, answer_id: str, db_pool: asyncp
     except Exception:
         logger.error(f"notion-step hook failed for {interaction_id} — commit kept, "
                      f"tail unchanged", exc_info=True)
+
+
+async def _intent_vocab_hook(interaction_id: str, answer_id: str, db_pool: asyncpg.Pool) -> None:
+    """Word credit into user_vocab_progress (Intent Vocab spec §10–11). Runs
+    after every commit (complete OR incomplete, any cycle goal), independent of
+    the notion-step hook, on its own connection; any failure is logged and the
+    commit stands."""
+    try:
+        async with db_pool.acquire() as conn:
+            await on_commit_credit_words(conn, interaction_id, answer_id)
+    except Exception:
+        logger.error(f"intent-vocab hook failed for {interaction_id} — commit kept, "
+                     f"words not credited", exc_info=True)
 
 
 async def _commit_recap(interaction_id: str, db_pool: asyncpg.Pool) -> Dict:

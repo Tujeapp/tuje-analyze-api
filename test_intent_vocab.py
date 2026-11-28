@@ -24,6 +24,7 @@ from intent_vocab.rules import (
     pack_state,
 )
 from intent_vocab.planner import Candidate, plan_slots, PlannerError
+from intent_vocab.hook import evidence_ids, newly_added_ids, vocab_ids_from_found
 
 
 def no_consecutive(ids, last=None):
@@ -236,6 +237,41 @@ def test_planner_errors():
     print("  PASS")
 
 
+def test_hook_evidence_ids():
+    print("=" * 60); print("TEST 12 - hook: evidence id sets from verdict/mode"); print("=" * 60)
+    found = '[{"id": "V1", "transcription_fr": "chat"}, {"id": "V2"}, {"transcription_fr": "x"}]'
+    args = (["I1", None], ["E1", "I1"], found, "S1", ["A1", "A2"])
+    for verdict in ("perfect", "good"):
+        assert evidence_ids(verdict, "voice", *args) == ({"I1", "E1"}, {"V1", "V2"})
+        assert evidence_ids(verdict, "multipleButtons", *args) == ({"I1", "E1"}, {"S1", "A1", "A2"})
+        assert evidence_ids(verdict, "singleButton", *args) == ({"I1", "E1"}, set())
+    for verdict in ("wrong", "not_understood", None):
+        for mode in ("voice", "multipleButtons", "singleButton"):
+            assert evidence_ids(verdict, mode, *args) == (set(), set())
+    assert evidence_ids("perfect", None, *args) == (set(), set())        # unknown mode
+    assert evidence_ids("perfect", "multipleButtons", None, None, None, None, None) == (set(), set())
+    assert evidence_ids("good", "multipleButtons", [], [], None, None, ["A1"]) == (set(), {"A1"})
+    # vocabulary_found shapes: text, already-decoded list, NULL, junk
+    assert vocab_ids_from_found([{"id": "V9"}]) == {"V9"}
+    assert vocab_ids_from_found(None) == set()
+    assert vocab_ids_from_found("not json") == set()
+    assert vocab_ids_from_found('{"id": "V1"}') == set()
+    print("  PASS")
+
+
+def test_newly_added_ids():
+    print("=" * 60); print("TEST 13 - newly_added_ids (not-understood re-record)"); print("=" * 60)
+    assert newly_added_ids(None, ["B", "A"]) == ["B", "A"]            # first record, order kept
+    assert newly_added_ids(["A"], ["C", "A", "B"]) == ["C", "B"]      # only the new ones
+    assert newly_added_ids([], ["A", "A", "B", "A"]) == ["A", "B"]    # dupes once
+    assert newly_added_ids(["A", None], [None, "", "A", "B"]) == ["B"]  # None/empty ignored
+    assert newly_added_ids(["A", "B"], ["B", "A"]) == []              # same set, reordered
+    assert newly_added_ids(["A", "B"], []) == []                      # removals downgrade nothing
+    assert newly_added_ids(["A"], None) == []
+    assert newly_added_ids(None, None) == []
+    print("  PASS")
+
+
 def main():
     test_increment()
     test_apply_evidence()
@@ -248,6 +284,8 @@ def main():
     test_planner_errors()
     test_owned_ignores_evidence()
     test_downgrade()
+    test_hook_evidence_ids()
+    test_newly_added_ids()
     print("\nALL TESTS PASSED")
 
 

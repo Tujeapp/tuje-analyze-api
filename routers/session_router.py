@@ -20,6 +20,7 @@ from session_management import (
     bonus_malus_service
 )
 from bonus_malus_engine import evaluate_interaction_bonus_malus
+from intent_vocab.hook import downgrade_not_understood, newly_added_ids
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -1035,15 +1036,45 @@ async def record_not_understood_vocab(
     """L3b: persist which vocab blocks the user marked as not understood during
     the Understand-L3 flow. Written to session_interaction.not_understood_vocab_ids.
     Replaces (not appends) — the L3 flow runs once per interaction. An empty list
-    is valid and meaningful (user understood every block)."""
+    is valid and meaningful (user understood every block).
+
+    Ids newly added versus the stored array are downgraded in
+    user_vocab_progress (passive lowered, downgraded = true), in the same
+    transaction but behind a savepoint: a downgrade failure is logged and
+    never fails the array write or the endpoint."""
     try:
         pool = http_request.app.state.db_pool
+        new_ids = list(request.vocab_ids)
         async with pool.acquire() as conn:
-            result = await conn.execute("""
-                UPDATE session_interaction
-                SET not_understood_vocab_ids = $2::text[]
-                WHERE id = $1
-            """, request.session_interaction_id, list(request.vocab_ids))
+            async with conn.transaction():
+                current = await conn.fetchrow("""
+                    SELECT si.not_understood_vocab_ids::text[] AS old_ids, s.user_id
+                    FROM session_interaction si
+                    JOIN session s ON s.id = si.session_id
+                    WHERE si.id = $1
+                    FOR UPDATE OF si
+                """, request.session_interaction_id)
+                result = await conn.execute("""
+                    UPDATE session_interaction
+                    SET not_understood_vocab_ids = $2::text[]
+                    WHERE id = $1
+                """, request.session_interaction_id, new_ids)
+
+                if current is not None:
+                    added = newly_added_ids(current["old_ids"], new_ids)
+                    if added:
+                        try:
+                            async with conn.transaction():  # savepoint
+                                deltas = await downgrade_not_understood(
+                                    conn, current["user_id"], added)
+                            logger.info(
+                                f"record-not-understood-vocab: si={request.session_interaction_id} "
+                                f"user={current['user_id']} downgraded={deltas}")
+                        except Exception:
+                            logger.error(
+                                f"record-not-understood-vocab: downgrade failed for "
+                                f"{request.session_interaction_id} — array kept, words "
+                                f"not downgraded", exc_info=True)
         updated = result.split()[-1] if result else "0"
         if updated == "0":
             logger.warning(
