@@ -5,7 +5,7 @@
 # asyncpg is not imported here so the pure modules stay importable without it.
 # ============================================================================
 
-from typing import Dict, Iterable, Optional, Tuple
+from typing import Dict, Iterable, Optional, Set, Tuple
 
 from .rules import WordScore
 
@@ -44,6 +44,23 @@ async def load_level_own(conn, vocab_ids: Iterable[str]) -> Dict[str, Optional[i
     rows = await conn.fetch(
         "SELECT id, level_own FROM brain_vocab WHERE id = ANY($1::text[])", ids)
     return {r["id"]: r["level_own"] for r in rows}
+
+
+async def load_slot_vocab_ids(conn, vocab_ids: Iterable[str], entity_tokens: Iterable[str]) -> Set[str]:
+    """Of these vocab ids, the ones that can fill a template slot: their
+    entity is the live brain_entity named by one of the template's tokens
+    (same token → entity mapping as button_realization)."""
+    ids = sorted(set(vocab_ids))
+    tokens = sorted(set(entity_tokens))
+    if not ids or not tokens:
+        return set()
+    rows = await conn.fetch("""
+        SELECT v.id
+        FROM brain_vocab v
+        JOIN brain_entity e ON e.id = v.entity_type_id
+        WHERE v.id = ANY($1::text[]) AND e.name = ANY($2::text[]) AND e.live = true
+    """, ids, tokens)
+    return {r["id"] for r in rows}
 
 
 async def upsert_word_rows(conn, user_id: str, rows: Dict[str, WordRow]) -> int:

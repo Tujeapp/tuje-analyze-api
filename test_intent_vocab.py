@@ -259,6 +259,48 @@ def test_hook_evidence_ids():
     print("  PASS")
 
 
+def test_hook_template_slot():
+    print("=" * 60); print("TEST 14 - hook: template answer credits only the realized slot word"); print("=" * 60)
+    # "c'est ma entityFamilyMember": 3 variants A/B/C + fixed word F ("c'est").
+    answer_vocab = ["F", "A", "B", "C"]
+    slot = {"A", "B", "C"}
+    inter, expected = ["I1"], ["A"]
+
+    # multipleButtons, selected = variant A (correct) → active = {A, F}
+    p, a = evidence_ids("good", "multipleButtons", inter, expected, None, "A", answer_vocab, slot)
+    assert p == {"I1", "A"} and a == {"A", "F"}, (p, a)
+    # wrong variant selected (evaluate turns it into a wrong verdict) → no credit at all
+    for verdict in ("wrong", "not_understood"):
+        assert evidence_ids(verdict, "multipleButtons", inter, expected, None, "B",
+                            answer_vocab, slot) == (set(), set())
+    # old client, no selected_vocab_id → no slot word, fixed word still credited
+    _, a = evidence_ids("perfect", "multipleButtons", inter, expected, None, None, answer_vocab, slot)
+    assert a == {"F"}, a
+    # selected word not listed on the answer is still the realized word
+    _, a = evidence_ids("perfect", "multipleButtons", inter, expected, None, "A", ["F", "B"], slot)
+    assert a == {"A", "F"}, a
+
+    # voice: the adjuster found F + A (+ B said too) → only the expected slot word
+    found = [{"id": "F"}, {"id": "A"}, {"id": "B"}]
+    _, a = evidence_ids("good", "voice", inter, expected, found, None, answer_vocab, slot)
+    assert a == {"F", "A"}, a
+    # voice, no expected words on the interaction → every slot word said
+    _, a = evidence_ids("good", "voice", inter, [], [{"id": "F"}, {"id": "B"}], None, answer_vocab, slot)
+    assert a == {"F", "B"}, a
+    # wrong verdict → nothing
+    assert evidence_ids("wrong", "voice", inter, expected, found, None, answer_vocab, slot) == (set(), set())
+
+    # non-template (slot None) unchanged: every answer word + selected; every found word
+    _, a = evidence_ids("good", "multipleButtons", inter, expected, None, "S", answer_vocab, None)
+    assert a == {"F", "A", "B", "C", "S"}, a
+    _, a = evidence_ids("good", "voice", inter, expected, found, None, answer_vocab, None)
+    assert a == {"F", "A", "B"}, a
+    # template whose slot set came back empty behaves like non-template for fixed words
+    _, a = evidence_ids("good", "multipleButtons", inter, expected, None, "A", ["F"], set())
+    assert a == {"A", "F"}, a
+    print("  PASS")
+
+
 def test_newly_added_ids():
     print("=" * 60); print("TEST 13 - newly_added_ids (not-understood re-record)"); print("=" * 60)
     assert newly_added_ids(None, ["B", "A"]) == ["B", "A"]            # first record, order kept
@@ -286,6 +328,7 @@ def main():
     test_downgrade()
     test_hook_evidence_ids()
     test_newly_added_ids()
+    test_hook_template_slot()
     print("\nALL TESTS PASSED")
 
 

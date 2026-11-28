@@ -15,8 +15,10 @@ import json
 import logging
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
+from button_realization import find_entity_tokens
+
 from . import rules
-from .repository import load_level_own, load_word_rows, upsert_word_rows
+from .repository import load_level_own, load_slot_vocab_ids, load_word_rows, upsert_word_rows
 
 logger = logging.getLogger(__name__)
 
@@ -53,16 +55,35 @@ def evidence_ids(
     vocabulary_found,
     selected_vocab_id: Optional[str],
     answer_vocab_ids,
+    slot_vocab_ids: Optional[Iterable[str]] = None,
 ) -> Tuple[Set[str], Set[str]]:
     """Pure: (passive_ids, active_ids) for positive credit. Empty unless the
-    verdict is perfect/good and the mode is known."""
+    verdict is perfect/good and the mode is known.
+
+    slot_vocab_ids: None for a literal answer. For a template answer, the
+    words that can fill its entity slot (the template's variants, by entity
+    membership). Only the realized slot word is credited active:
+      - multipleButtons: selected_vocab_id (none if the client didn't send it);
+      - voice: slot words said that are expected (all slot words said when the
+        interaction has no expected words).
+    Non-slot words of the answer (e.g. "c'est") are credited as before."""
     if verdict not in CREDIT_VERDICTS or mode not in rules.MODES:
         return set(), set()
     passive = _clean(interaction_vocab_ids) | _clean(expected_vocab_ids)
+    slot = None if slot_vocab_ids is None else _clean(slot_vocab_ids)
     if mode == "voice":
-        active = vocab_ids_from_found(vocabulary_found)
+        found = vocab_ids_from_found(vocabulary_found)
+        if slot is None:
+            active = found
+        else:
+            said = found & slot
+            expected = _clean(expected_vocab_ids)
+            active = (found - slot) | (said & expected if expected else said)
     elif mode == "multipleButtons":
-        active = _clean([selected_vocab_id]) | _clean(answer_vocab_ids)
+        fixed = _clean(answer_vocab_ids)
+        if slot is not None:
+            fixed -= slot
+        active = fixed | _clean([selected_vocab_id])
     else:  # singleButton
         active = set()
     return passive, active
@@ -78,12 +99,18 @@ async def on_commit_credit_words(conn, session_interaction_id: str, answer_id: s
                    bi.expected_vocab_id::text[]        AS expected_vocab_id,
                    sa.verdict, sa.answer_mode_used, sa.vocabulary_found,
                    sa.selected_vocab_id,
-                   ba.vocab_ids::text[]                AS answer_vocab_ids
+                   ba.vocab_ids::text[]                AS answer_vocab_ids,
+                   ba.transcription_fr                 AS answer_fr
             FROM session_interaction si
             JOIN session s             ON s.id = si.session_id
             JOIN brain_interaction bi  ON bi.id = si.brain_interaction_id
             LEFT JOIN session_answer sa ON sa.id = $2
-            LEFT JOIN brain_answer ba   ON ba.id = sa.selected_answer_id
+            -- The chosen answer: the tapped button for multipleButtons, the
+            -- matched answer otherwise (same rule as commit_answer).
+            LEFT JOIN brain_answer ba   ON ba.id = CASE
+                WHEN sa.answer_mode_used = 'multipleButtons' THEN sa.selected_answer_id
+                ELSE sa.matched_answer_id
+            END
             WHERE si.id = $1
             FOR UPDATE OF si
         """, session_interaction_id, answer_id)
@@ -99,9 +126,18 @@ async def on_commit_credit_words(conn, session_interaction_id: str, answer_id: s
         mode = row["answer_mode_used"]
         session_level = row["session_level"] if row["session_level"] is not None else _NO_LEVEL
 
+        # Template answer: which of its words (and of the words said) fill the
+        # entity slot. Only loaded when there's credit to give.
+        slot_ids = None
+        tokens = find_entity_tokens(row["answer_fr"] or "")
+        if tokens and verdict in CREDIT_VERDICTS:
+            candidates = _clean(row["answer_vocab_ids"]) | vocab_ids_from_found(row["vocabulary_found"])
+            slot_ids = await load_slot_vocab_ids(conn, candidates, tokens)
+
         passive_ids, active_ids = evidence_ids(
             verdict, mode, row["interaction_vocab_id"], row["expected_vocab_id"],
-            row["vocabulary_found"], row["selected_vocab_id"], row["answer_vocab_ids"])
+            row["vocabulary_found"], row["selected_vocab_id"], row["answer_vocab_ids"],
+            slot_vocab_ids=slot_ids)
         all_ids = passive_ids | active_ids
 
         existing = await load_word_rows(conn, user_id, all_ids)
