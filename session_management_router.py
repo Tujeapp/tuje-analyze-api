@@ -467,7 +467,7 @@ async def start_cycle_endpoint(request: StartCycleRequest, http_request: Request
             interaction_user_level=cycle_level,
             session_mood=request.session_mood,
             db_pool=pool,
-            fallback_cycle_level=dynamic_level if cycle_goal == "notion" else None
+            fallback_cycle_level=dynamic_level if cycle_goal in ("notion", "intent") else None
         )
 
         return StartCycleResponse(

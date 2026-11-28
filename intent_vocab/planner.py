@@ -53,6 +53,16 @@ def _value(c: Candidate, words: Dict[str, PackWord], scores: Dict[str, WordScore
     return round(total, 9)  # absorb float noise so ties are real ties
 
 
+def touches_pack(c: Candidate, words: Dict[str, PackWord]) -> bool:
+    """The candidate exercises at least one pack word (owned or not)."""
+    return any(v in words for v in c.passive_ids | c.active_ids)
+
+
+def touches_unowned(c: Candidate, words: Dict[str, PackWord]) -> bool:
+    """The candidate exercises at least one NOT-owned pack word."""
+    return any(v in words and not words[v].owned for v in c.passive_ids | c.active_ids)
+
+
 def candidate_value(c: Candidate, words: Dict[str, PackWord]) -> float:
     """A candidate's value against the words' current scores (no simulation)."""
     scores = {vid: WordScore(w.passive, w.active) for vid, w in words.items()}
@@ -91,6 +101,10 @@ def plan_slots(
             c, v = item
             return (
                 -v,
+                # Only decides among value-0 ties (a candidate with value > 0
+                # always touches a pack word): extra practice on pack words
+                # before candidates that touch none.
+                not touches_pack(c, words),
                 c.id in played or planned[c.id] > 0,
                 c.id in seen_ever,
                 planned[c.id],

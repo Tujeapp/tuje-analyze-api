@@ -12,6 +12,7 @@ from interaction_search import find_best_subtopic_with_fallback
 from interaction_search_intent import find_best_intent_interactions_with_fallback
 from helpers import generate_id
 from notion_steps.engine import build_notion_cycle
+from intent_vocab.engine import build_intent_cycle
 from .interaction_selection import select_cycle_interactions
 from .interaction_dispatcher import resolve_mode_and_purpose
 
@@ -43,8 +44,8 @@ async def start_new_cycle(
         interaction_user_level: Current interaction user level
         session_mood: Session mood type
         db_pool: Database connection pool
-        fallback_cycle_level: If set and a notion cycle falls back to story, the
-            story cycle runs at this level instead of cycle_level /
+        fallback_cycle_level: If set and a notion or intent cycle falls back to
+            story, the story cycle runs at this level instead of cycle_level /
             interaction_user_level.
 
     Returns:
@@ -54,8 +55,8 @@ async def start_new_cycle(
     Raises:
         InsufficientInteractionsError: If the STORY search cannot find ≥7
             interactions. A notion cycle with no buildable step plan, or an
-            intent search that fails this way, falls back to a story cycle
-            instead of raising (see below); only the story search's own
+            intent cycle with no buildable pack plan, falls back to a story
+            cycle instead of raising (see below); only the story search's own
             failure propagates.
     """
     
@@ -75,9 +76,10 @@ async def start_new_cycle(
     ordered_ids = None
     subtopic_id = None
     notion_step_pool = None  # JSON text; notion cycles only, NULL otherwise
+    intent_pool = None       # JSON text; intent cycles only, NULL otherwise
 
     # Both fallbacks below run BEFORE the session_cycle INSERT, so a fallen-back
-    # row records cycle_goal='story' and target_notion_id=NULL, and
+    # row records cycle_goal='story', target_notion_id=NULL, intent_pool=NULL, and
     # resolve_mode_and_purpose sees 'story'. The story search is NOT wrapped:
     # if it fails too, it raises exactly as before.
 
@@ -117,26 +119,42 @@ async def start_new_cycle(
             target_notion_id = notion_plan["notion_id"]
             notion_step_pool = json.dumps(notion_plan["notion_step_pool"])
 
-    # HOTFIX: an intent search that can't build (InsufficientInteractionsError)
-    # must not crash the session. Fall back to a STORY cycle.
+    # INTENT: built from one intent pack on ONE connection (Intent Vocab spec §6).
+    # Same pattern as notion: the plan is already ordered, so
+    # select_cycle_interactions is skipped. No plan (or any build error) → STORY.
+    # (The old find_best_intent_interactions_with_fallback is no longer called.)
     elif cycle_goal == "intent":
         try:
-            interactions = await find_best_intent_interactions_with_fallback(
-                db_pool=db_pool,
-                interaction_user_level=interaction_user_level,
-                cycle_boredom=cycle_boredom,
-                session_mood=session_mood,
-                context=context,
-                cycle_goal=cycle_goal
+            async with db_pool.acquire() as conn:
+                intent_plan = await build_intent_cycle(
+                    conn, user_id=context.user_id,
+                    session_level=interaction_user_level, slots=7)
+                if intent_plan is not None:
+                    subtopic_id = await conn.fetchval(
+                        "SELECT subtopic_id FROM brain_interaction WHERE id = $1",
+                        intent_plan[0][0])
+        except Exception:
+            logger.error(
+                f"Cycle {cycle_number} 'intent' pack build raised (user={context.user_id}, "
+                f"session={session_id}, cycle_number={cycle_number})",
+                exc_info=True,
             )
-        except InsufficientInteractionsError as e:
+            intent_plan = None
+            subtopic_id = None
+        if intent_plan is None:
             logger.warning(
-                f"Cycle {cycle_number} '{cycle_goal}' search could not build — "
+                f"Cycle {cycle_number} 'intent' pack build found no plan — "
                 f"falling back to 'story' (user={context.user_id}, session={session_id}, "
-                f"cycle_number={cycle_number}, original_goal={cycle_goal}): {e}"
+                f"cycle_number={cycle_number}, level={interaction_user_level})"
             )
             cycle_goal = "story"
-            target_notion_id = None
+            if fallback_cycle_level is not None:
+                cycle_level = fallback_cycle_level
+                interaction_user_level = fallback_cycle_level
+                logger.info(f"Cycle {cycle_number} level: {cycle_level} (rule=intent_fallback_dynamic)")
+        else:
+            ordered_ids, pool = intent_plan
+            intent_pool = json.dumps(pool)
 
     if ordered_ids is None and interactions is None:
         interactions = await find_best_subtopic_with_fallback(
@@ -166,11 +184,11 @@ async def start_new_cycle(
         INSERT INTO session_cycle (
             id, session_id, cycle_number, subtopic_id,
             status, started_at, cycle_level, cycle_boredom, cycle_goal,
-            candidate_pool_ids, target_notion_id, notion_step_pool
-        ) VALUES ($1, $2, $3, $4, 'active', NOW(), $5, $6, $7, $8, $9, $10::jsonb)
+            candidate_pool_ids, target_notion_id, notion_step_pool, intent_pool
+        ) VALUES ($1, $2, $3, $4, 'active', NOW(), $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb)
     """, cycle_id, session_id, cycle_number, subtopic_id,
         cycle_level, cycle_boredom, cycle_goal, ordered_ids, target_notion_id,
-        notion_step_pool)
+        notion_step_pool, intent_pool)
     
     # Save first interaction as active
     first_interaction_id = generate_id("INT")
@@ -211,7 +229,7 @@ async def start_new_cycle(
         # The EFFECTIVE goal — 'story' if a notion/intent search fell back above.
         # Callers must report this, not the goal they passed in.
         "cycle_goal": cycle_goal,
-        # The EFFECTIVE level — fallback_cycle_level if a notion cycle fell back.
+        # The EFFECTIVE level — fallback_cycle_level if a notion/intent cycle fell back.
         "cycle_level": cycle_level,
     }
 

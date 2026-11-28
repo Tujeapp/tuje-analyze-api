@@ -19,7 +19,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from notion_steps.planner import splice_tail
 
 from . import rules
-from .planner import Candidate, PlannerError, candidate_value, plan_slots
+from .planner import Candidate, PlannerError, candidate_value, plan_slots, touches_unowned
 from .repository import (
     load_intent_candidates,
     load_intent_meta,
@@ -65,6 +65,12 @@ def build_candidates(rows: Dict[str, Dict[str, Any]], pack_ids: Iterable[str]) -
             active = (_ids(r.get("answer_vocab_ids")) | expected) & pack
         out.append(Candidate(id=bid, passive_ids=passive, active_ids=active, mode=mode))
     return out
+
+
+def has_unowned_target(candidates: List[Candidate], words: Dict[str, rules.PackWord]) -> bool:
+    """Pure: at least one candidate touches a not-owned pack word (passive or
+    active). False → the intent has nothing left to teach with these candidates."""
+    return any(touches_unowned(c, words) for c in candidates)
 
 
 def pack_words_from(meta: Dict[str, Dict[str, Any]], word_rows: Dict[str, Any],
@@ -149,6 +155,12 @@ async def build_intent_cycle(
         for r in rows.values():
             r["mode"] = resolve_candidate_mode(plan_tier, r["authored_mode"])
         candidates = build_candidates(rows, meta.keys())
+        if not has_unowned_target(candidates, words):
+            reasons[intent_id] = (f"no candidate touches a not-owned pack word "
+                                  f"({len(candidates)} candidates, "
+                                  f"{sum(not w.owned for w in words.values())}/{len(words)} words not owned)")
+            logger.info(f"build_intent_cycle: skipping intent {intent_id} — {reasons[intent_id]}")
+            continue
 
         seen = await load_seen(conn, user_id, rows.keys())
         try:

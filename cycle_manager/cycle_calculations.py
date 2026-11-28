@@ -8,6 +8,9 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# Values user_behavior.force_cycle_goal may take (testing override).
+FORCEABLE_CYCLE_GOALS = ("intent", "story", "notion")
+
 
 async def calculate_cycle_level(
     session_id: str,
@@ -193,6 +196,28 @@ async def calculate_cycle_goal(
         user_id = session_row["user_id"] if session_row else None
         session_level = session_row["session_level"] if session_row else None
 
+        # Testing override (Intent Vocab spec §6.5): user_behavior.force_cycle_goal
+        # wins over every rule below, including the old session_intents gate.
+        # NULL (all production users) → normal rules.
+        # A failed read (e.g. column missing) must never block cycle start for
+        # everyone: log and fall through to the normal rules. No transaction is
+        # open on this connection, so the error doesn't poison the next query.
+        forced = None
+        if user_id is not None:
+            try:
+                forced = await conn.fetchval(
+                    "SELECT force_cycle_goal FROM user_behavior WHERE user_id = $1", user_id)
+            except Exception as e:
+                logger.warning(f"Cycle {cycle_number}: force_cycle_goal read failed for "
+                               f"user {user_id} ({e}) — normal rules apply")
+        forced = (forced or "").strip().lower() or None
+        if forced in FORCEABLE_CYCLE_GOALS:
+            logger.info(f"Cycle {cycle_number} goal: {forced} (rule=forced, user={user_id})")
+            return forced
+        if forced is not None:
+            logger.warning(f"Cycle {cycle_number}: ignoring unknown force_cycle_goal "
+                           f"{forced!r} for user {user_id}")
+
         # Two params, same value: brain_user.id and user_notion_progress.user_id
         # may not share a column type, and one $n can only have one type.
         intro_pending = None
@@ -269,13 +294,14 @@ def resolve_cycle_level(
     session_level: Optional[int],
 ) -> int:
     """
-    The level a cycle actually runs at: notion cycles use the user's level
-    (session_level, NULL = 0); story/intent keep the dynamic cycle level. If a
-    notion cycle later falls back to story, it keeps this level on purpose.
+    The level a cycle actually runs at: notion and intent cycles use the user's
+    level (session_level, NULL = 0); story keeps the dynamic cycle level. A
+    notion/intent cycle that falls back to story switches to the dynamic level
+    via start_new_cycle's fallback_cycle_level.
     """
-    if cycle_goal == "notion":
+    if cycle_goal in ("notion", "intent"):
         level = session_level if session_level is not None else 0
-        rule = "notion_user_level"
+        rule = f"{cycle_goal}_user_level"
     else:
         level = dynamic_level
         rule = "dynamic"

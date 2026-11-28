@@ -37,7 +37,7 @@ def decide_interaction_mode_and_purpose(
     STAGE 2 — button_purpose (only meaningful when mode == multipleButtons):
       authored buttons -> 'default'      (the interaction's own authored answers,
                                           whatever the cycle goal)
-      intent cycle -> 'vocab_review'  (dormant: no intent cycles exist yet)
+      intent cycle -> 'default'       (authored-button path; never 'vocab_review')
       story cycle  -> 'story'         (own answers + borrowed wrong-conversation)
       notion cycle -> 'notion'        (answers carrying the cycle's target notion)
       other/unknown-> 'default'       (routes to the authored-button path)
@@ -74,7 +74,10 @@ def decide_interaction_mode_and_purpose(
     else:
         goal = (cycle_goal or "").strip().lower()
         if goal == "intent":
-            button_purpose = "vocab_review"   # dormant until intent cycles exist
+            # Authored-button path: template realization with the expected word,
+            # realized_vocab_id for word credit. Never 'vocab_review' (its
+            # curator predates both; redesign is out of scope, spec §8).
+            button_purpose = "default"
         elif goal == "story":
             button_purpose = "story"
         elif goal == "notion":

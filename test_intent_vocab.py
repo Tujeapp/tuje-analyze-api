@@ -29,6 +29,7 @@ from intent_vocab.engine import (
     candidates_from_pool,
     candidates_to_pool,
     describe_candidates,
+    has_unowned_target,
     pack_words_from,
 )
 from intent_vocab.hook import evidence_ids, newly_added_ids, vocab_ids_from_found
@@ -357,6 +358,35 @@ def test_build_candidates():
     print("  PASS")
 
 
+def test_unowned_target_and_saturated_tiebreak():
+    print("=" * 60); print("TEST 16 - skip owned-only packs + saturated tie-break"); print("=" * 60)
+    owned = {"A": PackWord("A", 1.0, 100, 100, True),
+             "B": PackWord("B", 0.5, 0, 0, True)}          # owned by level
+    mixed = dict(owned, C=PackWord("C", 0.5, 50, 0, False))
+    c_a = Candidate("b_pack", {"A"}, set(), "voice")
+    c_b = Candidate("c_pack", set(), {"B"}, "multipleButtons")
+    c_none = Candidate("a_none", {"X"}, {"X"}, "voice")     # touches no pack word
+    c_c = Candidate("d_c", set(), {"C"}, "singleButton")    # active only, mode gives none
+
+    # A: an intent is skipped when no candidate touches a not-owned pack word
+    assert not has_unowned_target([c_a, c_b, c_none], owned)
+    assert not has_unowned_target([], mixed)
+    assert has_unowned_target([c_a, c_c], mixed)            # touch counts, even at value 0
+    assert not has_unowned_target([c_a, c_b, c_none], mixed)
+
+    # B: saturated pack → pack-touching candidates before non-touching ones
+    res = plan_slots(owned, [c_none, c_a, c_b], [], set(), 3)
+    assert res.warnings == ["pack saturated"]
+    assert res.ids == ["b_pack", "c_pack", "b_pack"], res.ids   # a_none never picked
+    # non-touching used only to avoid a back-to-back repeat
+    res = plan_slots(owned, [c_none, c_a], [], set(), 3)
+    assert res.ids == ["b_pack", "a_none", "b_pack"], res.ids
+    # with value > 0 available, value still wins over the touch rule
+    res = plan_slots(mixed, [c_none, c_a, Candidate("e_c", {"C"}, set(), "voice")], [], set(), 1)
+    assert res.ids == ["e_c"], res.ids
+    print("  PASS")
+
+
 def test_newly_added_ids():
     print("=" * 60); print("TEST 13 - newly_added_ids (not-understood re-record)"); print("=" * 60)
     assert newly_added_ids(None, ["B", "A"]) == ["B", "A"]            # first record, order kept
@@ -386,6 +416,7 @@ def main():
     test_newly_added_ids()
     test_hook_template_slot()
     test_build_candidates()
+    test_unowned_target_and_saturated_tiebreak()
     print("\nALL TESTS PASSED")
 
 
