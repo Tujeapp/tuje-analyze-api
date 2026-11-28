@@ -53,6 +53,13 @@ def _value(c: Candidate, words: Dict[str, PackWord], scores: Dict[str, WordScore
     return round(total, 9)  # absorb float noise so ties are real ties
 
 
+def candidate_value(c: Candidate, words: Dict[str, PackWord]) -> float:
+    """A candidate's value against the words' current scores (no simulation)."""
+    scores = {vid: WordScore(w.passive, w.active) for vid, w in words.items()}
+    owned = {vid for vid, w in words.items() if w.owned}
+    return _value(c, words, scores, owned)
+
+
 def plan_slots(
     words: Dict[str, PackWord],
     candidates: List[Candidate],

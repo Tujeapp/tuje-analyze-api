@@ -23,7 +23,14 @@ from intent_vocab.rules import (
     pack_ratios,
     pack_state,
 )
-from intent_vocab.planner import Candidate, plan_slots, PlannerError
+from intent_vocab.planner import Candidate, plan_slots, PlannerError, candidate_value
+from intent_vocab.engine import (
+    build_candidates,
+    candidates_from_pool,
+    candidates_to_pool,
+    describe_candidates,
+    pack_words_from,
+)
 from intent_vocab.hook import evidence_ids, newly_added_ids, vocab_ids_from_found
 
 
@@ -301,6 +308,55 @@ def test_hook_template_slot():
     print("  PASS")
 
 
+def test_build_candidates():
+    print("=" * 60); print("TEST 15 - engine: build_candidates + owned words value 0"); print("=" * 60)
+    pack = {"P1", "P2", "SLOT"}           # SLOT = an expected word that fills a template
+    rows = {
+        # template quiz: fixed answer word F (not in pack), expected word SLOT in pack
+        "Q_tpl": {"interaction_vocab_id": ["P1", "X"], "expected_vocab_id": ["SLOT"],
+                  "answer_vocab_ids": ["F"], "mode": "multipleButtons"},
+        "V_lit": {"interaction_vocab_id": ["P2"], "expected_vocab_id": [],
+                  "answer_vocab_ids": ["P1", "P2", None], "mode": "voice"},
+        "S_one": {"interaction_vocab_id": ["P1"], "expected_vocab_id": ["SLOT"],
+                  "answer_vocab_ids": ["P2"], "mode": "singleButton"},
+        "N_none": {"interaction_vocab_id": None, "expected_vocab_id": None,
+                   "answer_vocab_ids": None, "mode": None},
+    }
+    cands = {c.id: c for c in build_candidates(rows, pack)}
+    assert [c for c in sorted(cands)] == ["N_none", "Q_tpl", "S_one", "V_lit"]
+    q = cands["Q_tpl"]
+    assert q.passive_ids == {"P1", "SLOT"} and q.active_ids == {"SLOT"}, q   # slot word active
+    v = cands["V_lit"]
+    assert v.passive_ids == {"P2"} and v.active_ids == {"P1", "P2"}, v
+    s = cands["S_one"]
+    assert s.passive_ids == {"P1", "SLOT"} and s.active_ids == set(), s      # singleButton: passive only
+    n = cands["N_none"]
+    assert n.passive_ids == set() and n.active_ids == set() and n.mode == "voice"
+
+    # pack_words_from: all words kept, owned flags from scores / level / downgraded
+    meta = {"P1": {"weight": 1.0, "level_own": None},
+            "P2": {"weight": 0.5, "level_own": 50},
+            "SLOT": {"weight": 0.5, "level_own": 50}}
+    word_rows = {"P1": (WordScore(100, 100), False, 2, 2),       # owned by scores
+                 "SLOT": (WordScore(0, 0), True, 0, 0)}          # downgraded: level no longer owns
+    words = pack_words_from(meta, word_rows, session_level=100)
+    assert set(words) == {"P1", "P2", "SLOT"}
+    assert words["P1"].owned and words["P2"].owned and not words["SLOT"].owned
+    r = pack_ratios(list(words.values()))
+    assert approx(r["owned_ratio"], 1.5 / 2.0), r                 # owned words count
+    # owned words contribute 0: only SLOT has value
+    assert candidate_value(cands["V_lit"], words) == 0             # P1, P2 owned
+    assert candidate_value(q, words) == 0.5 * 100 + 0.5 * 0.5 * 100  # SLOT passive + half active
+    assert candidate_value(s, words) == 0.5 * 100                  # SLOT passive only
+    rows_out = describe_candidates(list(cands.values()), words)
+    assert rows_out[0]["id"] == "Q_tpl" and rows_out[-1]["value"] == 0
+
+    # pool snapshot round-trip
+    back = {c.id: c for c in candidates_from_pool(candidates_to_pool(list(cands.values())))}
+    assert all(back[k] == cands[k] for k in cands), back
+    print("  PASS")
+
+
 def test_newly_added_ids():
     print("=" * 60); print("TEST 13 - newly_added_ids (not-understood re-record)"); print("=" * 60)
     assert newly_added_ids(None, ["B", "A"]) == ["B", "A"]            # first record, order kept
@@ -329,6 +385,7 @@ def main():
     test_hook_evidence_ids()
     test_newly_added_ids()
     test_hook_template_slot()
+    test_build_candidates()
     print("\nALL TESTS PASSED")
 
 
